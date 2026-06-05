@@ -1,6 +1,6 @@
 import React from 'react';
 
-function OrderCard({ pedido, ticket, color, onDragStart }) {
+function OrderCard({ pedido, ticket, color, onDragStart, onViewDetail }) {
   const tot = pedido.items.reduce((s, i) => s + (parseInt(i.p) || 0), 0);
   const locked = pedido.pagado === true || pedido.cajaCerrada === true;
   
@@ -38,7 +38,7 @@ function OrderCard({ pedido, ticket, color, onDragStart }) {
         
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder" disabled={locked}>‹</button>
-          <button className="dc-det-btn">Ver detalle</button>
+          <button className="dc-det-btn" onClick={() => onViewDetail && onViewDetail(pedido)}>Ver detalle</button>
           <button className="dc-btn" title="Avanzar" disabled={locked}>›</button>
         </div>
       </div>

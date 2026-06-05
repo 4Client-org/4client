@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ESTADOS, EL, COL_COLORS, pedidos as initialPedidos, tickets as initialTickets } from '../../data/mockData';
 import OrderCard from './OrderCard';
 import TicketModal from '../Modals/TicketModal';
+import OrderDetailModal from '../Modals/OrderDetailModal';
 
 function KanbanBoard({ user }) {
   const [pedidos, setPedidos] = useState(initialPedidos);
@@ -10,6 +11,7 @@ function KanbanBoard({ user }) {
   const [payFilter, setPayFilter] = useState('');
   
   const [activeTicket, setActiveTicket] = useState(null);
+  const [activePedido, setActivePedido] = useState(null);
 
   // Setup current date logic for demo
   const [currentDateStr, setCurrentDateStr] = useState('');
@@ -148,6 +150,7 @@ function KanbanBoard({ user }) {
                           ticket={t} 
                           color={COL_COLORS[estado]} 
                           onDragStart={onDragStart} 
+                          onViewDetail={setActivePedido}
                         />
                       ))}
                     </div>
@@ -166,6 +169,7 @@ function KanbanBoard({ user }) {
       </div>
       
       <TicketModal ticket={activeTicket} onClose={() => setActiveTicket(null)} />
+      <OrderDetailModal pedido={activePedido} onClose={() => setActivePedido(null)} />
     </>
   );
 }
