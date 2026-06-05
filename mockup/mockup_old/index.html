@@ -127,6 +127,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
 .col-listo .cold{background:#3B82F6;}.col-listo .colh{background:#EFF6FF;}.col-listo .pcard{border-left-color:#3B82F6;}
 .col-camino .cold{background:#8B5CF6;}.col-camino .colh{background:#F5F3FF;}.col-camino .pcard{border-left-color:#8B5CF6;}
 .col-entregado .cold{background:var(--v);}.col-entregado .colh{background:var(--vc);}.col-entregado .pcard{border-left-color:var(--v);}
+.col-cerrado .cold{background:#0F4F30;}.col-cerrado .colh{background:#E8F5EE;}.col-cerrado .pcard{border-left-color:#0F4F30;}
 
 /* DOM STRIP */
 .dstrip{background:var(--b);border-radius:var(--rad);box-shadow:var(--sh);margin-top:20px;overflow:hidden;}
@@ -300,7 +301,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
 
 /* ══ SWIMLANE ══════════════════════════════════════════════ */
 .slane-wrap{overflow-x:auto;margin-bottom:20px;}
-.slane{display:grid;grid-template-columns:215px repeat(5,1fr);min-width:920px;border-radius:var(--rad);overflow:hidden;border:1.5px solid var(--brd);}
+.slane{display:grid;grid-template-columns:215px repeat(6,1fr);min-width:1050px;border-radius:var(--rad);overflow:hidden;border:1.5px solid var(--brd);}
 .slane-hcell{padding:10px 12px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--gt);background:var(--b);border-bottom:2px solid var(--brd);border-right:1px solid var(--brd);display:flex;align-items:center;gap:6px;}
 .slane-hcell:last-child{border-right:none;}
 .slane-hcell.wpp-col{background:var(--vc);color:var(--vd);}
@@ -323,7 +324,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
 .tk-badge.nuevo{background:#F8FAFC;color:#64748B;}
 .tk-ver-btn{background:none;border:1.5px solid var(--v);color:var(--v);padding:4px 10px;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--f);transition:all .15s;margin-top:6px;width:100%;}
 .tk-ver-btn:hover{background:var(--v);color:#fff;}
-.tk-new-dot{position:absolute;top:9px;right:9px;width:9px;height:9px;background:var(--r);border-radius:50%;animation:pulse 1.8s infinite;}
+.tk-new-dot{position:absolute;top:5px;right:5px;min-width:18px;height:18px;background:var(--r);border-radius:10px;animation:pulse 1.8s infinite;color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px;box-shadow:0 2px 4px rgba(0,0,0,0.2);}
 .tk-crear-btn{background:var(--vc);border:2px dashed var(--v);color:var(--v);padding:6px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--f);width:100%;margin-top:6px;text-align:center;transition:all .2s;}
 .tk-crear-btn:hover{background:var(--v);color:#fff;}
 /* Dispatch card en columnas */
@@ -415,7 +416,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
       <input class="fi2" type="number" id="cc-rec" placeholder="Ej: 50000" oninput="calcDevCC()">
       <div style="font-size:13px;color:var(--gt);margin-top:7px;font-weight:600;">Devolución al cliente: <strong id="cc-dev">$0</strong></div></div>
     <div class="fg2"><label class="fl2">¿Quién recibió el dinero?</label>
-      <select class="fi2"><option>encargado1 — Yo mismo</option><option>cajero2 — Miguel Torres</option></select></div>
+      <select class="fi2" id="cc-who"><option>Cargando...</option></select></div>
     <div class="fg2" style="margin-bottom:0;"><label class="fl2">Observaciones (opcional)</label>
       <input class="fi2" placeholder="Ej: Cliente pidió factura..."></div>
     <div style="display:flex;gap:9px;margin-top:20px;">
@@ -456,6 +457,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
         <div class="khead">
           <div><div class="ktit">Tickets & Pedidos de despacho</div><div class="kmeta" id="panel-meta">Cargando...</div></div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="date" id="ui-date" class="fsel" style="cursor:pointer;" onchange="changeDate(this.value)">
             <div class="sbx" style="min-width:170px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <input type="text" placeholder="Buscar..." id="srch" oninput="renderSwimlane()"></div>
             <select class="fsel" id="fpago" onchange="renderSwimlane()">
@@ -509,36 +511,41 @@ body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;f
 
 <!-- ════════ MODAL NUEVO PEDIDO ════════ -->
 <div class="moverlay" id="m-nuevo">
-  <div class="mwin">
+  <div class="mwin" style="max-width:900px; width:95%;">
     <div class="mhead"><div class="mtit">Registrar nuevo pedido</div>
       <button class="mclose" onclick="tryClose('m-nuevo')">×</button></div>
-    <div class="mbody">
-      <div class="frow">
-        <div class="fg2"><label class="fl2">Canal</label>
-          <select class="fi2" id="np-canal" onchange="dirty('m-nuevo')"><option>📱 WhatsApp</option><option>📞 Llamada</option></select></div>
-        <div class="fg2"><label class="fl2">Método de pago</label>
-          <select class="fi2" id="np-pago" onchange="dirty('m-nuevo')"><option value="casa">💵 Cobra en casa</option><option value="transferencia">📲 Transferencia</option><option value="efectivo">💳 Pagado en tienda</option></select></div>
+    <div class="mbody" style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start;">
+      <div id="np-chat-wrap" style="display:none; flex:1; min-width:280px;">
+        <div id="np-chat-preview" style="background:#ECE5DD; border-radius:10px; padding:10px; max-height:600px; overflow-y:auto; border: 2px solid var(--v);"></div>
       </div>
-      <div class="frow">
-        <div class="fg2"><label class="fl2">Nombre del cliente *</label>
-          <input class="fi2" id="np-nom" placeholder="Ej: María González" oninput="dirty('m-nuevo')"></div>
-        <div class="fg2"><label class="fl2">Teléfono</label>
-          <input class="fi2" id="np-tel" placeholder="Ej: 3001234567" oninput="dirty('m-nuevo')"></div>
-      </div>
-      <div class="fg2"><label class="fl2">Dirección de entrega *</label>
-        <input class="fi2" id="np-dir" placeholder="Ej: Cra 45 #12-34, Casa azul" oninput="dirty('m-nuevo')"></div>
-      <div class="fg2"><label class="fl2">Domiciliario</label>
-        <select class="fi2" id="np-dom"><option value="">— Sin asignar —</option><option value="Pedro Gómez">🛵 Pedro Gómez</option><option value="Andrés Castillo">🛵 Andrés Castillo</option></select></div>
-      <div class="stit">Productos</div>
-      <div class="psearch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="np-ps" type="text" placeholder="Buscar producto..." oninput="bProd(this.value,'np')"></div>
-      <div class="pdrop" id="np-pd"></div>
-      <div class="ilist" id="np-il"><div class="irow hdr"><div>Producto</div><div>Cantidad</div><div>Precio</div><div></div></div></div>
-      <div class="factbox"><div style="font-size:12px;font-weight:800;color:var(--gt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;">Resumen</div>
-        <div id="np-fr"></div><div class="facttot"><span>Total</span><span id="np-tot">$0</span></div></div>
-      <div class="mactions">
-        <button class="bsec" onclick="tryClose('m-nuevo')">Cancelar</button>
-        <button class="bpri" onclick="regPedido()">✓ Registrar pedido</button>
+      <div style="flex:2; min-width:320px;">
+        <div class="frow">
+          <div class="fg2"><label class="fl2">Canal</label>
+            <select class="fi2" id="np-canal" onchange="dirty('m-nuevo')"><option>📱 WhatsApp</option><option>📞 Llamada</option></select></div>
+          <div class="fg2"><label class="fl2">Método de pago</label>
+            <select class="fi2" id="np-pago" onchange="dirty('m-nuevo')"><option value="casa">💵 Cobra en casa</option><option value="transferencia">📲 Transferencia</option><option value="efectivo">💳 Pagado en tienda</option></select></div>
+        </div>
+        <div class="frow">
+          <div class="fg2"><label class="fl2">Nombre del cliente *</label>
+            <input class="fi2" id="np-nom" placeholder="Ej: María González" oninput="dirty('m-nuevo')"></div>
+          <div class="fg2"><label class="fl2">Teléfono</label>
+            <input class="fi2" id="np-tel" placeholder="Ej: 3001234567" oninput="dirty('m-nuevo')"></div>
+        </div>
+        <div class="fg2"><label class="fl2">Dirección de entrega *</label>
+          <input class="fi2" id="np-dir" placeholder="Ej: Cra 45 #12-34, Casa azul" oninput="dirty('m-nuevo')"></div>
+        <div class="fg2"><label class="fl2">Domiciliario</label>
+          <select class="fi2" id="np-dom"><option value="">— Sin asignar —</option><option value="Pedro Gómez">🛵 Pedro Gómez</option><option value="Andrés Castillo">🛵 Andrés Castillo</option></select></div>
+        <div class="stit">Productos</div>
+        <div class="psearch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="np-ps" type="text" placeholder="Buscar producto..." oninput="bProd(this.value,'np')"></div>
+        <div class="pdrop" id="np-pd"></div>
+        <div class="ilist" id="np-il"><div class="irow hdr"><div>Producto</div><div>Cantidad</div><div>Precio</div><div></div></div></div>
+        <div class="factbox"><div style="font-size:12px;font-weight:800;color:var(--gt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;">Resumen</div>
+          <div id="np-fr"></div><div class="facttot"><span>Total</span><span id="np-tot">$0</span></div></div>
+        <div class="mactions">
+          <button class="bsec" onclick="tryClose('m-nuevo')">Cancelar</button>
+          <button class="bpri" onclick="regPedido()">✓ Registrar pedido</button>
+        </div>
       </div>
     </div>
   </div>
@@ -666,9 +673,10 @@ const PRODS=[
   {n:'Arepa Blanca Paq.',c:'Empacados'},{n:'Huevos x30',c:'Empacados'},
   {n:'Panela',c:'Empacados'},{n:'Arroz 500g',c:'Granos'},
 ];
-const ESTADOS=['nuevo','preparando','listo','camino','entregado'];
-const EL={nuevo:'Nuevo',preparando:'Preparando',listo:'Listo',camino:'En camino',entregado:'Entregado'};
-const EC={nuevo:'col-nuevo',preparando:'col-prep',listo:'col-listo',camino:'col-camino',entregado:'col-entregado'};
+const ESTADOS=['nuevo','preparando','listo','camino','entregado','cerrado'];
+const EL={nuevo:'Nuevo',preparando:'Preparando',listo:'Listo',camino:'En camino',entregado:'Entregado',cerrado:'Cerrado'};
+const COL_COLORS={nuevo:'#94A3B8',preparando:'#F59E0B',listo:'#3B82F6',camino:'#8B5CF6',entregado:'#1A7A4A',cerrado:'#0F4F30'};
+const EC={nuevo:'col-nuevo',preparando:'col-prep',listo:'col-listo',camino:'col-camino',entregado:'col-entregado',cerrado:'col-cerrado'};
 
 let pedidos=[
   {id:'p1',num:'001',cli:'Rosario Díaz',tel:'3011234501',dir:'Cra 52 #18-40, Casa 3, timbre azul',canal:'wpp',pago:'casa',estado:'camino',dom:'Pedro Gómez',hora:'07:20',pagado:false,reg:'encargado1',items:[{n:'Cebolla Cabezona',q:'1 kg',p:4500},{n:'Tomate Chonto',q:'1 kg',p:3800},{n:'Papa Pastusa',q:'2 kg',p:5000},{n:'Cilantro',q:'1 manojo',p:2000}],hist:[{who:'encargado1',what:'Pedido creado',t:'07:20',tipo:'create'},{who:'encargado1',what:'Estado',t:'07:45',tipo:'estado',antes:'Nuevo',despues:'En camino'}]},
@@ -680,8 +688,8 @@ let pedidos=[
   {id:'p7',num:'007',cli:'María González',tel:'3071234507',dir:'Cra 80 #30-12',canal:'wpp',pago:'efectivo',estado:'nuevo',dom:'',hora:'08:42',pagado:false,reg:'encargado1',items:[{n:'Papa Pastusa',q:'2 kg',p:5000},{n:'Tomate Chonto',q:'1 kg',p:3800}],hist:[{who:'encargado1',what:'Pedido creado',t:'08:42',tipo:'create'}]},
   {id:'p8',num:'008',cli:'Carlos Ruiz',tel:'3081234508',dir:'Cll 50 #70-24',canal:'llamada',pago:'casa',estado:'nuevo',dom:'',hora:'08:55',pagado:false,reg:'encargado2',items:[{n:'Plátano Hartón',q:'3 und',p:4500},{n:'Yuca',q:'1 kg',p:3000}],hist:[{who:'encargado2',what:'Pedido creado',t:'08:55',tipo:'create'}]},
   {id:'p9',num:'009',cli:'Ana Martínez',tel:'3091234509',dir:'Cra 65 #18-90',canal:'wpp',pago:'transferencia',estado:'nuevo',dom:'',hora:'09:08',pagado:false,reg:'encargado1',items:[{n:'Arepa Blanca Paq.',q:'1 paq',p:4500},{n:'Huevos x30',q:'1 und',p:18000}],hist:[{who:'encargado1',what:'Pedido creado',t:'09:08',tipo:'create'}]},
-  {id:'p10',num:'010',cli:'Gloria Reyes',tel:'3101234510',dir:'Cra 30 #45-67',canal:'wpp',pago:'efectivo',estado:'entregado',dom:'Andrés Castillo',hora:'06:45',pagado:true,reg:'encargado1',items:[{n:'Zanahoria',q:'500g',p:1750},{n:'Espinaca',q:'1 manojo',p:2000}],hist:[{who:'encargado1',what:'Pedido creado',t:'06:45',tipo:'create'},{who:'encargado1',what:'Estado',t:'07:15',tipo:'estado',antes:'En camino',despues:'Entregado'},{who:'encargado1',what:'Pago confirmado y cerrado',t:'07:20',tipo:'create'}]},
-  {id:'p11',num:'011',cli:'Bernardo Gil',tel:'3111234511',dir:'Cra 70 #34-56, Bloque 3',canal:'llamada',pago:'transferencia',estado:'entregado',dom:'Pedro Gómez',hora:'07:00',pagado:true,reg:'encargado2',items:[{n:'Papa Pastusa',q:'3 kg',p:7500},{n:'Arroz 500g',q:'2 und',p:6000},{n:'Panela',q:'1 und',p:3500}],hist:[{who:'encargado2',what:'Pedido creado',t:'07:00',tipo:'create'},{who:'encargado2',what:'Estado',t:'07:45',tipo:'estado',antes:'En camino',despues:'Entregado'},{who:'encargado2',what:'Pago confirmado y cerrado',t:'07:50',tipo:'create'}]},
+  {id:'p10',num:'010',cli:'Gloria Reyes',tel:'3101234510',dir:'Cra 30 #45-67',canal:'wpp',pago:'efectivo',estado:'cerrado',dom:'Andrés Castillo',hora:'06:45',pagado:true,reg:'encargado1',items:[{n:'Zanahoria',q:'500g',p:1750},{n:'Espinaca',q:'1 manojo',p:2000}],hist:[{who:'encargado1',what:'Pedido creado',t:'06:45',tipo:'create'},{who:'encargado1',what:'Estado',t:'07:15',tipo:'estado',antes:'En camino',despues:'Entregado'},{who:'encargado1',what:'Pago confirmado y cerrado',t:'07:20',tipo:'create'}]},
+  {id:'p11',num:'011',cli:'Bernardo Gil',tel:'3111234511',dir:'Cra 70 #34-56, Bloque 3',canal:'llamada',pago:'transferencia',estado:'cerrado',dom:'Pedro Gómez',hora:'07:00',pagado:true,reg:'encargado2',items:[{n:'Papa Pastusa',q:'3 kg',p:7500},{n:'Arroz 500g',q:'2 und',p:6000},{n:'Panela',q:'1 und',p:3500}],hist:[{who:'encargado2',what:'Pedido creado',t:'07:00',tipo:'create'},{who:'encargado2',what:'Estado',t:'07:45',tipo:'estado',antes:'En camino',despues:'Entregado'},{who:'encargado2',what:'Pago confirmado y cerrado',t:'07:50',tipo:'create'}]},
 ];
 let papelera=[];
 
@@ -750,9 +758,30 @@ let isAdmin=false;
 let currentAdmTab='kanban';
 let currentUser='';
 
+
+function getLocalDateStr() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().split('T')[0];
+}
+let currentDateStr = getLocalDateStr();
+
+pedidos.forEach(p => p.fecha = currentDateStr);
+tickets.forEach(t => t.fecha = currentDateStr);
+
+function changeDate(d) {
+  currentDateStr = d;
+  renderAllAdmin();
+}
+
+function getPedidos() {
+  return pedidos.filter(p => p.fecha === currentDateStr);
+}
+
 const USERS={
-  admin:    {pwd:'admin',    role:'Administrador', label:'Dueño',     admin:true},
-  trabajador:{pwd:'trabajador',role:'Encargado',   label:'Encargado', admin:false},
+
+  admin: {pwd:'admin', role:'Administrador', label:'Dueño', admin:true},
+  jose:  {pwd:'jose',  role:'Encargado',     label:'Jose Alvarez', admin:false},
 };
 
 // ══════════════════════ UTILS ══════════════════════
@@ -763,7 +792,7 @@ function fmt(n){return'$'+(parseInt(n)||0).toLocaleString('es-CO');}
 function whoNow(){return currentUser||'sistema';}
 function pClass(p){return p==='efectivo'?'pe':p==='transferencia'?'pt':'pca';}
 function pLabel(p){return p==='efectivo'?'Efectivo':p==='transferencia'?'Transferencia':'Cobra en casa';}
-function isLocked(p){return p.pagado===true;}
+function isLocked(p){return p.pagado===true || p.cajaCerrada===true;}
 
 // ══════════════════════ NAV ══════════════════════
 function show(id){
@@ -840,6 +869,8 @@ function tryOpenNuevo(){
 function _openNuevo(){
   npItems=[];
   ['np-nom','np-tel','np-dir','np-ps'].forEach(id=>document.getElementById(id).value='');
+  const previewWrap = document.getElementById('np-chat-wrap');
+  if(previewWrap) previewWrap.style.display = 'none';
   document.getElementById('np-pd').classList.remove('on');
   renderItems('np');dirtyMap['m-nuevo']=false;
   show('s-admin');openModal('m-nuevo');
@@ -1039,6 +1070,13 @@ function openConfirmCobro(pid){
   document.getElementById('cc-info').textContent='Cliente: '+p.cli+' · '+fmt(tot);
   document.getElementById('cc-rec').value='';
   document.getElementById('cc-dev').textContent='$0';
+  
+  const whoSel = document.getElementById('cc-who');
+  if(whoSel) {
+    whoSel.innerHTML = `<option value="${USERS[currentUser].label}">${USERS[currentUser].label} (Yo)</option>`;
+    if(isAdmin) { whoSel.innerHTML += `<option value="Jose Alvarez">Jose Alvarez</option>`; }
+  }
+  
   // close det first if open
   closeModal('m-det');
   document.getElementById('m-confirm-cobro').classList.add('on');
@@ -1052,12 +1090,13 @@ function calcDevCC(){
 }
 function doCobro(){
   const p=pedidos.find(x=>x.id===curCobroId);if(!p)return;
-  p.estado='entregado';
+  p.estado='cerrado';
   p.pagado=true;
-  p.hist.push({who:whoNow(),what:'Pago confirmado y cerrado',t:nowH(),tipo:'create'});
+  const cobradoPor = document.getElementById('cc-who')?.value || whoNow();
+  p.hist.push({who:whoNow(),what:'Pago confirmado por '+cobradoPor,t:nowH(),tipo:'create'});
   document.getElementById('m-confirm-cobro').classList.remove('on');
   renderPanel();renderAllAdmin();
-  toast('✅ Pago confirmado. Pedido bloqueado.');
+  toast('✅ Pago confirmado. Pedido cerrado.');
 }
 
 // ══════════════════════ PRODUCTOS ══════════════════════
@@ -1115,10 +1154,10 @@ function filterRender(){
 function renderPanel(){
   const n=new Date();
   const fecha=n.toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long'});
-  const act=pedidos.filter(p=>p.estado!=='entregado'&&p.estado!=='papelera').length;
-  const urg=pedidos.filter(p=>isUrg(p)).length;
+  const act=getPedidos().filter(p=>p.estado!=='entregado'&&p.estado!=='papelera').length;
+  const urg=getPedidos().filter(p=>isUrg(p)).length;
   const meta=document.getElementById('panel-meta');
-  if(meta)meta.textContent=fecha+' · '+pedidos.filter(p=>p.estado!=='papelera').length+' pedidos · '+act+' activos'+(urg>0?' · ⚠ '+urg+' urgentes':'');
+  if(meta)meta.textContent=fecha+' · '+getPedidos().filter(p=>p.estado!=='papelera').length+' pedidos · '+act+' activos'+(urg>0?' · ⚠ '+urg+' urgentes':'');
   renderSwimlane();
 }
 
@@ -1126,7 +1165,7 @@ function renderKanban(boardId,q,est,pag,forAdmin){
   const board=document.getElementById(boardId);if(!board)return;
   board.innerHTML='';
   ESTADOS.forEach(estado=>{
-    let items=pedidos.filter(p=>p.estado===estado);
+    let items=getPedidos().filter(p=>p.estado===estado);
     if(q)items=items.filter(p=>p.cli.toLowerCase().includes(q)||p.dir.toLowerCase().includes(q)||p.hora.includes(q)||p.items.some(i=>i.n.toLowerCase().includes(q))||p.num.includes(q));
     if(est&&est!==estado)items=[];
     if(pag)items=items.filter(p=>p.pago===pag);
@@ -1147,7 +1186,7 @@ function renderKanban(boardId,q,est,pag,forAdmin){
       }
     });
 
-    const allC=pedidos.filter(p=>p.estado===estado).length;
+    const allC=getPedidos().filter(p=>p.estado===estado).length;
     col.innerHTML=`<div class="colh"><div class="colt"><div class="cold"></div>${EL[estado]}</div><div class="colc">${allC}</div></div><div class="colb" id="${boardId}-${estado}"></div>`;
     board.appendChild(col);
     const cb=col.querySelector('.colb');
@@ -1179,7 +1218,7 @@ function renderKanban(boardId,q,est,pag,forAdmin){
 function renderDomicilios(stripId){
   const strip=document.getElementById(stripId);if(!strip)return;
   const domE=['preparando','listo','camino'];
-  const doms=pedidos.filter(p=>domE.includes(p.estado)&&p.dom);
+  const doms=getPedidos().filter(p=>domE.includes(p.estado)&&p.dom);
   if(!doms.length){strip.innerHTML='';return;}
   strip.innerHTML=`
     <div class="dsh"><div class="dsht">🛵 Domicilios activos</div><span class="tbadge">${doms.length}</span></div>
@@ -1204,6 +1243,8 @@ function renderDomicilios(stripId){
 
 // ══════════════════════ ADMIN ══════════════════════
 function renderAllAdmin(){
+  const dateInput = document.getElementById('ui-date');
+  if(dateInput && !dateInput.value) dateInput.value = currentDateStr;
   renderTotales();
   renderSwimlane();
   renderAdminList('');
@@ -1213,9 +1254,9 @@ function renderAllAdmin(){
 
 function renderTotales(){
   // PRECISOS: basados en estado real de las columnas
-  const todos=pedidos.filter(p=>p.estado!=='papelera');
-  const entregados=todos.filter(p=>p.estado==='entregado');
-  const pendientes=todos.filter(p=>p.estado!=='entregado');
+  const todos=getPedidos().filter(p=>p.estado!=='papelera');
+  const entregados=todos.filter(p=>p.estado==='cerrado'); // Solo los cobrados exitosamente
+  const pendientes=todos.filter(p=>p.estado!=='cerrado');
   const domE=['preparando','listo','camino'];
   const domAct=todos.filter(p=>domE.includes(p.estado)&&p.dom);
 
@@ -1226,7 +1267,7 @@ function renderTotales(){
 
   // Dinero: SOLO pedidos pagados y cerrados
   let ef=0,tr=0;
-  pedidos.filter(p=>p.pagado).forEach(p=>{
+  getPedidos().filter(p=>p.pagado).forEach(p=>{
     const tot=p.items.reduce((s,i)=>s+(parseInt(i.p)||0),0);
     if(p.pago==='efectivo'||p.pago==='casa') ef+=tot;
     else if(p.pago==='transferencia') tr+=tot;
@@ -1244,7 +1285,7 @@ function renderAdmKanban(){
   // for demo all dates show (real app would filter by date)
   renderKanban('adm-kboard',q,est,pag,true);
   renderDomicilios('adm-dstrip');
-  const n=pedidos.filter(p=>p.estado!=='papelera').length;
+  const n=getPedidos().filter(p=>p.estado!=='papelera').length;
   const meta=document.getElementById('adm-kmeta');
   if(meta)meta.textContent=n+' pedidos'+(fech?' · '+fech:'');
 }
@@ -1252,7 +1293,7 @@ function renderAdmKanban(){
 function renderAdminList(q){
   const list=document.getElementById('adm-list');if(!list)return;
   const est=document.getElementById('adm-fest2')?.value||'';
-  let items=pedidos.filter(p=>p.estado!=='papelera');
+  let items=getPedidos().filter(p=>p.estado!=='papelera');
   if(q)items=items.filter(p=>p.cli.toLowerCase().includes(q.toLowerCase())||p.num.includes(q));
   if(est)items=items.filter(p=>p.estado===est);
   items.sort((a,b)=>a.hora.localeCompare(b.hora));
@@ -1324,7 +1365,7 @@ function switchAdmTab(tab,btn){
 }
 
 // ══════════════════════ SWIMLANE ══════════════════════
-const COL_COLORS={nuevo:'#94A3B8',preparando:'#F59E0B',listo:'#3B82F6',camino:'#8B5CF6',entregado:'#1A7A4A'};
+
 
 function tkUrgMin(t){
   // Minutos esperando sin pedido de despacho
@@ -1396,6 +1437,7 @@ function renderSwimlane(){
     else{badgeTxt='🆕 Nuevo';badgeCls='nuevo';}
 
     h+=`<div class="slane-tcell${isUrgTk?' urg':''}" onclick="openTicket('${t.id}')">
+      ${t.unreadCount?`<div class="tk-new-dot">${t.unreadCount}</div>`:''}
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:3px;">
         <div style="font-size:12px;font-weight:800;color:var(--gt);">${num}</div>
         ${isUrgTk
@@ -1417,13 +1459,13 @@ function renderSwimlane(){
     ESTADOS.forEach((e,idx)=>{
       const inState=peds.filter(p=>p.estado===e);
       if(inState.length){
-        h+=`<div class="slane-scell" style="align-items:flex-start;justify-content:flex-start;flex-direction:column;gap:7px;display:flex;">`;
+        h+=`<div class="slane-scell" style="align-items:flex-start;justify-content:flex-start;flex-direction:column;gap:7px;display:flex;" ondragover="event.preventDefault();this.style.background='#F0FAF4'" ondragleave="this.style.background=''" ondrop="dropDC(event,'${t.id}','${e}')">`;
         inState.forEach(ped=>{
           const tot=ped.items.reduce((s,i)=>s+(parseInt(i.p)||0),0);
           const locked=isLocked(ped);
           const pedUrg=isUrg(ped);
-          h+=`<div class="dc-wrap">
-            <div class="dc-card${pedUrg?' urg':''}" style="border-left-color:${pedUrg?'var(--r)':COL_COLORS[e]};">
+          h+=`<div class="dc-wrap" ${ped.cajaCerrada?'style="filter:grayscale(1);opacity:0.65;"':''}>
+            <div class="dc-card${pedUrg?' urg':''}" style="border-left-color:${pedUrg?'var(--r)':COL_COLORS[e]};" ${!locked?`draggable="true" ondragstart="event.dataTransfer.setData('pid','${ped.id}');event.dataTransfer.setData('tid','${t.id}');"`:''}>
               <div class="dc-num">#${ped.num}${locked?' 🔒':pedUrg?` <span style="color:var(--r);font-size:11px;">⚠${mins(ped.hora)}min</span>`:''}</div>
               <div class="dc-prod">${ped.items.slice(0,2).map(i=>i.n+(i.q?' '+i.q:'')).join(', ')}${ped.items.length>2?' +'+(ped.items.length-2)+' más':''}</div>
               ${tot?`<div class="dc-tot">${fmt(tot)}</div>`:''}
@@ -1437,7 +1479,7 @@ function renderSwimlane(){
         });
         h+='</div>';
       } else {
-        h+='<div class="slane-scell"></div>';
+        h+=`<div class="slane-scell" ondragover="event.preventDefault();this.style.background='#F0FAF4'" ondragleave="this.style.background=''" ondrop="dropDC(event,'${t.id}','${e}')"></div>`;
       }
     });
   });
@@ -1458,9 +1500,29 @@ function moveDC(pid,dir){
   toast('Movido a '+EL[p.estado]);
 }
 
+function dropDC(e, targetTid, newEstado){
+  e.preventDefault();
+  e.currentTarget.style.background='';
+  const pid = e.dataTransfer.getData('pid');
+  const sourceTid = e.dataTransfer.getData('tid');
+  if(sourceTid !== targetTid) {
+    toast('⚠ Solo puedes moverlo en la fila de este cliente');
+    return; 
+  }
+  const p = pedidos.find(x=>x.id===pid);
+  if(p && !isLocked(p) && p.estado !== newEstado){
+    const prev = p.estado;
+    p.estado = newEstado;
+    p.hist.push({who:whoNow(),what:'Estado (Arrastrado)',t:nowH(),tipo:'estado',antes:EL[prev],despues:EL[newEstado]});
+    renderSwimlane();renderAllAdmin();
+    toast('Movido a '+EL[newEstado]);
+  }
+}
+
 // ══════════════════════ MODAL TICKET ══════════════════════
 function openTicket(tid){
   const t=tickets.find(x=>x.id===tid);if(!t)return;
+  if(t.unreadCount){ t.unreadCount = 0; renderSwimlane(); }
   const ped=t.pedidoId?pedidos.find(p=>p.id===t.pedidoId):null;
   document.getElementById('tk-tit').textContent='💬 '+t.name;
   document.getElementById('tk-sub').textContent='📱 '+t.phone+' · Recibido: '+t.createdAt+' · '+t.msgs.length+' mensajes';
@@ -1512,6 +1574,19 @@ function createFromTicket(tid){
   document.getElementById('np-tel').value=t.phone;
   window._pendingTicketId=tid;
   dirtyMap['m-nuevo']=false;
+  
+  const previewWrap = document.getElementById('np-chat-wrap');
+  const preview = document.getElementById('np-chat-preview');
+  if(previewWrap && preview) {
+     previewWrap.style.display = 'block';
+     preview.innerHTML = '<div style="font-size:11px;color:#667781;margin-bottom:6px;font-weight:bold;text-align:center;">💬 Conversación de WhatsApp</div>' + 
+       t.msgs.map(m=>`
+        <div class="chat-msg ${m.from==='c'?'them':'us'}" style="margin-bottom:5px; max-width:95%;">
+          <div class="chat-bubble" style="padding:6px 10px;font-size:12px;display:inline-block;">${m.text}</div>
+        </div>`).join('');
+     setTimeout(()=>preview.scrollTop=preview.scrollHeight, 50);
+  }
+  
   // Mostrar de qué ticket viene
   const sub=document.querySelector('#m-nuevo .mtit');
   if(sub)sub.textContent='Nuevo pedido · '+t.name;
@@ -1523,7 +1598,7 @@ let cierreDecisions={};
 function openCierre(){
   cierreDecisions={};
   document.getElementById('cierre-informe-wrap').style.display='none';
-  const todos=pedidos.filter(p=>p.estado!=='papelera');
+  const todos=getPedidos().filter(p=>p.estado!=='papelera');
   const pagados=todos.filter(p=>p.pagado);
   const pendientes=todos.filter(p=>!p.pagado);
   let ef=0,tr=0;
@@ -1554,6 +1629,7 @@ function openCierre(){
         <select class="warn-sel" onchange="cierreDecisions['${p.id}']=this.value">
           <option value="">¿Qué hacer?</option>
           <option value="manana">📅 Pasar a mañana</option>
+          <option value="forzar_cierre">✅ Forzar pago/cierre</option>
           <option value="cancelar">❌ Cancelar pedido</option>
         </select>
       </div>`;
@@ -1568,65 +1644,114 @@ function openCierre(){
 }
 
 function generarInforme(){
-  const todos=pedidos.filter(p=>p.estado!=='papelera');
-  const pagados=todos.filter(p=>p.pagado);
-  const pendientes=todos.filter(p=>!p.pagado);
-  let ef=0,tr=0;
-  pagados.forEach(p=>{
-    const tot=p.items.reduce((s,i)=>s+(parseInt(i.p)||0),0);
-    if(p.pago==='efectivo'||p.pago==='casa')ef+=tot;
-    else if(p.pago==='transferencia')tr+=tot;
-  });
-  const n=new Date();
-  const fecha=n.toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-  let inf='';
-  inf+='═══════════════════════════════════════\n';
-  inf+='   4CLIENT — CIERRE DE CAJA\n';
-  inf+='   Fruver San Gabriel\n';
-  inf+=`   ${fecha} · ${nowH()}\n`;
-  inf+='═══════════════════════════════════════\n\n';
-  inf+='RESUMEN FINANCIERO\n';
-  inf+='───────────────────────────────────────\n';
-  inf+=`  Efectivo / Cobra en casa : ${fmt(ef).padStart(12)}\n`;
-  inf+=`  Transferencias           : ${fmt(tr).padStart(12)}\n`;
-  inf+=`  ──────────────────────────────────────\n`;
-  inf+=`  TOTAL RECAUDADO          : ${fmt(ef+tr).padStart(12)}\n\n`;
-  inf+='ESTADO DE PEDIDOS\n';
-  inf+='───────────────────────────────────────\n';
-  inf+=`  Total registrados   : ${todos.length}\n`;
-  inf+=`  Cobrados/cerrados   : ${pagados.length}\n`;
-  inf+=`  Sin resolver        : ${pendientes.length}\n`;
-  inf+=`  En papelera         : ${papelera.length}\n\n`;
-  inf+='DETALLE POR PEDIDO\n';
-  inf+='───────────────────────────────────────\n';
-  [...todos].sort((a,b)=>a.num.localeCompare(b.num)).forEach(p=>{
-    const tot=p.items.reduce((s,i)=>s+(parseInt(i.p)||0),0);
-    const n=('#'+p.num).padEnd(5);
-    const cli=p.cli.substring(0,20).padEnd(21);
-    const accion=cierreDecisions[p.id];
-    let est;
-    if(p.pagado)est='✅ PAGADO      ';
-    else if(accion==='manana')est='📅 A MAÑANA    ';
-    else if(accion==='cancelar')est='❌ CANCELADO   ';
-    else est=('⏳ '+EL[p.estado].toUpperCase()).padEnd(14);
-    inf+=`  ${n} ${cli} ${est} ${tot?fmt(tot):'—'}\n`;
-  });
-  if(papelera.length){
-    inf+='\nPAPELERA\n';
-    inf+='───────────────────────────────────────\n';
-    papelera.forEach(p=>{inf+=`  #${p.num} ${p.cli} — por ${p.quien} ${p.tPap}\n`;});
+  const pend=getPedidos().filter(p=>p.estado!=='cerrado'&&p.estado!=='papelera');
+  for(let p of pend){
+    if(!cierreDecisions[p.id]){
+      alert('Debes seleccionar una solución para todos los pedidos pendientes antes de cerrar la caja.');
+      return;
+    }
   }
-  inf+='\n═══════════════════════════════════════\n';
-  inf+=`  Generado por: ${whoNow()} · ${nowH()}\n`;
-  inf+='═══════════════════════════════════════\n';
-  document.getElementById('cierre-informe-txt').textContent=inf;
-  document.getElementById('cierre-informe-wrap').style.display='block';
-  setTimeout(()=>{document.getElementById('m-cierre').querySelector('.mbody').scrollTop=9999;},80);
+
+  // Aplicar decisiones a pendientes
+  pend.forEach(p => {
+    const dec = cierreDecisions[p.id];
+    if(dec === 'manana'){
+      let d = new Date(currentDateStr+'T12:00:00Z');
+      d.setDate(d.getDate()+1);
+      p.fecha = d.toISOString().split('T')[0];
+      p.hist.push({who:whoNow(),what:'Movido a mañana por cierre',t:nowH(),tipo:'edit'});
+    } else if(dec === 'cancelar'){
+      p.estado = 'papelera';
+      p.hist.push({who:whoNow(),what:'Cancelado en cierre',t:nowH(),tipo:'edit'});
+    } else if(dec === 'forzar_cierre'){
+      p.estado = 'cerrado';
+      p.pagado = true;
+      p.hist.push({who:whoNow(),what:'Cerrado forzosamente en cierre',t:nowH(),tipo:'create'});
+    }
+  });
+
+  // Marcar los de hoy como caja cerrada
+  const todosHoy = pedidos.filter(p=>p.fecha===currentDateStr && p.estado!=='papelera');
+  todosHoy.forEach(p => p.cajaCerrada = true);
+
+  // Generar CSV
+  let csv = "Fecha,Num,Cliente,Telefono,Total,Estado Final,Solucion en Cierre,Items\n";
+  const informePedidos = pedidos.filter(p => (p.fecha===currentDateStr || p.hist.some(h=>h.what.includes('Movido a mañana por cierre') && h.t===nowH())) && p.estado!=='papelera');
+  
+  informePedidos.forEach(p => {
+    const tot=p.items.reduce((s,i)=>s+(parseInt(i.p)||0),0);
+    let est = p.pagado?'PAGADO':(cierreDecisions[p.id]==='manana'?'A MANANA':'CANCELADO');
+    if(p.estado === 'papelera') est = 'CANCELADO';
+    const sol=cierreDecisions[p.id]||'Completado normal';
+    const it=p.items.map(i=>i.q+' '+i.n).join(' | ');
+    csv += `"${currentDateStr}","${p.num}","${p.cli}","${p.tel}","${tot}","${est}","${sol}","${it}"\n`;
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Cierre_Fruver_${currentDateStr}.csv`;
+  a.click();
+
+  closeModal('m-cierre');
+  renderAllAdmin();
+  toast('Caja cerrada y reporte en Excel (CSV) descargado');
 }
 
 // ══════════════════════ TOAST ══════════════════════
 let tt;
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),2800);}
+
+// ══════════════════════ SIMULADOR WPP (MOCKUP DEMO) ══════════════════════
+let demoMessageCount = 0;
+function simulateIncomingMessage() {
+  const delay = demoMessageCount === 0 ? 12000 : 40000; // 12 segs para el primero, 40s para el resto
+  setTimeout(() => {
+    // Solo simular si estamos logueados en el panel
+    if(document.getElementById('s-admin').classList.contains('on') && currentUser) {
+      demoMessageCount++;
+      const id = 't_sim_' + Date.now();
+      const h = nowH();
+      
+      let name, msgs;
+      if (demoMessageCount === 1) {
+         name = "Laura Gómez (Demo)";
+         msgs = [
+           {from:'c', text:'Hola buenas tardes ☀️', t: h},
+           {from:'c', text:'Necesito urgente 3 libras de tomate y 1 de cebolla, ¿me lo pueden mandar ya?', t: h}
+         ];
+      } else {
+         name = "Cliente " + demoMessageCount + " (Demo)";
+         msgs = [
+           {from:'c', text:'Hola, para hacer un pedido por favor', t: h}
+         ];
+      }
+      
+      const existingTk = tickets.find(x => x.name === name);
+      if(existingTk) {
+         existingTk.msgs.push({from:'c', text:'¿Me pueden responder por favor? Es urgente', t: h});
+         existingTk.unreadCount = (existingTk.unreadCount || 0) + 1;
+      } else {
+         tickets.push({
+           id: id, phone: '320' + Math.floor(1000000 + Math.random() * 9000000),
+           name: name, pedidoIds: [], createdAt: h, msgs: msgs,
+           unreadCount: 1
+         });
+      }
+      
+      // Mostrar la alerta nativa del mockup
+      toast('💬 Nuevo mensaje de WhatsApp de ' + name);
+      
+      // Rerenderizar la vista para que el ticket aparezca inmediatamente
+      if(currentAdmTab==='swimlane') renderSwimlane();
+    }
+    simulateIncomingMessage();
+  }, delay);
+}
+
+// Arrancar el simulador en segundo plano
+simulateIncomingMessage();
 
 // INIT — arranca en login
 show('s-login');

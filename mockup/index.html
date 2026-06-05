@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4Client — Sistema de Gestión</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ════════ LOGIN ════════ -->
+<div id="s-login" class="scr on">
+  <div class="lcard">
+    <div class="llogo">
+      <img src="/mnt/user-data/uploads/4Client-Logo.png" onerror="this.style.display='none'">
+      <div class="llogo-t">4Client</div>
+    </div>
+    <p class="lsub">Sistema de Gestión Operativa<br>Fruver San Gabriel</p>
+    <div class="role-hint">
+      <strong>Dueño:</strong> usuario <code>admin</code> · contraseña <code>admin</code><br>
+      <strong>Encargado:</strong> usuario <code>trabajador</code> · contraseña <code>trabajador</code>
+    </div>
+    <div class="fg"><label class="fl">Usuario</label><input class="fi" id="usr" type="text" placeholder="admin / trabajador" autocomplete="username"></div>
+    <div class="fg"><label class="fl">Contraseña</label><input class="fi" id="pwd" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="bpri" onclick="doLogin()">Ingresar al sistema</button>
+    <div class="login-err" id="login-err"></div>
+    <div class="lfooter">4client.shop · Fruver San Gabriel</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- WARN UNSAVED -->
+<div class="moverlay" id="m-warn">
+  <div class="warnbox">
+    <div class="wt">⚠ Cambios sin guardar</div>
+    <div class="wd">Hay cambios que aún no se guardaron. ¿Qué deseas hacer?</div>
+    <div class="wbts">
+      <button class="bsec" style="flex:1" onclick="discardGo()">Salir sin guardar</button>
+      <button class="bpri" style="flex:2;margin:0;padding:13px;" onclick="closeWarn()">Volver y guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM COBRO -->
+<div class="moverlay" id="m-confirm-cobro">
+  <div class="cobrobox">
+    <div style="font-size:24px;text-align:center;margin-bottom:12px;">💵</div>
+    <div style="font-size:18px;font-weight:800;text-align:center;margin-bottom:8px;">¿Confirmar pago?</div>
+    <div style="font-size:14px;color:var(--gt);text-align:center;margin-bottom:8px;" id="cc-info"></div>
+    <div style="background:var(--ac);border-radius:var(--rad);padding:12px 16px;margin-bottom:20px;font-size:13px;color:var(--a);font-weight:600;text-align:center;">
+      ⚠ Una vez confirmado el pago, el pedido quedará bloqueado y no se podrá modificar.
+    </div>
+    <div class="fg2"><label class="fl2">¿Cuánto entregó el domiciliario?</label>
+      <input class="fi2" type="number" id="cc-rec" placeholder="Ej: 50000" oninput="calcDevCC()">
+      <div style="font-size:13px;color:var(--gt);margin-top:7px;font-weight:600;">Devolución al cliente: <strong id="cc-dev">$0</strong></div></div>
+    <div class="fg2"><label class="fl2">¿Quién recibió el dinero?</label>
+      <select class="fi2" id="cc-who"><option>Cargando...</option></select></div>
+    <div class="fg2" style="margin-bottom:0;"><label class="fl2">Observaciones (opcional)</label>
+      <input class="fi2" placeholder="Ej: Cliente pidió factura..."></div>
+    <div style="display:flex;gap:9px;margin-top:20px;">
+      <button class="bsec" style="flex:1;" onclick="closeModal('m-confirm-cobro')">Cancelar</button>
+      <button class="bpri" style="flex:2;margin:0;padding:13px;" onclick="doCobro()">✅ Sí, confirmar pago</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ════════ PANEL PRINCIPAL ════════ -->
+<div id="s-admin" class="scr">
+  <div class="al">
+    <header class="ah">
+      <div class="ht">
+        <div class="hlogo">
+          <img src="/mnt/user-data/uploads/4Client-Logo.png" style="width:34px;height:34px;object-fit:contain;" onerror="this.style.display='none'">
+          <span class="hlogo-t">4Client</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:9px;">
+          <div class="huser">
+            <div class="uav" id="h-av">U</div>
+            <div><div class="un" id="h-un">—</div><div class="ur2" id="h-rol">—</div></div>
+          </div>
+          <button class="bnew" id="btn-cierre" style="background:var(--az);padding:8px 14px;font-size:13px;display:none;" onclick="openCierre()">🏦 Cierre de caja</button>
+          <button class="bout" onclick="doLogout()">Salir</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <button class="tab on" onclick="switchMainTab('swimlane',this)">📋 Tickets & Pedidos</button>
+        <button class="tab" id="tab-resumen" style="display:none;" onclick="switchMainTab('resumen',this)">📊 Resumen del día</button>
+      </div>
+    </header>
+    <div class="ac">
+
+      <!-- SWIMLANE PRINCIPAL -->
+      <div id="adm-swimlane">
+        <div class="khead">
+          <div><div class="ktit">Tickets & Pedidos de despacho</div><div class="kmeta" id="panel-meta">Cargando...</div></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="date" id="ui-date" class="fsel" style="cursor:pointer;" onchange="changeDate(this.value)">
+            <div class="sbx" style="min-width:170px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" placeholder="Buscar..." id="srch" oninput="renderSwimlane()"></div>
+            <select class="fsel" id="fpago" onchange="renderSwimlane()">
+              <option value="">Todos los pagos</option>
+              <option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="casa">Cobra en casa</option>
+            </select>
+            <button class="bnew" onclick="tryOpenNuevo()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Nuevo pedido
+            </button>
+          </div>
+        </div>
+        <div class="slane-wrap" id="swimlane"></div>
+      </div>
+
+      <!-- RESUMEN DEL DUEÑO -->
+      <div id="adm-resumen" style="display:none;">
+        <div class="khead"><div><div class="ktit">Resumen del día</div><div class="kmeta" id="adm-rmeta">Totales en tiempo real</div></div></div>
+
+        <div class="agrid">
+          <div class="acard"><div class="ai">📋</div><div class="av" id="a-tot">0</div><div class="al2">Pedidos totales</div></div>
+          <div class="acard v"><div class="ai">✅</div><div class="av" id="a-ent">0</div><div class="al2">Entregados</div></div>
+          <div class="acard r"><div class="ai">⏳</div><div class="av" id="a-pen">0</div><div class="al2">Pendientes</div></div>
+          <div class="acard az"><div class="ai">🛵</div><div class="av" id="a-dom">0</div><div class="al2">Domicilios activos</div></div>
+        </div>
+
+        <div class="drow">
+          <div class="dcard2 v"><div class="dico v">💵</div><div><div class="dlbl">Recaudado efectivo</div><div class="dval" id="d-ef">$0</div></div></div>
+          <div class="dcard2 az"><div class="dico az">📲</div><div><div class="dlbl">Recaudado transferencia</div><div class="dval" id="d-tr">$0</div></div></div>
+          <div class="dcard2 tot"><div class="dico n">💰</div><div><div class="dlbl">Total recaudado</div><div class="dval" id="d-tot">$0</div></div></div>
+        </div>
+
+        <div class="atabs">
+          <button class="atab on" onclick="switchAdmTab('todos',this)">📋 Todos los pedidos</button>
+          <button class="atab" onclick="switchAdmTab('papelera',this)">🗑 Papelera <span id="pap-cnt">(0)</span></button>
+          <button class="atab" onclick="switchAdmTab('editados',this)">✏️ Cambios <span id="edit-cnt">(0)</span></button>
+        </div>
+
+        <div id="adm-todos">
+          <div class="htab">
+            <div class="hth">Pedidos <span id="adm-total-txt" style="font-size:13px;color:var(--gt);font-weight:400;"></span></div>
+            <div id="adm-list"></div>
+          </div>
+        </div>
+        <div id="adm-papelera" style="display:none;"></div>
+        <div id="adm-editados" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL NUEVO PEDIDO ════════ -->
+<div class="moverlay" id="m-nuevo">
+  <div class="mwin" style="max-width:900px; width:95%;">
+    <div class="mhead"><div class="mtit">Registrar nuevo pedido</div>
+      <button class="mclose" onclick="tryClose('m-nuevo')">×</button></div>
+    <div class="mbody" style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start;">
+      <div id="np-chat-wrap" style="display:none; flex:1; min-width:280px;">
+        <div id="np-chat-preview" style="background:#ECE5DD; border-radius:10px; padding:10px; max-height:600px; overflow-y:auto; border: 2px solid var(--v);"></div>
+      </div>
+      <div style="flex:2; min-width:320px;">
+        <div class="frow">
+          <div class="fg2"><label class="fl2">Canal</label>
+            <select class="fi2" id="np-canal" onchange="dirty('m-nuevo')"><option>📱 WhatsApp</option><option>📞 Llamada</option></select></div>
+          <div class="fg2"><label class="fl2">Método de pago</label>
+            <select class="fi2" id="np-pago" onchange="dirty('m-nuevo')"><option value="casa">💵 Cobra en casa</option><option value="transferencia">📲 Transferencia</option><option value="efectivo">💳 Pagado en tienda</option></select></div>
+        </div>
+        <div class="frow">
+          <div class="fg2"><label class="fl2">Nombre del cliente *</label>
+            <input class="fi2" id="np-nom" placeholder="Ej: María González" oninput="dirty('m-nuevo')"></div>
+          <div class="fg2"><label class="fl2">Teléfono</label>
+            <input class="fi2" id="np-tel" placeholder="Ej: 3001234567" oninput="dirty('m-nuevo')"></div>
+        </div>
+        <div class="fg2"><label class="fl2">Dirección de entrega *</label>
+          <input class="fi2" id="np-dir" placeholder="Ej: Cra 45 #12-34, Casa azul" oninput="dirty('m-nuevo')"></div>
+        <div class="fg2"><label class="fl2">Domiciliario</label>
+          <select class="fi2" id="np-dom"><option value="">— Sin asignar —</option><option value="Pedro Gómez">🛵 Pedro Gómez</option><option value="Andrés Castillo">🛵 Andrés Castillo</option></select></div>
+        <div class="stit">Productos</div>
+        <div class="psearch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="np-ps" type="text" placeholder="Buscar producto..." oninput="bProd(this.value,'np')"></div>
+        <div class="pdrop" id="np-pd"></div>
+        <div class="ilist" id="np-il"><div class="irow hdr"><div>Producto</div><div>Cantidad</div><div>Precio</div><div></div></div></div>
+        <div class="factbox"><div style="font-size:12px;font-weight:800;color:var(--gt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;">Resumen</div>
+          <div id="np-fr"></div><div class="facttot"><span>Total</span><span id="np-tot">$0</span></div></div>
+        <div class="mactions">
+          <button class="bsec" onclick="tryClose('m-nuevo')">Cancelar</button>
+          <button class="bpri" onclick="regPedido()">✓ Registrar pedido</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL DETALLE ════════ -->
+<div class="moverlay" id="m-det">
+  <div class="mwin">
+    <div class="mhead">
+      <div><div class="mtit" id="det-tit">Pedido</div><div class="msub" id="det-sub"></div></div>
+      <button class="mclose" onclick="tryClose('m-det')">×</button>
+    </div>
+    <div class="mbody">
+      <div id="det-top-banner"></div>
+      <div style="background:var(--vc);border-radius:var(--rad);padding:12px 16px;margin-bottom:16px;" id="det-info"></div>
+      <div class="stit">Mover pedido</div>
+      <div class="movbtns" id="det-mover"></div>
+      <div class="stit">Información del pedido</div>
+      <div class="frow">
+        <div class="fg2"><label class="fl2">Nombre del cliente</label>
+          <input class="fi2" id="det-nom" oninput="dirty('m-det')"></div>
+        <div class="fg2"><label class="fl2">Teléfono</label>
+          <input class="fi2" id="det-tel" oninput="dirty('m-det')"></div>
+      </div>
+      <div class="fg2"><label class="fl2">Dirección</label>
+        <input class="fi2" id="det-dir" oninput="dirty('m-det')"></div>
+      <div class="frow">
+        <div class="fg2"><label class="fl2">Método de pago</label>
+          <select class="fi2" id="det-pago" onchange="dirty('m-det')"><option value="casa">💵 Cobra en casa</option><option value="transferencia">📲 Transferencia</option><option value="efectivo">💳 Pagado en tienda</option></select></div>
+        <div class="fg2"><label class="fl2">Domiciliario</label>
+          <select class="fi2" id="det-dom" onchange="dirty('m-det')"><option value="">— Sin asignar —</option><option value="Pedro Gómez">🛵 Pedro Gómez</option><option value="Andrés Castillo">🛵 Andrés Castillo</option></select></div>
+      </div>
+      <div class="stit">Productos</div>
+      <div class="psearch"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="det-ps" type="text" placeholder="Agregar producto..." oninput="bProd(this.value,'det')"></div>
+      <div class="pdrop" id="det-pd"></div>
+      <div class="ilist" id="det-il"><div class="irow hdr"><div>Producto</div><div>Cantidad</div><div>Precio</div><div></div></div></div>
+      <div class="factbox" style="margin-top:12px;"><div style="font-size:12px;font-weight:800;color:var(--gt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px;">Factura</div>
+        <div id="det-fr"></div><div class="facttot"><span>Total</span><span id="det-tot">$0</span></div></div>
+      <!-- HISTORIAL solo dueño -->
+      <div id="det-hist-wrap" style="display:none;">
+        <div class="hist-toggle" id="det-hist-tog" onclick="toggleHist()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          Historial de cambios
+          <span id="det-hist-cnt" style="background:var(--v);color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;margin-left:auto;"></span>
+        </div>
+        <div class="hist-body" id="det-hist-body"></div>
+      </div>
+      <div class="mactions" id="det-actions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL TICKET WPP ════════ -->
+<div class="moverlay" id="m-ticket">
+  <div class="mwin">
+    <div class="mhead">
+      <div><div class="mtit" id="tk-tit">Conversación</div><div class="msub" id="tk-sub"></div></div>
+      <button class="mclose" onclick="closeModal('m-ticket')">×</button>
+    </div>
+    <div class="mbody">
+      <div style="background:var(--bg);border-radius:var(--rad);padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--gt);font-weight:600;">
+        🔒 Este es el registro inmutable de la conversación de WhatsApp. No se puede modificar.
+      </div>
+      <div class="chat-outer" id="tk-chat"></div>
+      <div id="tk-ped-info"></div>
+      <div class="mactions" id="tk-actions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL CIERRE DE CAJA ════════ -->
+<div class="moverlay" id="m-cierre">
+  <div class="cierre-win">
+    <div class="mhead">
+      <div><div class="mtit">🏦 Cierre de Caja</div><div class="msub">Resumen del día — Fruver San Gabriel</div></div>
+      <button class="mclose" onclick="closeModal('m-cierre')">×</button>
+    </div>
+    <div class="mbody">
+
+      <div class="cierre-sect">
+        <div class="cierre-stit">💰 Recaudado hoy</div>
+        <div class="cierre-row"><span>Efectivo / Cobra en casa</span><strong id="cierre-ef">$0</strong></div>
+        <div class="cierre-row"><span>Transferencias</span><strong id="cierre-tr">$0</strong></div>
+        <div class="cierre-total"><span>Total recaudado</span><span id="cierre-gran-total">$0</span></div>
+      </div>
+
+      <div class="cierre-sect">
+        <div class="cierre-stit">📋 Estado de pedidos</div>
+        <div class="cierre-row"><span>Total registrados</span><strong id="cierre-stat-tot">0</strong></div>
+        <div class="cierre-row"><span>✅ Cobrados y cerrados</span><strong id="cierre-stat-pag" style="color:var(--v);">0</strong></div>
+        <div class="cierre-row"><span>⏳ Sin resolver</span><strong id="cierre-stat-pen" style="color:var(--a);">0</strong></div>
+        <div class="cierre-row"><span>🗑 En papelera</span><strong id="cierre-stat-pap" style="color:var(--gt);">0</strong></div>
+      </div>
+
+      <div class="cierre-sect" id="cierre-warn-sect" style="border:2px solid #FFCC80;background:var(--ac);">
+        <div class="cierre-stit" style="color:var(--a);">⚠ <span id="cierre-warn-cnt">Pedidos sin resolver</span></div>
+        <div id="cierre-warn"></div>
+      </div>
+
+      <div id="cierre-informe-wrap" style="display:none;">
+        <div class="stit" style="margin-top:0;">Informe generado</div>
+        <pre class="informe-pre" id="cierre-informe-txt"></pre>
+      </div>
+
+      <div class="mactions">
+        <button class="bsec" onclick="closeModal('m-cierre')">Cancelar</button>
+        <button class="bverde" onclick="generarInforme()">📋 Generar informe del día</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
