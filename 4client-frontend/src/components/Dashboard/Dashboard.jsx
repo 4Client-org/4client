@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import KanbanBoard from '../Kanban/KanbanBoard';
 
 function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('swimlane');
@@ -39,23 +40,7 @@ function Dashboard({ user, onLogout }) {
         <div className="ac">
           {activeTab === 'swimlane' && (
             <div id="adm-swimlane">
-              <div className="khead">
-                <div>
-                  <div className="ktit">Tickets & Pedidos de despacho</div>
-                  <div className="kmeta" id="panel-meta">Fase 1: Migración en progreso...</div>
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button className="bnew">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Nuevo pedido
-                  </button>
-                </div>
-              </div>
-              <div className="slane-wrap" id="swimlane">
-                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--gt)', fontSize: '14px', width: '100%' }}>
-                  Tablero Kanban en construcción (Migrando componentes de React)...
-                </div>
-              </div>
+              <KanbanBoard user={user} />
             </div>
           )}
           
