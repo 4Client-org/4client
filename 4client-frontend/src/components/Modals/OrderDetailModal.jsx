@@ -17,12 +17,13 @@ function OrderDetailModal({ pedido, ticket, onClose, onMove }) {
           </div>
           <button className="mclose" onClick={onClose}>×</button>
         </div>
-        <div className="mbody">
+        <div className="mbody" style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'flex-start' }}>
+          
           {ticket && (
-            <div id="det-top-banner">
-              <div style={{ background: '#ECE5DD', borderRadius: '10px', padding: '10px', marginBottom: '16px', maxHeight: '150px', overflowY: 'auto', border: '2px solid var(--v)' }}>
-                <div style={{ fontSize: '11px', color: '#667781', marginBottom: '6px', fontWeight: 'bold' }}>💬 Conversación de WhatsApp</div>
-                {ticket.msgs.slice(-5).map((m, i) => (
+            <div id="det-chat-wrap" style={{ flex: '1', minWidth: '280px' }}>
+              <div style={{ background: '#ECE5DD', borderRadius: '10px', padding: '10px', maxHeight: '600px', overflowY: 'auto', border: '2px solid var(--v)' }}>
+                <div style={{ fontSize: '11px', color: '#667781', marginBottom: '6px', fontWeight: 'bold', textAlign: 'center' }}>💬 Conversación de WhatsApp</div>
+                {ticket.msgs.map((m, i) => (
                   <div key={i} className={`chat-msg ${m.from === 'c' ? 'them' : 'us'}`} style={{ marginBottom: '5px', maxWidth: '95%' }}>
                     <div className="chat-bubble" style={{ padding: '6px 10px', fontSize: '12px', display: 'inline-block' }}>{m.text}</div>
                   </div>
@@ -30,7 +31,9 @@ function OrderDetailModal({ pedido, ticket, onClose, onMove }) {
               </div>
             </div>
           )}
-          <div style={{ background: 'var(--vc)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: '16px' }} id="det-info">
+
+          <div style={{ flex: '2', minWidth: '320px' }}>
+            <div style={{ background: 'var(--vc)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: '16px' }} id="det-info">
             <strong>{pedido.cli}</strong><br />
             {pedido.tel} <br />
             {pedido.dir}
@@ -108,9 +111,41 @@ function OrderDetailModal({ pedido, ticket, onClose, onMove }) {
             <div className="facttot"><span>Total</span><span id="det-tot">{fmt(total)}</span></div>
           </div>
           
-          <div className="mactions" id="det-actions">
+          <div id="det-hist-wrap" style={{ marginTop: '16px', border: '1px solid var(--brd)', borderRadius: 'var(--rad)', background: 'var(--bg)' }}>
+            <div 
+              className="hist-toggle" 
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', fontSize: '14px', fontWeight: '600', color: 'var(--txt)', cursor: 'pointer', background: 'transparent' }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+              Historial de movimientos y cambios
+              <span style={{ background: 'var(--v)', color: '#fff', borderRadius: '20px', padding: '1px 7px', fontSize: '11px', fontWeight: '800', marginLeft: 'auto' }}>
+                {pedido.hist ? pedido.hist.length : 0}
+              </span>
+            </div>
+            <div className="hist-body" style={{ padding: '0 16px 16px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {pedido.hist && pedido.hist.map((h, i) => (
+                <div key={i} style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--az)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 'bold' }}>
+                    {h.who[0].toUpperCase()}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: '600' }}>{h.what}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--gt)' }}>Por {h.who} a las {h.t}</div>
+                  </div>
+                </div>
+              ))}
+              {(!pedido.hist || pedido.hist.length === 0) && (
+                <div style={{ fontSize: '12px', color: 'var(--gt)' }}>No hay movimientos registrados.</div>
+              )}
+            </div>
+          </div>
+          
+          <div className="mactions" id="det-actions" style={{ marginTop: '16px' }}>
             <button className="bsec" onClick={onClose}>Cancelar</button>
             <button className="bpri" onClick={onClose}>Guardar Cambios</button>
+          </div>
           </div>
         </div>
       </div>

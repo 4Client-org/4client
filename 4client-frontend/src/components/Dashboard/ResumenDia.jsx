@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { pedidos as allPedidos, EL } from '../../data/mockData';
+import { pedidos as allPedidos, tickets as allTickets, EL } from '../../data/mockData';
+import OrderDetailModal from '../Modals/OrderDetailModal';
 
-function ResumenDia({ currentDateStr }) {
+function ResumenDia({ currentDateStr, user }) {
   const [activeTab, setActiveTab] = useState('todos');
+  const [activePedido, setActivePedido] = useState(null);
 
   // Filtramos los pedidos del día actual
   // En mockData actualmente no hay fechas, así que los tomamos todos por simplicidad
-  const pedidos = allPedidos;
+  const [pedidos, setPedidos] = useState(allPedidos);
 
   const pedidosValidos = pedidos.filter(p => p.estado !== 'papelera');
   const papelera = pedidos.filter(p => p.estado === 'papelera');
@@ -27,6 +29,30 @@ function ResumenDia({ currentDateStr }) {
 
   const fmt = (n) => '$' + (n || 0).toLocaleString('es-CO');
 
+  const handleMove = (pid, estado) => {
+    const pedIndex = pedidos.findIndex(p => p.id === pid);
+    if (pedIndex > -1) {
+      const p = pedidos[pedIndex];
+      if (p.pagado || p.cajaCerrada) return;
+      if (p.estado === estado) return;
+
+      const newPedidos = [...pedidos];
+      const timeStr = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+      const newHist = [...(p.hist || []), {
+        who: user ? user.label : 'Dueño',
+        what: 'Estado',
+        t: timeStr,
+        tipo: 'estado',
+        antes: EL[p.estado],
+        despues: EL[estado]
+      }];
+
+      newPedidos[pedIndex] = { ...p, estado: estado, hist: newHist };
+      setPedidos(newPedidos);
+      setActivePedido(newPedidos[pedIndex]);
+    }
+  };
+
   const renderTable = (list) => (
     <div className="htab">
       <div className="hrow hdr">
@@ -38,7 +64,7 @@ function ResumenDia({ currentDateStr }) {
         list.map(p => {
           const tot = p.items.reduce((s, i) => s + parseInt(i.p), 0);
           return (
-            <div key={p.id} className="hrow" style={p.estado === 'nuevo' ? { background: 'var(--rc)' } : {}}>
+            <div key={p.id} className="hrow" style={{ cursor: 'pointer', ...(p.estado === 'nuevo' ? { background: 'var(--rc)' } : {}) }} onClick={() => setActivePedido(p)}>
               <div style={{ fontWeight: '800' }}>#{p.num}</div>
               <div style={{ fontWeight: '600' }}>{p.cli}</div>
               <div style={{ color: 'var(--v)', fontWeight: '600' }}>{fmt(tot)}</div>
@@ -82,6 +108,13 @@ function ResumenDia({ currentDateStr }) {
         {activeTab === 'todos' && renderTable(pedidosValidos)}
         {activeTab === 'papelera' && renderTable(papelera)}
       </div>
+
+      <OrderDetailModal 
+        pedido={activePedido} 
+        ticket={activePedido ? allTickets.find(t => t.pedidoIds.includes(activePedido.id)) : null}
+        onClose={() => setActivePedido(null)} 
+        onMove={handleMove}
+      />
     </div>
   );
 }

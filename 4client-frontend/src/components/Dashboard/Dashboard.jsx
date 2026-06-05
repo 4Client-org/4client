@@ -60,7 +60,7 @@ function Dashboard({ user, onLogout }) {
           )}
           
           {activeTab === 'resumen' && (
-            <ResumenDia currentDateStr={new Date().toISOString().split('T')[0]} />
+            <ResumenDia currentDateStr={new Date().toISOString().split('T')[0]} user={user} />
           )}
         </div>
       </div>

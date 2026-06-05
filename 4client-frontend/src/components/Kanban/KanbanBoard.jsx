@@ -94,8 +94,21 @@ function KanbanBoard({ user, onOpenNewOrder }) {
     if (pedIndex > -1) {
       const p = pedidos[pedIndex];
       if (p.pagado || p.cajaCerrada) return;
+      if (p.estado === estado) return;
+      
       const newPedidos = [...pedidos];
-      newPedidos[pedIndex] = { ...p, estado: estado };
+      
+      const timeStr = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+      const newHist = [...(p.hist || []), {
+        who: user.label,
+        what: 'Estado',
+        t: timeStr,
+        tipo: 'estado',
+        antes: EL[p.estado],
+        despues: EL[estado]
+      }];
+      
+      newPedidos[pedIndex] = { ...p, estado: estado, hist: newHist };
       setPedidos(newPedidos);
       setActivePedido(newPedidos[pedIndex]); // update modal
     }
