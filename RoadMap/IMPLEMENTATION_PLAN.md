@@ -1,5 +1,5 @@
 # Plan de Implementación — 4Client
-**Versión 1.0 · Junio 2026**
+**Versión 1.1 · Junio 2026**
 
 ---
 
@@ -21,10 +21,11 @@ Estas decisiones se toman en semana 1. Cambiarlas después = demoler y reconstru
 ### 2.1 Multi-tenancy desde el día 1
 Cada negocio = un tenant. Cada tabla en BD tiene `org_id`. Sin esto, el segundo cliente requiere reescribir la base de datos completa.
 
-### 2.2 WhatsApp: Estrategia dual de proveedores
-- **Cliente 1 (Fruver San Gabriel):** Baileys — mismo número, celular del dueño sigue funcionando normal, sincronización bidireccional completa entre celular y 4Client
-- **Clientes nuevos (desde cliente 2):** Meta Cloud API — oficial, sin riesgo de ban, número dedicado al negocio
-- **Capa de abstracción `WhatsAppService`:** Interfaz única independiente del proveedor. Migrar de Baileys a Meta API = solo cambiar la implementación de esa clase, sin tocar el resto del sistema
+### 2.2 WhatsApp: Meta Cloud API oficial para todos los clientes
+- **Todos los clientes sin excepción** usan Meta Cloud API (oficial, sin riesgo de ban, soporte de Meta)
+- **Número dedicado al negocio:** Cada cliente registra un número nuevo exclusivo para el sistema (chip prepago ~$5,000 COP). Este número NO funciona en la app de WhatsApp — solo via API
+- **El dueño monitorea desde 4Client PWA** instalada en su celular — ve la bandeja completa, lee y responde en tiempo real. Su número personal sigue en la app de WPP normal sin cambios
+- **Sin Baileys, sin sesiones persistentes, sin riesgo de ban.** Arquitectura stateless y limpia desde el primer día
 
 ### 2.3 Bandeja WPP para el dueño
 El administrador tiene una vista de bandeja completa dentro de 4Client — todos los chats, historial completo, puede leer y responder. Los encargados no tienen acceso a esta vista. La app es PWA (Progressive Web App) para que el dueño la instale en su celular como app nativa.
@@ -50,8 +51,7 @@ No hardcodeado. Tabla `products` con `org_id`. Cada negocio gestiona su propio c
 | **Base de datos** | PostgreSQL 16 | ACID, Row-Level Security, JSONB |
 | **Real-time** | Socket.io 4 | Namespaces por org, rooms por fecha |
 | **Auth** | JWT (access 15min) + Refresh tokens (7 días) + bcrypt | Sin vendor lock-in |
-| **WPP Cliente 1** | Baileys | Mismo número, celular sigue funcionando, sync bidireccional |
-| **WPP Clientes 2+** | Meta Cloud API | Oficial, escalable, sin riesgo de ban |
+| **WPP Todos los clientes** | Meta Cloud API | Oficial, sin riesgo de ban, número dedicado al negocio |
 | **PDF** | PDFKit (server-side) | Control total, no depende del browser |
 | **Storage** | Cloudflare R2 | S3-compatible, free tier hasta 10GB ($0/mes) |
 | **Hosting** | Railway | Auto-deploy desde GitHub, PostgreSQL incluido |
@@ -95,13 +95,10 @@ No hardcodeado. Tabla `products` con `org_id`. Cada negocio gestiona su propio c
 │  POST /api/v1/inbox/:id/reply     GET  /api/v1/dashboard           │
 │  POST /api/v1/cierre                                               │
 │                                                                     │
-│  WhatsAppService (interfaz abstracta)                               │
-│  ├── BaileysProvider    ← cliente 1 (Fruver San Gabriel)           │
-│  └── MetaCloudProvider  ← clientes 2+                              │
+│  WhatsAppService → MetaCloudProvider (todos los clientes)          │
 └──────────┬──────────────────────────────────────────────────────────┘
            │
            ├──→ PostgreSQL (datos principales)
-           ├──→ Redis (sesión Baileys, cache, rate limiting)
            └──→ Cloudflare R2 (PDFs, facturas, reportes)
 
 WhatsApp ──webhook/socket──→ Backend ──WebSocket──→ Frontend (real-time)
@@ -444,37 +441,43 @@ export interface IWhatsAppProvider {
 }
 
 export function createWhatsAppProvider(org: Organization): IWhatsAppProvider {
-  if (org.wpp_provider === 'meta_api') {
-    return new MetaCloudProvider(org.wpp_meta_phone_id!, org.wpp_meta_token!);
-  }
-  return new BaileysProvider(org.id);
+  return new MetaCloudProvider(org.wpp_meta_phone_id!, org.wpp_meta_token!);
 }
 ```
 
-### Flujo Baileys (cliente 1 — Fruver San Gabriel)
+### Flujo Meta Cloud API (todos los clientes)
 
 ```
-1. Backend arranca → BaileysProvider se conecta
-2. Primera vez: genera QR code en pantalla del servidor
-3. Dueño escanea QR con su celular (igual que WhatsApp Web)
-4. Sesión persiste en Redis → no necesita re-escanear al reiniciar
-5. Mensaje entra al celular → Baileys lo captura simultáneamente
-6. Baileys dispara evento → backend guarda en ticket_messages (BD)
-7. WebSocket notifica al frontend → aparece en 4Client en tiempo real
-8. Dueño ve el mensaje en su celular Y en la bandeja de 4Client al mismo tiempo
-9. Trabajador responde desde 4Client → Baileys envía el mensaje por WPP
-10. Dueño ve esa respuesta en su celular también (sincronización total)
+SETUP (una sola vez por cliente):
+1. Negocio compra chip prepago nuevo (~$5,000 COP) — número dedicado al negocio
+2. Se registra ese número en Meta Business Manager
+3. Meta verifica el número via SMS/llamada
+4. Se configura webhook: POST https://api.4client.shop/webhook/meta
+5. Meta entrega phone_number_id + access_token → se guardan en org (encriptados)
+
+OPERACIÓN DIARIA:
+1. Cliente escribe al número del negocio por WhatsApp
+2. Meta envía POST al webhook con el mensaje
+3. Backend valida firma HMAC-SHA256 del request
+4. Guarda mensaje en ticket_messages (BD)
+5. WebSocket emite evento → 4Client actualiza en tiempo real
+6. Trabajador ve el ticket en swimlane, dueño ve en bandeja + swimlane
+7. Trabajador o dueño responde desde 4Client
+8. Backend llama a Meta Graph API → mensaje sale por WPP al cliente
+9. Stateless, sin conexión persistente, sin QR, sin sesiones
 ```
 
-### Flujo Meta Cloud API (clientes nuevos)
+### Setup inicial para cada cliente nuevo
 
 ```
-1. Negocio registra número dedicado en Meta Business Manager
-2. Meta envía mensajes entrantes via webhook POST /webhook/meta
-3. Backend valida firma HMAC-SHA256 → guarda en ticket_messages (BD)
-4. WebSocket notifica al frontend en tiempo real
-5. Respuestas salen via Meta Graph API
-6. Sin conexión persistente — stateless, más robusto a largo plazo
+Dueño:
+├── Número personal → WhatsApp app en su celular (sin cambios)
+└── 4Client PWA instalada en su celular → bandeja del negocio
+
+Número del negocio (nuevo chip):
+└── Meta Cloud API → solo funciona via 4Client
+    ├── Dueño lo ve en bandeja 4Client (PWA en celular)
+    └── Trabajadores lo ven en swimlane (computador)
 ```
 
 ---
@@ -614,16 +617,17 @@ El hook `useSocket` escucha estos eventos e invalida las queries de React Query 
 
 | # | Tarea |
 |---|---|
-| 23 | Interface IWhatsAppProvider + factory function |
-| 24 | BaileysProvider: conexión, QR code flow, recepción, envío |
-| 25 | Redis para sesión Baileys: persistencia entre reinicios del servidor |
-| 26 | Pipeline mensaje entrante: Baileys → evento → BD → WebSocket → UI |
+| 23 | Interface IWhatsAppProvider + MetaCloudProvider implementación completa |
+| 24 | Webhook endpoint: POST /webhook/meta con validación HMAC-SHA256 |
+| 25 | Pipeline mensaje entrante: webhook → BD ticket_messages → WebSocket → UI |
+| 26 | Envío de respuestas: Meta Graph API con manejo de errores y retry |
 | 27 | Rutas backend bandeja: GET /inbox, GET /inbox/:id/messages, POST /inbox/:id/reply |
 | 28 | Bandeja WPP frontend: InboxView, ChatList, ChatWindow, ChatBubble, MediaMessage |
 | 29 | Notificaciones tiempo real: badge contador en header, toast de mensaje nuevo |
-| 30 | PDF server-side: PDFKit genera → sube a R2 → envía por WPP como adjunto |
+| 30 | PDF server-side: PDFKit genera → sube a R2 → envía por WPP como adjunto via Meta API |
 | 31 | Urgency system: lógica de tiempo de espera, zona roja en swimlane |
 | 32 | Crear pedido desde inbox: botón en bandeja → modal nuevo pedido con datos prellenados |
+| 33 | Endpoint GET /wpp/status → verifica que la conexión Meta API esté activa |
 
 **Entregable:** Sistema completo con WhatsApp real. Listo para producción cliente 1.
 
@@ -633,12 +637,12 @@ El hook `useSocket` escucha estos eventos e invalida las queries de React Query 
 
 | # | Tarea |
 |---|---|
-| 33 | Deploy Railway: backend + BD en producción, dominio configurado |
-| 34 | Deploy frontend: build optimizado, variables de entorno de prod |
-| 35 | CI/CD GitHub Actions: push a main → tests → build → deploy automático |
-| 36 | Cloudflare R2: bucket PDFs, políticas de acceso público para media |
-| 37 | Monitoreo básico: Railway logs, alerta de error por email |
-| 38 | Onboarding Fruver San Gabriel: capacitación equipo, datos iniciales, primer día |
+| 34 | Deploy Railway: backend + BD en producción, dominio configurado |
+| 35 | Deploy frontend: build optimizado, variables de entorno de prod |
+| 36 | CI/CD GitHub Actions: push a main → tests → build → deploy automático |
+| 37 | Cloudflare R2: bucket PDFs, políticas de acceso público para media |
+| 38 | Monitoreo básico: Railway logs, alerta de error por email |
+| 39 | Onboarding Fruver San Gabriel: registrar número nuevo en Meta Business, configurar webhook, capacitación equipo, datos iniciales, primer día |
 
 **Entregable:** Sistema en producción con primer cliente pagando.
 
@@ -648,8 +652,7 @@ El hook `useSocket` escucha estos eventos e invalida las queries de React Query 
 
 | Módulo | Descripción |
 |---|---|
-| **Onboarding de orgs** | UI para registrar nuevos negocios, configurar WPP, setup inicial |
-| **MetaCloudProvider** | Proveedor oficial para clientes 2+ |
+| **Onboarding de orgs** | UI para registrar nuevos negocios, configurar número Meta API, setup inicial automatizado |
 | **Billing** | Stripe para cobrar suscripciones automáticamente |
 | **Subdominios** | `fruver.4client.shop`, `negocio2.4client.shop` |
 | **App móvil nativa** | React Native — comparte lógica y tipos del monorepo |
@@ -670,15 +673,20 @@ El hook `useSocket` escucha estos eventos e invalida las queries de React Query 
 | Frontend | Vercel / Railway | $0 (free tier) |
 | Storage PDFs | Cloudflare R2 | $0 (hasta 10GB) |
 | Dominio .shop | Cloudflare Registrar | ~$1 USD |
-| WhatsApp Baileys | Open source | $0 |
-| Redis (sesión Baileys) | Railway add-on | $3–5 USD |
+| WhatsApp Meta Cloud API | Meta (1,000 conv/mes gratis) | $0–$3 USD |
 | Email transaccional | Resend | $0 (3,000/mes) |
-| **TOTAL** | | **~$9–11 USD/mes** |
+| **TOTAL** | | **~$6–9 USD/mes** |
 
-**En COP:** ~$38,000–45,000/mes de infraestructura.
+**Setup único por cliente:** Chip prepago número negocio ~$5,000 COP (pago del cliente, no tuyo).
+**En COP:** ~$25,000–37,000/mes de infraestructura por cliente.
 **Se cobra al cliente:** $200,000 COP/mes.
-**Margen neto por cliente:** ~$155,000–162,000 COP/mes.
-**Con 5 clientes activos:** ~$775,000–810,000 COP/mes margen infraestructura.
+**Margen neto por cliente:** ~$163,000–175,000 COP/mes.
+**Con 5 clientes activos:** ~$815,000–875,000 COP/mes margen infraestructura.
+
+### Conversaciones Meta API — ¿Cuándo se paga?
+- Primeras **1,000 conversaciones de servicio/mes: GRATIS**
+- Un fruver con 200 clientes activos/mes → dentro del free tier
+- Si supera 1,000: ~$0.015 USD por conversación (~$60 COP) — se le cobra al cliente como extra
 
 ---
 
@@ -691,9 +699,6 @@ DATABASE_URL="postgresql://user:pass@host:5432/4client"
 # Auth
 JWT_SECRET="[min 32 chars aleatorios]"
 JWT_REFRESH_SECRET="[min 32 chars aleatorios, diferente al anterior]"
-
-# Redis
-REDIS_URL="redis://..."
 
 # Cloudflare R2
 R2_ACCOUNT_ID=""
