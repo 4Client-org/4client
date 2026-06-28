@@ -18,6 +18,7 @@ interface Order {
   address: string; employee?: { name: string };
   items: { product_name?: string; quantity_label?: string; price: number }[];
   ticket_id?: string; order_hour?: string;
+  created_at: string; paid_at?: string | null;
 }
 
 interface Props {
@@ -41,33 +42,70 @@ const COL_BG: Record<string, string> = {
 };
 
 
-function minsSince(orderHour: string): number {
-  if (!orderHour) return 0;
-  let h: number, m: number;
-  if (orderHour.includes('T')) {
-    const d = new Date(orderHour);
-    h = d.getUTCHours();
-    m = d.getUTCMinutes();
-  } else {
-    [h, m] = orderHour.split(':').map(Number);
-  }
-  const now = new Date();
-  const diff = (now.getHours() - h) * 60 + (now.getMinutes() - m);
-  return diff < 0 ? diff + 1440 : diff;
-}
-
 function minsSinceDate(dateStr: string): number {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
 }
 
+// How many minutes the customer has been "waiting" right now:
+// - No orders → since first message arrived
+// - Active order (not paid+cerrado) → since that order was created (or since last cycle ended)
+// - All orders done but new message → since last message
+// - All orders done, no new message → 0 (idle, nothing to alert)
+function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
+  if (ticketOrders.length === 0) {
+    return minsSinceDate(ticket.last_message_at);
+  }
+
+  const doneOrders = ticketOrders.filter(o => o.paid && o.status === 'cerrado');
+  const allDone = doneOrders.length === ticketOrders.length;
+
+  if (allDone) {
+    const lastPaidMs = doneOrders
+      .filter(o => o.paid_at)
+      .reduce((max, o) => Math.max(max, new Date(o.paid_at!).getTime()), 0);
+    // Customer re-engaged after last order was paid → count from re-engagement
+    if (lastPaidMs > 0 && new Date(ticket.last_message_at).getTime() > lastPaidMs) {
+      return minsSinceDate(ticket.last_message_at);
+    }
+    return 0;
+  }
+
+  // There are active (unpaid or not cerrado) orders
+  const lastPaidMs = doneOrders
+    .filter(o => o.paid_at)
+    .reduce((max, o) => Math.max(max, new Date(o.paid_at!).getTime()), 0);
+
+  if (lastPaidMs > 0) {
+    // New cycle: timer from when last order was paid
+    return Math.floor((Date.now() - lastPaidMs) / 60000);
+  }
+
+  // First cycle: timer from the earliest active order
+  const activeOrders = ticketOrders.filter(o => !o.paid || o.status !== 'cerrado');
+  const firstActiveMs = activeOrders.reduce(
+    (min, o) => Math.min(min, new Date(o.created_at).getTime()),
+    Infinity,
+  );
+  if (firstActiveMs !== Infinity) {
+    return Math.floor((Date.now() - firstActiveMs) / 60000);
+  }
+
+  return minsSinceDate(ticket.last_message_at);
+}
+
 function isOrderUrg(order: Order): boolean {
-  return order.status === 'nuevo' && minsSince(order.order_hour ?? '') > 20;
+  if (order.paid || order.status === 'cerrado') return false;
+  return minsSinceDate(order.created_at) > 20;
 }
 
 function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
-  if (ticketOrders.some(isOrderUrg)) return true;
-  if (ticketOrders.length === 0 && minsSinceDate(ticket.last_message_at) > 15) return true;
-  return false;
+  const elapsed = ticketElapsedMins(ticket, ticketOrders);
+  if (elapsed === 0) return false;
+  const hasActive = ticketOrders.some(o => !o.paid || o.status !== 'cerrado');
+  // No orders: urg after 15min | active order: urg after 20min | re-engaged: urg after 10min
+  if (ticketOrders.length === 0) return elapsed > 15;
+  if (hasActive) return elapsed > 20;
+  return elapsed > 10;
 }
 
 export default function Swimlane({ fecha, tickets, orders, search, paymentFilter, onOpenTicket, onCreateFromTicket }: Props) {
@@ -168,9 +206,10 @@ export default function Swimlane({ fecha, tickets, orders, search, paymentFilter
   });
 
   function renderCard(ord: Order, ticketId: string | null) {
-    const mins = ord.status === 'nuevo' ? minsSince(ord.order_hour ?? '') : 0;
+    const showTimer = !ord.paid && ord.status !== 'cerrado';
+    const mins = showTimer ? minsSinceDate(ord.created_at) : 0;
     const urg = isOrderUrg(ord);
-    const warn = ord.status === 'nuevo' && mins > 15;
+    const warn = showTimer && mins > 15;
     const total = ord.items.reduce((sum, i) => sum + Number(i.price), 0);
     const isExpanded = expandedCards.has(ord.id);
     const visibleItems = isExpanded ? ord.items : ord.items.slice(0, 2);
@@ -269,7 +308,8 @@ export default function Swimlane({ fecha, tickets, orders, search, paymentFilter
           </span>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {urgTickets.map((t) => {
-              const m = minsSinceDate(t.last_message_at);
+              const tOrds = filteredOrders.filter((o) => t.orders.some((to) => to.id === o.id));
+              const m = ticketElapsedMins(t, tOrds);
               const tNum = `T-${String(filteredTickets.indexOf(t) + 1).padStart(2, '0')}`;
               return (
                 <button key={t.id} onClick={() => onOpenTicket(t.id)}
@@ -340,7 +380,7 @@ export default function Swimlane({ fecha, tickets, orders, search, paymentFilter
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
                     <span className="tk-num">{tNum}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {urg && <span className="tk-urg"><AlertTriangle size={10} />{minsSinceDate(ticket.last_message_at)}min</span>}
+                      {urg && <span className="tk-urg"><AlertTriangle size={10} />{ticketElapsedMins(ticket, ticketOrders)}min</span>}
                       <button
                         onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}
                         style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gt)', display: 'flex', alignItems: 'center' }}
