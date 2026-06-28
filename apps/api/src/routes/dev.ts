@@ -76,10 +76,6 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
   // GET /dev/db?table=users&limit=20&offset=0
   fastify.get('/db', async (req: any, reply) => {
-    if (config.NODE_ENV === 'production') {
-      return reply.status(403).send({ error: 'DB browser deshabilitado en producción', code: 'FORBIDDEN' });
-    }
-
     const { table = 'users', limit = '20', offset = '0' } = req.query as Record<string, string>;
 
     if (!ALLOWED_TABLES.includes(table as AllowedTable)) {
@@ -147,6 +143,26 @@ export default async function devRoutes(fastify: FastifyInstance) {
       logs.push(`Error: ${e.message}`);
       return reply.status(500).send({ success: false, logs, error: e.message });
     }
+  });
+
+  // GET /dev/env-status — which optional env vars are configured (boolean only, no values)
+  fastify.get('/env-status', async (_req, reply) => {
+    return reply.send({
+      data: {
+        NODE_ENV:                  config.NODE_ENV,
+        PORT:                      config.PORT,
+        META_WEBHOOK_VERIFY_TOKEN: !!config.META_WEBHOOK_VERIFY_TOKEN,
+        META_PHONE_NUMBER_ID:      !!config.META_PHONE_NUMBER_ID,
+        META_ACCESS_TOKEN:         !!config.META_ACCESS_TOKEN,
+        META_APP_SECRET:           !!config.META_APP_SECRET,
+        R2_ACCOUNT_ID:             !!config.R2_ACCOUNT_ID,
+        R2_ACCESS_KEY_ID:          !!config.R2_ACCESS_KEY_ID,
+        R2_SECRET_ACCESS_KEY:      !!config.R2_SECRET_ACCESS_KEY,
+        R2_BUCKET_NAME:            !!config.R2_BUCKET_NAME,
+        R2_PUBLIC_URL:             !!config.R2_PUBLIC_URL,
+        SENTRY_DSN:                !!config.SENTRY_DSN,
+      },
+    });
   });
 
   // GET /dev/health — extended health with DB ping
