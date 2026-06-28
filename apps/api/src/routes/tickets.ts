@@ -9,9 +9,9 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     const fecha = query.fecha ? new Date(query.fecha) : new Date();
 
     const tickets = await fastify.prisma.ticket.findMany({
-      where: { org_id: req.user.orgId, fecha },
+      where: { org_id: req.user.orgId, OR: [{ fecha }, { deferred_to: fecha }] },
       include: {
-        messages: { orderBy: { sent_at: 'desc' }, take: 1 },
+        messages: { orderBy: { sent_at: 'asc' } },
         orders: {
           where: { status: { not: 'papelera' } },
           select: { id: true, num: true, status: true, paid: true },

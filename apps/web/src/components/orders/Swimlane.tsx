@@ -21,6 +21,7 @@ interface Order {
 }
 
 interface Props {
+  fecha: string;
   tickets: Ticket[];
   orders: Order[];
   search: string;
@@ -69,7 +70,7 @@ function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
   return false;
 }
 
-export default function Swimlane({ tickets, orders, search, paymentFilter, onOpenTicket, onCreateFromTicket }: Props) {
+export default function Swimlane({ fecha, tickets, orders, search, paymentFilter, onOpenTicket, onCreateFromTicket }: Props) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [cobroDirectId, setCobroDirectId] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
@@ -175,20 +176,31 @@ export default function Swimlane({ tickets, orders, search, paymentFilter, onOpe
     const visibleItems = isExpanded ? ord.items : ord.items.slice(0, 2);
     const hasMore = ord.items.length > 2;
 
+    // Deferred badge logic
+    // notes contains 'pasado_manana:TARGET_DATE' (the date the order was deferred TO)
+    const deferredMatch = (ord as any).notes?.match(/pasado_manana:(\d{4}-\d{2}-\d{2})/);
+    const targetFecha: string | null = deferredMatch ? deferredMatch[1] : null;
+    const ordFecha: string | null = (ord as any).fecha ? new Date((ord as any).fecha).toISOString().split('T')[0] : null;
+    // Ghost: viewing the original day (ordFecha === fecha) but order is deferred to another day
+    const isGhost = !!targetFecha && ordFecha !== null && ordFecha === fecha;
+    // Deferred: viewing the target day (order arrived from previous day)
+    const isDeferred = !!targetFecha && targetFecha === fecha;
+
     return (
       <div
         className="dc-card"
         style={{
           borderLeftColor: COL_COLORS[ord.status],
-          cursor: ord.locked ? 'default' : 'grab',
+          cursor: (ord.locked || isGhost) ? 'default' : 'grab',
+          opacity: isGhost ? 0.72 : 1,
           ...(urg ? { background: '#FFF5F5', borderColor: '#FECACA' } : {}),
         }}
-        draggable={!ord.locked}
-        onDragStart={(e) => handleDragStart(e, ord, ticketId)}
+        draggable={!ord.locked && !isGhost}
+        onDragStart={(e) => !isGhost && handleDragStart(e, ord, ticketId)}
       >
-        {(ord as any).notes?.includes('pasado_manana:') && (
+        {(isGhost || isDeferred) && (
           <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--az)', background: 'var(--azc)', padding: '2px 7px', borderRadius: 20, marginBottom: 5, display: 'inline-block' }}>
-            Pasado a mañana
+            Pospuesto
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 3 }}>
@@ -218,7 +230,9 @@ export default function Swimlane({ tickets, orders, search, paymentFilter, onOpe
               onClick={(e) => { e.stopPropagation(); toggleExpand(ord.id); }}
               style={{ color: 'var(--v)', fontWeight: 700, cursor: 'pointer', marginLeft: 4, fontSize: 11 }}
             >
-              {isExpanded ? ' ↑ menos' : ` +${ord.items.length - 2} más`}
+              {isExpanded
+                ? <><ChevronUp size={10} style={{ display: 'inline', verticalAlign: 'middle' }} /> menos</>
+                : ` +${ord.items.length - 2} más`}
             </span>
           )}
         </div>
@@ -336,11 +350,16 @@ export default function Swimlane({ tickets, orders, search, paymentFilter, onOpe
                       </button>
                     </div>
                   </div>
+                  {(ticket as any).deferred_to && (
+                    <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--az)', background: 'var(--azc)', padding: '2px 7px', borderRadius: 20, marginBottom: 4, display: 'inline-block' }}>
+                      Pospuesto
+                    </div>
+                  )}
                   <div className="tk-phone">{ticket.phone}</div>
                   <div className="tk-name">{ticket.customer_name}</div>
                   {lastMsg && (
                     <div className="tk-preview">
-                      {lastMsg.direction === 'out' ? '› ' : ''}{lastMsg.text}
+                      {lastMsg.direction === 'out' ? '· ' : ''}{lastMsg.text}
                     </div>
                   )}
                   <div className="tk-foot">
@@ -351,9 +370,9 @@ export default function Swimlane({ tickets, orders, search, paymentFilter, onOpe
                       {ticketOrders.length > 0 ? `${ticketOrders.length} pedido${ticketOrders.length > 1 ? 's' : ''}` : 'Sin pedido'}
                     </span>
                   </div>
-                  <button className="tk-ver-btn" style={{ marginTop: 6 }}
+                  <button className="tk-ver-btn" style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
                     onClick={(e) => { e.stopPropagation(); onOpenTicket(ticket.id); }}>
-                    Ver conversación →
+                    Ver conversación <ChevronRight size={12} strokeWidth={2.5} />
                   </button>
                   <button className="tk-crear-btn"
                     onClick={(e) => { e.stopPropagation(); onCreateFromTicket(ticket); }}>

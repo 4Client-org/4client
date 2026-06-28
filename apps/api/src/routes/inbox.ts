@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
-  // GET /api/v1/inbox — lista de todas las conversaciones (sin filtro de día), solo admin
+  // GET /api/v1/inbox — lista de todas las conversaciones, solo admin
   fastify.get('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const query = z.object({ page: z.coerce.number().default(1) }).parse(req.query);
 
-    const tickets = await fastify.prisma.ticket.findMany({
+    const allTickets = await fastify.prisma.ticket.findMany({
       where: { org_id: req.user.orgId },
       include: {
         messages: { orderBy: { sent_at: 'desc' }, take: 1 },
@@ -17,8 +17,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         },
       },
       orderBy: { last_message_at: 'desc' },
-      skip: (query.page - 1) * 50,
-      take: 50,
+    });
+
+    // Deduplicate by phone: keep only the most recent ticket per customer
+    const seenPhones = new Set<string>();
+    const tickets = allTickets.filter(t => {
+      if (seenPhones.has(t.phone)) return false;
+      seenPhones.add(t.phone);
+      return true;
     });
 
     return reply.send({ data: tickets });

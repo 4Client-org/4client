@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-const TODAY = new Date('2026-06-20T00:00:00.000Z');
+const TODAY = new Date('2026-06-27T00:00:00.000Z');
 
 function hoursAgo(h: number) {
   return new Date(Date.now() - h * 3_600_000);
@@ -94,7 +94,7 @@ async function main() {
     console.log(`   ID: ${ticket.id}`);
   }
 
-  console.log('\n🎉 Chats de prueba creados para 2026-06-20');
+  console.log('\n🎉 Chats de prueba creados para 2026-06-27');
   console.log('   Ve a "Tickets & Pedidos" para verlos en el swimlane');
 }
 

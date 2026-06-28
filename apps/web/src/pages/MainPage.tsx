@@ -31,6 +31,7 @@ export default function MainPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin';
+  const canManage = user?.role === 'admin' || user?.role === 'encargado';
   const qc = useQueryClient();
 
   const [fecha, setFecha] = useState(todayStr());
@@ -123,10 +124,12 @@ export default function MainPage() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <div className="huser">
-              <div className={`uav${isAdmin ? ' adm' : ''}`}>{user?.name?.[0]?.toUpperCase() ?? 'U'}</div>
+              <div className={`uav${canManage ? ' adm' : ''}`}>{user?.name?.[0]?.toUpperCase() ?? 'U'}</div>
               <div>
                 <div className="un">{user?.name}</div>
-                <div className="ur2">{isAdmin ? 'Administrador' : 'Encargado'}</div>
+                <div className="ur2">
+                  {isAdmin ? 'Administrador' : canManage ? 'Encargado' : 'Domiciliario'}
+                </div>
               </div>
             </div>
             <button className="bout" onClick={handleLogout}>Salir</button>
@@ -178,6 +181,7 @@ export default function MainPage() {
             </div>
 
             <Swimlane
+              fecha={fecha}
               tickets={tickets}
               orders={orders}
               search={search}
@@ -238,7 +242,7 @@ export default function MainPage() {
         <DetallePedidoModal orderId={openOrderId} onClose={() => setOpenOrderId(null)} />
       )}
       {showCierre && (
-        <CierreCajaModal fecha={fecha} orders={orders} onClose={() => setShowCierre(false)} />
+        <CierreCajaModal fecha={fecha} orders={orders} tickets={tickets} onClose={() => setShowCierre(false)} />
       )}
       <Toast />
     </div>

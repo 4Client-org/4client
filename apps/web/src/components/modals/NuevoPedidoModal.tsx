@@ -1,9 +1,12 @@
-import { useState } from 'react';
-import { Smartphone, Check } from 'lucide-react';
+import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { Smartphone, Check, Send } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
+import { api } from '../../lib/api';
 import { toast } from '../ui/Toast';
+import { ConfirmModal } from '../ui/ConfirmModal';
 import ProductSearch from '../orders/ProductSearch';
 
 interface Props {
@@ -15,7 +18,8 @@ interface Props {
   messages?: { text: string; direction: string; created_at?: string }[];
 }
 
-export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, prePhone, messages }: Props) {
+export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, prePhone, messages: initialMessages }: Props) {
+  const qc = useQueryClient();
   const { data: products = [] } = useProducts();
   const { data: employees = [] } = useEmployees();
   const createOrder = useCreateOrder();
@@ -27,11 +31,54 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [direccion, setDireccion] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
+  const [replyText, setReplyText] = useState('');
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Live chat data from API
+  const { data: convoData } = useQuery({
+    queryKey: ['inbox-convo', ticketId],
+    queryFn: () => api.get<{ data: any }>(`/inbox/${ticketId}/messages`).then((r) => r.data),
+    enabled: !!ticketId,
+    refetchInterval: 15000,
+  });
+
+  const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [liveMessages.length]);
+
+  const replyMut = useMutation({
+    mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inbox-convo', ticketId] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      setReplyText('');
+    },
+    onError: (e: any) => toast(e.message ?? 'Error al enviar', true),
+  });
+
+  function handleSend() {
+    if (!replyText.trim() || replyMut.isPending) return;
+    replyMut.mutate(replyText.trim());
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  }
 
   const hasDirty = !!(nombre.trim() || telefono.trim() || direccion.trim() || items.length > 0);
+  const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void } | null>(null);
 
   function handleClose() {
-    if (hasDirty && !window.confirm('¿Salir? Los datos ingresados se perderán.')) return;
+    if (hasDirty) {
+      setConfirmDlg({ msg: '¿Salir? Los datos ingresados se perderán.', onOk: onClose });
+      return;
+    }
     onClose();
   }
 
@@ -64,40 +111,69 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     }
   }
 
-  const hasChatPreview = !!messages && messages.length > 0;
+  const hasChat = !!ticketId;
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row', width: '100%',
-        maxWidth: hasChatPreview ? 960 : 700,
+        maxWidth: hasChat ? 960 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
-        animation: 'mup .2s ease',
+        animation: 'mup .2s ease', maxHeight: '90vh',
       }}>
-        {hasChatPreview && (
-          <div style={{ width: 290, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        {hasChat && (
+          <div style={{ width: 300, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}>
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', fontWeight: 800, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Smartphone size={15} /> {preNombre || telefono}
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 520 }}>
-              {[...messages].reverse().map((m, i) => (
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {liveMessages.map((m: any, i: number) => (
                 <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
-                  <div className="chat-bubble">{m.text}</div>
-                  {m.created_at && (
+                  <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+                  {(m.sent_at || m.created_at) && (
                     <div className="chat-meta">
-                      {new Date(m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(m.sent_at ?? m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   )}
                 </div>
               ))}
+              <div ref={messagesEndRef} />
+            </div>
+            {/* Reply input */}
+            <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>
+              <textarea
+                rows={2}
+                placeholder="Escribe un mensaje... (Enter para enviar)"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                style={{
+                  flex: 1, resize: 'none', border: '1.5px solid var(--brd)',
+                  borderRadius: 10, padding: '7px 10px', fontSize: 13,
+                  fontFamily: 'var(--f)', background: '#fff', outline: 'none',
+                }}
+              />
+              <button
+                onClick={handleSend}
+                disabled={!replyText.trim() || replyMut.isPending}
+                style={{
+                  background: replyText.trim() ? 'var(--v)' : 'var(--gm)',
+                  border: 'none', borderRadius: 10, padding: '8px 10px',
+                  cursor: replyText.trim() ? 'pointer' : 'default',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background .15s',
+                }}
+              >
+                <Send size={16} color={replyText.trim() ? '#fff' : 'var(--gt)'} />
+              </button>
             </div>
           </div>
         )}
 
         <div className="mwin" style={{
           margin: 0, flex: 1,
-          borderRadius: hasChatPreview ? '0 var(--radb) var(--radb) 0' : 'var(--radb)',
+          borderRadius: hasChat ? '0 var(--radb) var(--radb) 0' : 'var(--radb)',
           boxShadow: 'none',
         }}>
           <div className="mhead">
@@ -123,6 +199,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 <select className="fi2" value={pago} onChange={(e) => setPago(e.target.value)}>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
+                  <option value="cod">Cobro en casa</option>
                 </select>
               </div>
             </div>
@@ -166,6 +243,13 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
           </div>
         </div>
       </div>
+      {confirmDlg && (
+        <ConfirmModal
+          message={confirmDlg.msg}
+          onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
+          onCancel={() => setConfirmDlg(null)}
+        />
+      )}
     </div>
   );
 }

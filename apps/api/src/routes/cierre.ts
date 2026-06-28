@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 export default async function cierreRoutes(fastify: FastifyInstance) {
-  // POST /api/v1/cierre — solo admin
-  fastify.post('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  // POST /api/v1/cierre — admin y encargado
+  fastify.post('/', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const body = z.object({
       fecha: z.string(),
       decisions: z.record(z.enum(['manana', 'forzar_cierre', 'cancelar'])),
+      ticket_decisions: z.record(z.enum(['manana', 'atendido'])).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
@@ -65,6 +66,16 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
           await tx.orderHistory.create({
             data: { org_id: req.user.orgId, order_id: orderId, actor_id: req.user.userId, action_type: 'cierre', notes: 'Cierre forzado por admin en cierre de caja' },
           });
+        }
+      }
+
+      // Procesar decisiones de tickets
+      const ticketDecisions = body.data.ticket_decisions ?? {};
+      for (const [ticketId, tdecision] of Object.entries(ticketDecisions)) {
+        if (tdecision === 'manana') {
+          await tx.ticket.update({ where: { id: ticketId }, data: { deferred_to: tomorrow } });
+        } else if (tdecision === 'atendido') {
+          await tx.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
         }
       }
 

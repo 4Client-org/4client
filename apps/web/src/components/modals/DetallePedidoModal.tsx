@@ -10,6 +10,7 @@ import { useEmployees } from '../../hooks/useEmployees';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL } from '../../lib/format';
 import { toast } from '../ui/Toast';
 import ProductSearch from '../orders/ProductSearch';
+import { ConfirmModal } from '../ui/ConfirmModal';
 
 interface Props { orderId: string; onClose: () => void; openCobro?: boolean; }
 
@@ -66,43 +67,28 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [catalogDirty, setCatalogDirty] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
   const [replyText, setReplyText] = useState('');
   const [cobroRec, setCobroRec] = useState('');
-  const [cobroBy, setCobroBy] = useState(() => user?.userId ?? (user as any)?.id ?? '');
-  const [saveIndicator, setSaveIndicator] = useState<'saving' | 'saved' | null>(null);
-
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const pendingSave = useRef(false);
+  const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean } | null>(null);
 
   useEffect(() => {
     if (!order) return;
     setNombre(order.customer_name ?? '');
     setTelefono(order.customer_phone ?? '');
     setDireccion(order.address ?? '');
-    setPago(order.payment_method === 'cod' ? 'transfer' : (order.payment_method ?? 'transfer'));
+    setPago(order.payment_method ?? 'transfer');
     setEmpleadoId(order.employee_id ?? '');
     setItems((order.items ?? []).map((i: any) => ({
       product_name: i.product_name ?? '',
       quantity_label: i.quantity_label ?? '',
       price: String(i.price ?? ''),
     })));
-    pendingSave.current = false;
+    setIsDirty(false);
   }, [order]);
 
-  function scheduleAutoSave() {
-    pendingSave.current = true;
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      if (pendingSave.current) {
-        pendingSave.current = false;
-        saveMut.mutate();
-      }
-    }, 2000);
-  }
-
-  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
 
   // Chat always loaded if order has ticket_id
   const { data: chatData } = useQuery({
@@ -148,12 +134,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
-      if (isAdmin) {
-        setSaveIndicator('saved');
-        setTimeout(() => setSaveIndicator(null), 2000);
-      }
+      setIsDirty(false);
+      toast('Cambios guardados');
     },
-    onError: (e: any) => { if (isAdmin) toast(e.message, true); },
+    onError: (e: any) => toast(e.message, true),
   });
 
   const moveMut = useMutation({
@@ -189,7 +173,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
-  function markDirty() { scheduleAutoSave(); }
+  function markDirty() { setIsDirty(true); }
 
   function buildPDFDoc(): jsPDF | null {
     if (!order) return null;
@@ -282,13 +266,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const cobroMut = useMutation({
     mutationFn: () => api.post(`/orders/${orderId}/cobro`, {
       amount_received: parseFloat(cobroRec) || 0,
-      paid_by: cobroBy || user?.userId || (user as any)?.id,
+      paid_by: user?.userId,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       toast('Pago confirmado');
       setShowCobro(false);
+      onClose();
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -302,9 +287,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   }
 
   function handleClose() {
-    if (pendingSave.current || catalogDirty) {
-      if (!window.confirm('Hay cambios sin guardar. ¿Salir de todos modos?')) return;
-      clearTimeout(saveTimerRef.current);
+    if (isDirty || catalogDirty) {
+      setConfirmDlg({ msg: 'Hay cambios sin guardar. ¿Salir de todos modos?', onOk: onClose });
+      return;
     }
     onClose();
   }
@@ -415,14 +400,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         <div className="mwin" style={{
           margin: 0, flex: 1, minWidth: 0,
           borderRadius: hasChatPanel ? '0 var(--radb) var(--radb) 0' : 'var(--radb)',
-          boxShadow: 'none', overflowY: 'auto', maxHeight: '90vh',
+          boxShadow: 'none', maxHeight: '90vh',
         }}>
           <div className="mhead">
             <div>
               <div className="mtit" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Pedido #{order.num}
-                {isAdmin && saveIndicator === 'saved' && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--v)' }}>✓ guardado</span>
+                {isDirty && !locked && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--a)' }}>● cambios sin guardar</span>
                 )}
               </div>
               <div className="msub">
@@ -505,6 +490,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   onChange={(e) => { setPago(e.target.value); markDirty(); }}>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
+                  <option value="cod">Cobro en casa</option>
                 </select>
               </div>
               <div className="fg2">
@@ -575,14 +561,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
               {!locked && isAdmin && order.status !== 'papelera' && (
-                <button className="bdel" onClick={() => {
-                  if (window.confirm('¿Mover este pedido a la papelera?')) papeleraMut.mutate();
-                }} disabled={papeleraMut.isPending}
+                <button className="bdel"
+                  onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
+                  disabled={papeleraMut.isPending}
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Trash2 size={14} /> Papelera
                 </button>
               )}
               <button className="bsec" onClick={handleClose}>Cerrar</button>
+              {isDirty && !locked && (
+                <button className="bpri" onClick={() => saveMut.mutate()}
+                  disabled={saveMut.isPending}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CheckCircle size={14} /> {saveMut.isPending ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              )}
               {items.length > 0 && (
                 <button className="bsec" onClick={copyInvoice}
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -613,6 +606,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         </div>
       </div>
 
+      {/* CONFIRM DIALOG */}
+      {confirmDlg && (
+        <ConfirmModal
+          message={confirmDlg.msg}
+          danger={confirmDlg.danger}
+          onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
+          onCancel={() => setConfirmDlg(null)}
+        />
+      )}
+
       {/* COBRO DIALOG */}
       {showCobro && (
         <div className="moverlay on" style={{ zIndex: 700 }}>
@@ -629,18 +632,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
             <div className="fg2">
               <label className="fl2">¿Quién recibió el pago?</label>
-              <select className="fi2" value={cobroBy} onChange={(e) => setCobroBy(e.target.value)}>
-                {(() => {
-                  const myId = user?.userId ?? (user as any)?.id ?? '';
-                  const myName = user?.name ?? 'Yo';
-                  return <>
-                    <option value={myId}>{myName}</option>
-                    {employees.filter((e: any) => e.id !== myId).map((e: any) => (
-                      <option key={e.id} value={e.id}>{e.name}</option>
-                    ))}
-                  </>;
-                })()}
-              </select>
+              <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
+                {user?.name ?? 'Usuario actual'}
+              </div>
             </div>
             <div className="fg2">
               <label className="fl2">¿Cuánto entregó el domiciliario? <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span></label>
