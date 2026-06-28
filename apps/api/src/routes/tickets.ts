@@ -31,8 +31,8 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Colombia UTC-5: derive local business date from UTC
+    const today = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
 
     const ticket = await fastify.prisma.ticket.upsert({
       where: { org_id_phone_fecha: { org_id: req.user.orgId, phone: body.data.phone, fecha: today } },

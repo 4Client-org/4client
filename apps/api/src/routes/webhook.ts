@@ -58,11 +58,14 @@ async function ingestMessage(
   });
   if (dup) return;
 
-  const todayUTC = new Date(new Date().toISOString().split('T')[0]);
+  // Use Colombia local date (UTC-5) derived from the message timestamp
+  // so the ticket fecha matches what the frontend shows as "today"
+  const localMs = sentAt.getTime() + (-5 * 60 * 60 * 1000);
+  const todayLocal = new Date(new Date(localMs).toISOString().split('T')[0]);
 
   // Find or create today's ticket for this phone
   let ticket = await fastify.prisma.ticket.findFirst({
-    where: { org_id: org.id, phone, fecha: todayUTC },
+    where: { org_id: org.id, phone, fecha: todayLocal },
   });
 
   if (!ticket) {
@@ -71,7 +74,7 @@ async function ingestMessage(
         org_id: org.id,
         phone,
         customer_name: name,
-        fecha: todayUTC,
+        fecha: todayLocal,
         last_message_at: sentAt,
         unread_count: 1,
       },
