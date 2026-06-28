@@ -224,7 +224,7 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
                 new Date(msg.sent_at).toDateString() !== new Date(prevMsg.sent_at).toDateString();
 
               return (
-                <div key={msg.id}>
+                <div key={msg.id} style={{ display: 'flex', flexDirection: 'column' }}>
                   {showDate && (
                     <div className="chat-sep">
                       {new Date(msg.sent_at).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}
