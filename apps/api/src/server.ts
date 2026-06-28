@@ -2,6 +2,7 @@ import 'dotenv/config';
 import * as Sentry from '@sentry/node';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import { config } from './config.js';
@@ -51,6 +52,8 @@ fastify.setErrorHandler((error, _req, reply) => {
 
 async function start() {
   const allowedOrigins = config.FRONTEND_URL.split(',').map((o) => o.trim());
+  await fastify.register(cookie);
+
   await fastify.register(cors, {
     origin: (origin, cb) => {
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
@@ -61,6 +64,8 @@ async function start() {
 
   await fastify.register(jwt, {
     secret: config.JWT_SECRET,
+    sign: { algorithm: 'HS256' },
+    verify: { algorithms: ['HS256'] },
   });
 
   await fastify.register(rateLimit, {
