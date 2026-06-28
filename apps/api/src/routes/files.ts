@@ -1,11 +1,10 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../middleware/auth.js';
 import { storage } from '../services/storage.js';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { config } from '../config.js';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
@@ -31,8 +30,9 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     // Local fallback (dev / pre-R2 prod)
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
-    const base = config.FRONTEND_URL.replace('5173', String(config.PORT));
-    return reply.status(201).send({ url: `${base}/api/v1/files/${filename}` });
+    const proto = (req as FastifyRequest).protocol;
+    const host = (req as FastifyRequest).hostname;
+    return reply.status(201).send({ url: `${proto}://${host}/api/v1/files/${filename}` });
   });
 
   // GET /api/v1/files/:filename — serve PDF (local fallback only; R2 uses direct URL)

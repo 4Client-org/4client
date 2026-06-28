@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import * as Sentry from '@sentry/node';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
@@ -17,10 +18,31 @@ import cierreRoutes from './routes/cierre.js';
 import fileRoutes from './routes/files.js';
 import webhookRoutes from './routes/webhook.js';
 import userRoutes from './routes/users.js';
+import configRoutes from './routes/config.js';
 import { authenticate } from './middleware/auth.js';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
-const fastify = Fastify({ logger: config.NODE_ENV === 'development' });
+if (config.SENTRY_DSN) {
+  Sentry.init({
+    dsn: config.SENTRY_DSN,
+    environment: config.NODE_ENV,
+    tracesSampleRate: 0.2,
+  });
+}
+
+const fastify = Fastify({
+  logger: {
+    level: config.NODE_ENV === 'production' ? 'warn' : 'info',
+    transport: config.NODE_ENV === 'development' ? { target: 'pino-pretty' } : undefined,
+  },
+});
+
+fastify.setErrorHandler((error, _req, reply) => {
+  if (config.SENTRY_DSN) Sentry.captureException(error);
+  fastify.log.error(error);
+  const status = error.statusCode ?? 500;
+  reply.status(status).send({ error: error.message ?? 'Error interno', code: 'SERVER_ERROR' });
+});
 
 async function start() {
   const allowedOrigins = config.FRONTEND_URL.split(',').map((o) => o.trim());
@@ -56,6 +78,7 @@ async function start() {
   await fastify.register(fileRoutes,     { prefix: '/api/v1/files' });
   await fastify.register(webhookRoutes,  { prefix: '/api/v1/webhook' });
   await fastify.register(userRoutes,     { prefix: '/api/v1/users' });
+  await fastify.register(configRoutes,   { prefix: '/api/v1/config' });
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));

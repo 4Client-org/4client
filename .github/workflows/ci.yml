@@ -68,4 +68,4 @@ jobs:
       - name: Build Web
         run: pnpm --filter web build
         env:
-          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://api.4client.app' }}
+          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://4client-production.up.railway.app' }}

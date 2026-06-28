@@ -5,7 +5,7 @@ let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 
 export function getSocket(token: string): Socket<ServerToClientEvents, ClientToServerEvents> {
   if (!socket) {
-    socket = io('/', {
+    socket = io(import.meta.env.VITE_API_URL ?? '/', {
       auth: { token },
       transports: ['websocket'],
     });
