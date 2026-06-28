@@ -2,8 +2,21 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, Plus, Send, Eye } from 'lucide-react';
 import { api } from '../../lib/api';
+import { useAuthStore } from '../../store/auth';
+import { getSocket } from '../../lib/socket';
 import { STATUS_LABEL, fmtCOP } from '../../lib/format';
 import { toast } from '../ui/Toast';
+
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+function renderText(text: string) {
+  const parts = text.split(URL_RE);
+  return parts.map((p, i) =>
+    URL_RE.test(p)
+      ? <a key={i} href={p} target="_blank" rel="noreferrer"
+          style={{ color: '#1A7A4A', textDecoration: 'underline', wordBreak: 'break-all' }}>{p}</a>
+      : p
+  );
+}
 
 interface Props {
   onCreateFromTicket: (ticket: any) => void;
@@ -12,6 +25,7 @@ interface Props {
 
 export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
   const qc = useQueryClient();
+  const accessToken = useAuthStore((s) => s.accessToken);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -19,8 +33,24 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
     queryFn: () => api.get<{ data: any[] }>('/inbox').then((r) => r.data),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
   });
+
+  // Real-time: reorder sidebar + refresh open conversation on any message
+  useEffect(() => {
+    if (!accessToken) return;
+    const sock = getSocket(accessToken);
+    const onMsg = (data: { ticketId: string }) => {
+      // Always refresh sidebar list (reorders by last_message_at)
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      // Refresh open conversation if it's the one that got the message
+      if (data?.ticketId) {
+        qc.invalidateQueries({ queryKey: ['inbox-convo', data.ticketId] });
+      }
+    };
+    sock.on('ticket:message', onMsg);
+    return () => { sock.off('ticket:message', onMsg); };
+  }, [accessToken, qc]);
 
   const { data: conversation, isLoading: loadingConvo } = useQuery({
     queryKey: ['inbox-convo', selectedId],
@@ -43,7 +73,7 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation?.messages?.length]);
+  }, [conversation?.messages?.length, selectedId]);
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -188,7 +218,7 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
                     {isOut && msg.sender?.name && (
                       <div className="chat-bub-who">{msg.sender.name}</div>
                     )}
-                    <div>{msg.text}</div>
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
                     <div className="chat-bub-time">{formatMsgTime(msg.sent_at)}</div>
                   </div>
                 </div>

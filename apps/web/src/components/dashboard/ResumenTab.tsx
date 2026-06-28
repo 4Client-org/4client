@@ -29,11 +29,20 @@ interface Props {
 export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, history, onCierreCaja }: Props) {
   const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'cambios'>('activos');
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   function toggleOrder(id: string) {
     setExpandedOrders((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -50,7 +59,32 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
     return map;
   }, [history]);
 
-  const filteredOrders: any[] = dashboard?.orders ?? [];
+  const STATUS_SORT: Record<string, number> = {
+    nuevo: 0, preparando: 1, listo: 2, camino: 3, entregado: 4, cerrado: 5,
+  };
+
+  const filteredOrders: any[] = useMemo(
+    () => [...(dashboard?.orders ?? [])].sort((a, b) =>
+      (STATUS_SORT[a.status] ?? 99) - (STATUS_SORT[b.status] ?? 99)
+    ),
+    [dashboard?.orders]
+  );
+
+  // Group orders by ticket_id (same chat) or customer_name fallback
+  const orderGroups = useMemo(() => {
+    const groups: { key: string; label: string; orders: any[] }[] = [];
+    const seen = new Map<string, any[]>();
+    for (const o of filteredOrders) {
+      const key = o.ticket_id ?? `name:${o.customer_name}`;
+      if (!seen.has(key)) { seen.set(key, []); }
+      seen.get(key)!.push(o);
+    }
+    for (const [key, orders] of seen.entries()) {
+      const label = orders[0].customer_name;
+      groups.push({ key, label, orders });
+    }
+    return groups;
+  }, [filteredOrders]);
 
   return (
     <>
@@ -161,92 +195,124 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
       {resumenTab === 'activos' && (
         <div className="htab">
           <div className="hth">
-            <span>{filteredOrders.length} pedido{filteredOrders.length !== 1 ? 's' : ''}</span>
+            <span>{filteredOrders.length} pedido{filteredOrders.length !== 1 ? 's' : ''} · {orderGroups.length} cliente{orderGroups.length !== 1 ? 's' : ''}</span>
           </div>
           {filteredOrders.length === 0 && (
             <div style={{ padding: '20px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
               Sin pedidos en este estado
             </div>
           )}
-          {filteredOrders.map((o: any) => {
-            const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
-            const orderHist = histByOrder[o.id] ?? [];
-            const isExp = expandedOrders.has(o.id);
-            const col = STATUS_COLORS[o.status] ?? { bg: 'var(--bg)', fg: 'var(--gt)' };
+          {orderGroups.map(({ key, label, orders: groupOrders }) => {
+            const isGroupCollapsed = collapsedGroups.has(key);
+            const groupTotal = groupOrders.reduce((s: number, o: any) =>
+              s + (o.items?.reduce((ss: number, i: any) => ss + Number(i.price), 0) ?? 0), 0);
 
             return (
-              <div key={o.id} style={{ borderBottom: '1px solid var(--brd)' }}>
+              <div key={key} style={{ borderBottom: '2px solid var(--brd)' }}>
+                {/* Group header — always shown */}
                 <div
-                  className="hrow hrow-exp"
-                  onClick={() => toggleOrder(o.id)}
-                  style={{ gridTemplateColumns: '50px 1fr auto auto auto 28px' }}
+                  onClick={() => toggleGroup(key)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 18px', background: 'var(--vc)', cursor: 'pointer',
+                    borderBottom: isGroupCollapsed ? 'none' : '1px solid var(--brd)',
+                  }}
                 >
-                  <div className="hnum">#{o.num}</div>
-                  <div>
-                    <div className="hcli">{o.customer_name}</div>
-                    <div className="hdir">{o.address}</div>
-                  </div>
-                  <div>
-                    <span className="ebadge" style={{ background: col.bg, color: col.fg }}>
-                      {STATUS_LABEL[o.status] ?? o.status}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {isGroupCollapsed ? <ChevronRight size={15} color="var(--v)" /> : <ChevronDown size={15} color="var(--v)" />}
+                    <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--vd)' }}>{label}</span>
+                    <span style={{ fontSize: 12, background: 'var(--vm)', color: 'var(--vd)', padding: '2px 8px', borderRadius: 20, fontWeight: 700 }}>
+                      {groupOrders.length} {groupOrders.length === 1 ? 'pedido' : 'pedidos'}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {orderHist.length > 0 && (
-                      <span className="chg-cnt">{orderHist.length} cambio{orderHist.length !== 1 ? 's' : ''}</span>
-                    )}
-                    <span style={{ fontWeight: 800, color: 'var(--v)', fontSize: 14 }}>{fmtCOP(total)}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', color: 'var(--gt)' }}>
-                    {isExp ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  </div>
+                  <span style={{ fontWeight: 800, color: 'var(--v)', fontSize: 14 }}>{fmtCOP(groupTotal)}</span>
                 </div>
 
-                {isExp && (
-                  <div className="ord-hist-sub">
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px 12px', fontSize: 13, marginBottom: orderHist.length > 0 ? 10 : 0 }}>
-                      <div><span style={{ color: 'var(--gt)' }}>Teléfono: </span>{o.customer_phone ?? '—'}</div>
-                      <div><span style={{ color: 'var(--gt)' }}>Pago: </span>{o.payment_method ?? '—'}</div>
-                      <div><span style={{ color: 'var(--gt)' }}>Dom: </span>{o.employee?.name ?? 'Sin asignar'}</div>
-                    </div>
-                    {o.items && o.items.length > 0 && (
-                      <div style={{ fontSize: 13, marginBottom: orderHist.length > 0 ? 10 : 0 }}>
-                        <strong>Productos: </strong>
-                        {o.items.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
-                      </div>
-                    )}
-                    {orderHist.length > 0 && (
-                      <>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--gt)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 6 }}>
-                          Historial de cambios
+                {/* Orders within group */}
+                {!isGroupCollapsed && groupOrders.map((o: any) => {
+                  const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+                  const orderHist = histByOrder[o.id] ?? [];
+                  const isExp = expandedOrders.has(o.id);
+                  const col = STATUS_COLORS[o.status] ?? { bg: 'var(--bg)', fg: 'var(--gt)' };
+
+                  return (
+                    <div key={o.id} style={{ borderBottom: '1px solid var(--brd)' }}>
+                      <div
+                        className="hrow hrow-exp"
+                        onClick={() => toggleOrder(o.id)}
+                        style={{
+                          gridTemplateColumns: '50px 1fr auto auto auto 28px',
+                          paddingLeft: 32,
+                        }}
+                      >
+                        <div className="hnum">#{o.num}</div>
+                        <div>
+                          <div className="hdir">{o.address}</div>
                         </div>
-                        {orderHist.map((h: any, i: number) => (
-                          <div key={i} className="ord-hist-line">
-                            <div className="ord-hist-dot" />
-                            <div style={{ flex: 1 }}>
-                              <span style={{ fontWeight: 700 }}>{h.actor?.name ?? 'Sistema'}</span>
-                              <span style={{ color: 'var(--gt)', margin: '0 6px' }}>·</span>
-                              <span>{h.field ?? h.action_type}</span>
-                              {h.value_before != null && h.value_after != null && (
-                                <span style={{ marginLeft: 8 }}>
-                                  <span className="diff-old">− {h.value_before}</span>
-                                  <span className="diff-arrow">→</span>
-                                  <span className="diff-new">+ {h.value_after}</span>
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--gt)', flexShrink: 0 }}>
-                              {new Date(h.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
-                            </div>
+                        <div>
+                          <span className="ebadge" style={{ background: col.bg, color: col.fg }}>
+                            {STATUS_LABEL[o.status] ?? o.status}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {orderHist.length > 0 && (
+                            <span className="chg-cnt">{orderHist.length} cambio{orderHist.length !== 1 ? 's' : ''}</span>
+                          )}
+                          <span style={{ fontWeight: 800, color: 'var(--v)', fontSize: 14 }}>{fmtCOP(total)}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', color: 'var(--gt)' }}>
+                          {isExp ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </div>
+                      </div>
+
+                      {isExp && (
+                        <div className="ord-hist-sub" style={{ paddingLeft: 32 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px 12px', fontSize: 13, marginBottom: orderHist.length > 0 ? 10 : 0 }}>
+                            <div><span style={{ color: 'var(--gt)' }}>Teléfono: </span>{o.customer_phone ?? '—'}</div>
+                            <div><span style={{ color: 'var(--gt)' }}>Pago: </span>{o.payment_method ?? '—'}</div>
+                            <div><span style={{ color: 'var(--gt)' }}>Dom: </span>{o.employee?.name ?? 'Sin asignar'}</div>
                           </div>
-                        ))}
-                      </>
-                    )}
-                    {orderHist.length === 0 && (
-                      <div style={{ fontSize: 13, color: 'var(--gt)' }}>Sin cambios registrados</div>
-                    )}
-                  </div>
-                )}
+                          {o.items && o.items.length > 0 && (
+                            <div style={{ fontSize: 13, marginBottom: orderHist.length > 0 ? 10 : 0 }}>
+                              <strong>Productos: </strong>
+                              {o.items.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
+                            </div>
+                          )}
+                          {orderHist.length > 0 && (
+                            <>
+                              <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--gt)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 6 }}>
+                                Historial de cambios
+                              </div>
+                              {orderHist.map((h: any, i: number) => (
+                                <div key={i} className="ord-hist-line">
+                                  <div className="ord-hist-dot" />
+                                  <div style={{ flex: 1 }}>
+                                    <span style={{ fontWeight: 700 }}>{h.actor?.name ?? 'Sistema'}</span>
+                                    <span style={{ color: 'var(--gt)', margin: '0 6px' }}>·</span>
+                                    <span>{h.field ?? h.action_type}</span>
+                                    {h.value_before != null && h.value_after != null && (
+                                      <span style={{ marginLeft: 8 }}>
+                                        <span className="diff-old">− {h.value_before}</span>
+                                        <span className="diff-arrow">→</span>
+                                        <span className="diff-new">+ {h.value_after}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: 'var(--gt)', flexShrink: 0 }}>
+                                    {new Date(h.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                                  </div>
+                                </div>
+                              ))}
+                            </>
+                          )}
+                          {orderHist.length === 0 && (
+                            <div style={{ fontSize: 13, color: 'var(--gt)' }}>Sin cambios registrados</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           })}

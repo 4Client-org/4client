@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
-  // GET /api/v1/inbox — lista de todas las conversaciones (sin filtro de día), solo admin
+  // GET /api/v1/inbox — lista de todas las conversaciones, solo admin
   fastify.get('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const query = z.object({ page: z.coerce.number().default(1) }).parse(req.query);
 
-    const tickets = await fastify.prisma.ticket.findMany({
+    const allTickets = await fastify.prisma.ticket.findMany({
       where: { org_id: req.user.orgId },
       include: {
         messages: { orderBy: { sent_at: 'desc' }, take: 1 },
@@ -17,8 +17,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         },
       },
       orderBy: { last_message_at: 'desc' },
-      skip: (query.page - 1) * 50,
-      take: 50,
+    });
+
+    // Deduplicate by phone: keep only the most recent ticket per customer
+    const seenPhones = new Set<string>();
+    const tickets = allTickets.filter(t => {
+      if (seenPhones.has(t.phone)) return false;
+      seenPhones.add(t.phone);
+      return true;
     });
 
     return reply.send({ data: tickets });
@@ -52,8 +58,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     return reply.send({ data: ticket });
   });
 
-  // POST /api/v1/inbox/:ticketId/reply — responder desde 4Client, solo admin
-  fastify.post('/:ticketId/reply', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  // POST /api/v1/inbox/:ticketId/reply — responder desde 4Client, todos los roles
+  fastify.post('/:ticketId/reply', { preHandler: [authenticate] }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({ text: z.string().min(1) }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Mensaje requerido', code: 'VALIDATION_ERROR' });

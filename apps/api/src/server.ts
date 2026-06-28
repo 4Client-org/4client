@@ -14,6 +14,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import ticketRoutes from './routes/tickets.js';
 import inboxRoutes from './routes/inbox.js';
 import cierreRoutes from './routes/cierre.js';
+import fileRoutes from './routes/files.js';
 
 const fastify = Fastify({ logger: config.NODE_ENV === 'development' });
 
@@ -44,6 +45,7 @@ async function start() {
   await fastify.register(ticketRoutes,   { prefix: '/api/v1/tickets' });
   await fastify.register(inboxRoutes,    { prefix: '/api/v1/inbox' });
   await fastify.register(cierreRoutes,   { prefix: '/api/v1/cierre' });
+  await fastify.register(fileRoutes,     { prefix: '/api/v1/files' });
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));

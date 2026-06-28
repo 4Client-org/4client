@@ -4,11 +4,13 @@ import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Se
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
+import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL } from '../../lib/format';
 import { toast } from '../ui/Toast';
 import ProductSearch from '../orders/ProductSearch';
+import { ConfirmModal } from '../ui/ConfirmModal';
 
 interface Props { orderId: string; onClose: () => void; openCobro?: boolean; }
 
@@ -33,8 +35,20 @@ function formatDateTime(raw: string | null | undefined): string {
   });
 }
 
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+function renderText(text: string) {
+  const parts = text.split(URL_RE);
+  return parts.map((p, i) =>
+    URL_RE.test(p)
+      ? <a key={i} href={p} target="_blank" rel="noreferrer"
+          style={{ color: 'var(--v)', textDecoration: 'underline', wordBreak: 'break-all' }}>{p}</a>
+      : p
+  );
+}
+
 export default function DetallePedidoModal({ orderId, onClose, openCobro }: Props) {
   const user = useAuthStore((s) => s.user);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin';
   const qc = useQueryClient();
   const { data: products = [] } = useProducts();
@@ -53,43 +67,28 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [catalogDirty, setCatalogDirty] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
   const [replyText, setReplyText] = useState('');
   const [cobroRec, setCobroRec] = useState('');
-  const [cobroBy, setCobroBy] = useState(() => user?.userId ?? (user as any)?.id ?? '');
-  const [saveIndicator, setSaveIndicator] = useState<'saving' | 'saved' | null>(null);
-
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const pendingSave = useRef(false);
+  const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean } | null>(null);
 
   useEffect(() => {
     if (!order) return;
     setNombre(order.customer_name ?? '');
     setTelefono(order.customer_phone ?? '');
     setDireccion(order.address ?? '');
-    setPago(order.payment_method === 'cod' ? 'transfer' : (order.payment_method ?? 'transfer'));
+    setPago(order.payment_method ?? 'transfer');
     setEmpleadoId(order.employee_id ?? '');
     setItems((order.items ?? []).map((i: any) => ({
       product_name: i.product_name ?? '',
       quantity_label: i.quantity_label ?? '',
       price: String(i.price ?? ''),
     })));
-    pendingSave.current = false;
+    setIsDirty(false);
   }, [order]);
 
-  function scheduleAutoSave() {
-    pendingSave.current = true;
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      if (pendingSave.current) {
-        pendingSave.current = false;
-        saveMut.mutate();
-      }
-    }, 2000);
-  }
-
-  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
 
   // Chat always loaded if order has ticket_id
   const { data: chatData } = useQuery({
@@ -98,8 +97,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       ? api.get<{ data: any }>(`/inbox/${order.ticket_id}/messages`).then((r) => r.data)
       : null,
     enabled: !!order?.ticket_id,
-    refetchInterval: 15000,
+    refetchInterval: 30000,
   });
+
+  // Real-time chat push via socket
+  useEffect(() => {
+    if (!accessToken || !order?.ticket_id) return;
+    const sock = getSocket(accessToken);
+    const onMsg = (data: { ticketId: string }) => {
+      if (data?.ticketId === order.ticket_id) {
+        qc.invalidateQueries({ queryKey: ['inbox-convo', order.ticket_id] });
+      }
+    };
+    sock.on('ticket:message', onMsg);
+    return () => { sock.off('ticket:message', onMsg); };
+  }, [accessToken, order?.ticket_id, qc]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -122,12 +134,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
-      if (isAdmin) {
-        setSaveIndicator('saved');
-        setTimeout(() => setSaveIndicator(null), 2000);
-      }
+      setIsDirty(false);
+      toast('Cambios guardados');
     },
-    onError: (e: any) => { if (isAdmin) toast(e.message, true); },
+    onError: (e: any) => toast(e.message, true),
   });
 
   const moveMut = useMutation({
@@ -147,7 +157,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
   const invoiceMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
-    onSuccess: () => toast('Factura enviada al chat'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inbox-convo', order?.ticket_id] });
+      toast('Factura enviada al chat');
+    },
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -160,10 +173,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
-  function markDirty() { scheduleAutoSave(); }
+  function markDirty() { setIsDirty(true); }
 
-  function generatePDF(): void {
-    if (!order) return;
+  function buildPDFDoc(): jsPDF | null {
+    if (!order) return null;
     const invoiceTotal = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
     const doc = new jsPDF({ unit: 'mm', format: [80, 200] });
     doc.setFont('helvetica');
@@ -215,16 +228,29 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     doc.line(3, y, 77, y); y += 5;
     doc.setFontSize(8); doc.text('Gracias por su compra!', 40, y, { align: 'center' });
 
+    return doc;
+  }
+
+  function generatePDF(): void {
+    const doc = buildPDFDoc();
+    if (!doc || !order) return;
     doc.save(`Factura_${order.num}.pdf`);
   }
 
-  function sendInvoiceToChat() {
+  async function sendInvoiceToChat() {
     if (!order?.ticket_id) { toast('Este pedido no tiene chat asociado', true); return; }
-    // Send short note to chat (PDF delivered separately)
-    const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
-    const note = `📄 *Factura #${order.num}*\nCliente: ${order.customer_name}\nTotal: $${total.toLocaleString('es-CO')}\n_Factura PDF enviada_`;
-    invoiceMut.mutate(note);
-    generatePDF();
+    const doc = buildPDFDoc();
+    if (!doc || !order) return;
+    try {
+      const base64 = doc.output('datauristring').split(',')[1];
+      const res = await api.post<{ url: string }>('/files/invoice', { data: base64, num: order.num });
+      const url = res.url;
+      const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+      const msg = `Factura Pedido #${order.num} - Fruver San Gabriel\nCliente: ${order.customer_name}\nTotal: $${total.toLocaleString('es-CO')}\nDescarga tu factura: ${url}`;
+      invoiceMut.mutate(msg);
+    } catch {
+      toast('Error al subir la factura', true);
+    }
   }
 
   function copyInvoice() {
@@ -240,13 +266,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const cobroMut = useMutation({
     mutationFn: () => api.post(`/orders/${orderId}/cobro`, {
       amount_received: parseFloat(cobroRec) || 0,
-      paid_by: cobroBy || user?.userId || (user as any)?.id,
+      paid_by: user?.userId,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       toast('Pago confirmado');
       setShowCobro(false);
+      onClose();
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -260,9 +287,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   }
 
   function handleClose() {
-    if (pendingSave.current || catalogDirty) {
-      if (!window.confirm('Hay cambios sin guardar. ¿Salir de todos modos?')) return;
-      clearTimeout(saveTimerRef.current);
+    if (isDirty || catalogDirty) {
+      setConfirmDlg({ msg: 'Hay cambios sin guardar. ¿Salir de todos modos?', onOk: onClose });
+      return;
     }
     onClose();
   }
@@ -324,7 +351,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       {isOut && msg.sender?.name && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
                       )}
-                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.text}</div>
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2 }}>
                         {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                       </div>
@@ -338,36 +365,34 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Reply (admin only) */}
-            {isAdmin && (
-              <div style={{
-                display: 'flex', gap: 6, padding: '8px 8px',
-                borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
-              }}>
-                <textarea
-                  placeholder="Responder... (Enter envía)"
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={handleChatKeyDown}
-                  rows={1}
-                  style={{
-                    flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
-                    padding: '6px 9px', fontSize: 12, resize: 'none', fontFamily: 'inherit',
-                    background: '#fff',
-                  }}
-                />
-                <button
-                  onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
-                  disabled={!replyText.trim() || replyMut.isPending}
-                  style={{
-                    background: 'var(--v)', color: '#fff', border: 'none',
-                    borderRadius: 8, padding: '0 10px', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
-                  }}>
-                  <Send size={14} />
-                </button>
-              </div>
-            )}
+            {/* Reply bar — visible to all roles */}
+            <div style={{
+              display: 'flex', gap: 6, padding: '8px 8px',
+              borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
+            }}>
+              <textarea
+                placeholder="Responder... (Enter envía)"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={handleChatKeyDown}
+                rows={1}
+                style={{
+                  flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
+                  padding: '6px 9px', fontSize: 12, resize: 'none', fontFamily: 'inherit',
+                  background: '#fff',
+                }}
+              />
+              <button
+                onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
+                disabled={!replyText.trim() || replyMut.isPending}
+                style={{
+                  background: 'var(--v)', color: '#fff', border: 'none',
+                  borderRadius: 8, padding: '0 10px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
+                }}>
+                <Send size={14} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -375,14 +400,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         <div className="mwin" style={{
           margin: 0, flex: 1, minWidth: 0,
           borderRadius: hasChatPanel ? '0 var(--radb) var(--radb) 0' : 'var(--radb)',
-          boxShadow: 'none', overflowY: 'auto', maxHeight: '90vh',
+          boxShadow: 'none', maxHeight: '90vh',
         }}>
           <div className="mhead">
             <div>
               <div className="mtit" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Pedido #{order.num}
-                {isAdmin && saveIndicator === 'saved' && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--v)' }}>✓ guardado</span>
+                {isDirty && !locked && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--a)' }}>● cambios sin guardar</span>
                 )}
               </div>
               <div className="msub">
@@ -465,6 +490,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   onChange={(e) => { setPago(e.target.value); markDirty(); }}>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
+                  <option value="cod">Cobro en casa</option>
                 </select>
               </div>
               <div className="fg2">
@@ -535,14 +561,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
               {!locked && isAdmin && order.status !== 'papelera' && (
-                <button className="bdel" onClick={() => {
-                  if (window.confirm('¿Mover este pedido a la papelera?')) papeleraMut.mutate();
-                }} disabled={papeleraMut.isPending}
+                <button className="bdel"
+                  onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
+                  disabled={papeleraMut.isPending}
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Trash2 size={14} /> Papelera
                 </button>
               )}
               <button className="bsec" onClick={handleClose}>Cerrar</button>
+              {isDirty && !locked && (
+                <button className="bpri" onClick={() => saveMut.mutate()}
+                  disabled={saveMut.isPending}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CheckCircle size={14} /> {saveMut.isPending ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              )}
               {items.length > 0 && (
                 <button className="bsec" onClick={copyInvoice}
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -555,11 +588,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   <FileText size={14} /> PDF
                 </button>
               )}
-              {items.length > 0 && isAdmin && order.ticket_id && (
+              {items.length > 0 && order.ticket_id && (
                 <button className="bsec" onClick={sendInvoiceToChat}
                   disabled={invoiceMut.isPending}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, borderColor: 'var(--v)', color: 'var(--v)' }}>
-                  <Send size={14} /> Enviar factura al chat
+                  <Send size={14} /> {invoiceMut.isPending ? 'Enviando...' : 'Enviar factura al chat'}
                 </button>
               )}
               {!locked && (order.status === 'camino' || order.status === 'entregado') && !order.paid && (
@@ -572,6 +605,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
           </div>
         </div>
       </div>
+
+      {/* CONFIRM DIALOG */}
+      {confirmDlg && (
+        <ConfirmModal
+          message={confirmDlg.msg}
+          danger={confirmDlg.danger}
+          onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
+          onCancel={() => setConfirmDlg(null)}
+        />
+      )}
 
       {/* COBRO DIALOG */}
       {showCobro && (
@@ -589,18 +632,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
             <div className="fg2">
               <label className="fl2">¿Quién recibió el pago?</label>
-              <select className="fi2" value={cobroBy} onChange={(e) => setCobroBy(e.target.value)}>
-                {(() => {
-                  const myId = user?.userId ?? (user as any)?.id ?? '';
-                  const myName = user?.name ?? 'Yo';
-                  return <>
-                    <option value={myId}>{myName}</option>
-                    {employees.filter((e: any) => e.id !== myId).map((e: any) => (
-                      <option key={e.id} value={e.id}>{e.name}</option>
-                    ))}
-                  </>;
-                })()}
-              </select>
+              <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
+                {user?.name ?? 'Usuario actual'}
+              </div>
             </div>
             <div className="fg2">
               <label className="fl2">¿Cuánto entregó el domiciliario? <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span></label>

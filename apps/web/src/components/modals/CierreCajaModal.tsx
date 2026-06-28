@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Banknote, ArrowLeftRight, AlertTriangle, CheckCircle, Download } from 'lucide-react';
+import { Lock, Banknote, ArrowLeftRight, AlertTriangle, CheckCircle, Download, MessageSquare } from 'lucide-react';
 import { api } from '../../lib/api';
 import { fmtCOP, STATUS_LABEL } from '../../lib/format';
 import { toast } from '../ui/Toast';
@@ -8,24 +8,35 @@ import { toast } from '../ui/Toast';
 interface Props {
   fecha: string;
   orders: any[];
+  tickets: any[];
   onClose: () => void;
 }
 
 type Decision = 'manana' | 'forzar_cierre' | 'cancelar';
+type TicketDecision = 'manana' | 'atendido';
 
-export default function CierreCajaModal({ fecha, orders, onClose }: Props) {
+export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Props) {
   const qc = useQueryClient();
 
-  const nonPapelera = orders.filter((o) => o.status !== 'papelera');
+  const nonPapelera = orders.filter((o) => o.status !== 'papelera' && !(o.notes?.includes('pasado_manana:')));
   const completados = nonPapelera.filter((o) => o.paid || o.status === 'cerrado');
   const pendingOrders = nonPapelera.filter((o) => !o.paid && o.status !== 'cerrado');
+
+  // Tickets que requieren decisión: sin pedidos del día actual O con mensajes sin leer
+  const pendingTickets = tickets.filter((t: any) => {
+    if (t.deferred_to) return false; // ya fue diferido antes, no mostrar de nuevo
+    const hasNoOrders = !t.orders || t.orders.length === 0;
+    const hasUnread = t.unread_count > 0;
+    return hasNoOrders || hasUnread;
+  });
 
   // No defaults — user must explicitly choose for each pending order
   const [decisions, setDecisions] = useState<Record<string, Decision | ''>>(() =>
     Object.fromEntries(pendingOrders.map((o) => [o.id, '' as Decision | '']))
   );
-
-  const allDecided = pendingOrders.every((o) => decisions[o.id]);
+  const [ticketDecisions, setTicketDecisions] = useState<Record<string, TicketDecision | ''>>(() =>
+    Object.fromEntries(pendingTickets.map((t: any) => [t.id, '' as TicketDecision | '']))
+  );
 
   const totalEfectivo = completados
     .filter((o: any) => ['cash', 'cod'].includes(o.payment_method))
@@ -34,10 +45,19 @@ export default function CierreCajaModal({ fecha, orders, onClose }: Props) {
     .filter((o: any) => o.payment_method === 'transfer')
     .reduce((s: number, o: any) => s + o.items.reduce((ss: number, i: any) => ss + Number(i.price), 0), 0);
 
+  const allDecided =
+    pendingOrders.every((o) => decisions[o.id]) &&
+    pendingTickets.every((t: any) => ticketDecisions[t.id]);
+
   const cierreMut = useMutation({
-    mutationFn: () => api.post('/cierre', { fecha, decisions: Object.fromEntries(Object.entries(decisions).filter(([, v]) => v)) }),
+    mutationFn: () => api.post('/cierre', {
+      fecha,
+      decisions: Object.fromEntries(Object.entries(decisions).filter(([, v]) => v)),
+      ticket_decisions: Object.fromEntries(Object.entries(ticketDecisions).filter(([, v]) => v)),
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       toast('Caja cerrada correctamente');
       onClose();
@@ -184,9 +204,43 @@ export default function CierreCajaModal({ fecha, orders, onClose }: Props) {
             </div>
           )}
 
-          {!allDecided && pendingOrders.length > 0 && (
+          {pendingTickets.length > 0 && (
+            <div className="cierre-sect">
+              <div className="cierre-stit" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <MessageSquare size={13} color="var(--az)" />
+                Chats sin resolver — decide qué hacer ({pendingTickets.length})
+              </div>
+              {pendingTickets.map((t: any) => {
+                const hasDecision = !!ticketDecisions[t.id];
+                const hasNoOrders = !t.orders || t.orders.length === 0;
+                return (
+                  <div key={t.id} className="warn-ord" style={{ borderLeft: hasDecision ? '3px solid var(--v)' : '3px solid var(--az)' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700 }}>{t.customer_name} — {t.phone}</div>
+                      <div style={{ fontSize: 12, color: 'var(--gt)' }}>
+                        {hasNoOrders ? 'Sin pedido' : `${t.orders.length} pedido(s)`}
+                        {t.unread_count > 0 && <span style={{ marginLeft: 8, color: 'var(--az)', fontWeight: 700 }}>{t.unread_count} sin leer</span>}
+                      </div>
+                    </div>
+                    <select
+                      className="warn-sel"
+                      value={ticketDecisions[t.id] ?? ''}
+                      onChange={(e) => setTicketDecisions({ ...ticketDecisions, [t.id]: e.target.value as TicketDecision | '' })}
+                      style={{ borderColor: hasDecision ? 'var(--v)' : 'var(--az)' }}
+                    >
+                      <option value="" disabled>— Elegir acción —</option>
+                      <option value="manana">Pasar a mañana</option>
+                      <option value="atendido">Marcar como atendido</option>
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {!allDecided && (pendingOrders.length > 0 || pendingTickets.length > 0) && (
             <div style={{ background: 'var(--ac)', border: '1px solid var(--a)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 14, fontSize: 13, color: 'var(--a)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AlertTriangle size={14} /> Decide la acción de cada pedido pendiente para poder cerrar o descargar el informe.
+              <AlertTriangle size={14} /> Decide la acción de cada pedido y chat pendiente para poder cerrar o descargar el informe.
             </div>
           )}
 

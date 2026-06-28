@@ -31,6 +31,7 @@ export default function MainPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin';
+  const canManage = user?.role === 'admin' || user?.role === 'encargado';
   const qc = useQueryClient();
 
   const [fecha, setFecha] = useState(todayStr());
@@ -66,17 +67,30 @@ export default function MainPage() {
     });
     socket.on('order:moved', () => qc.invalidateQueries({ queryKey: ['orders', fecha] }));
     socket.on('order:paid', () => qc.invalidateQueries({ queryKey: ['orders', fecha] }));
-    socket.on('ticket:message', () => {
+    const onTicketMessage = (data: { ticketId: string }) => {
       qc.invalidateQueries({ queryKey: ['tickets', fecha] });
       qc.invalidateQueries({ queryKey: ['inbox'] });
-    });
+      // Refresh any open conversation (TicketModal, DetallePedidoModal chat, InboxPanel)
+      if (data?.ticketId) {
+        qc.invalidateQueries({ queryKey: ['inbox-convo', data.ticketId] });
+        qc.invalidateQueries({ queryKey: ['ticket', data.ticketId] });
+      }
+    };
+    const onTicketUnread = () => {
+      qc.invalidateQueries({ queryKey: ['tickets', fecha] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+    };
+
+    socket.on('ticket:message', onTicketMessage);
+    socket.on('ticket:unread', onTicketUnread);
 
     return () => {
       socket.off('order:created');
       socket.off('order:updated');
       socket.off('order:moved');
       socket.off('order:paid');
-      socket.off('ticket:message');
+      socket.off('ticket:message', onTicketMessage);
+      socket.off('ticket:unread', onTicketUnread);
     };
   }, [accessToken, fecha]);
 
@@ -106,14 +120,16 @@ export default function MainPage() {
       <header className="ah">
         <div className="ht">
           <div className="hlogo">
-            <span className="hlogo-t">4Client</span>
+            <img src="/icon.png" alt="4Client" style={{ height: 36, objectFit: 'contain' }} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <div className="huser">
-              <div className={`uav${isAdmin ? ' adm' : ''}`}>{user?.name?.[0]?.toUpperCase() ?? 'U'}</div>
+              <div className={`uav${canManage ? ' adm' : ''}`}>{user?.name?.[0]?.toUpperCase() ?? 'U'}</div>
               <div>
                 <div className="un">{user?.name}</div>
-                <div className="ur2">{isAdmin ? 'Administrador' : 'Encargado'}</div>
+                <div className="ur2">
+                  {isAdmin ? 'Administrador' : canManage ? 'Encargado' : 'Domiciliario'}
+                </div>
               </div>
             </div>
             <button className="bout" onClick={handleLogout}>Salir</button>
@@ -165,6 +181,7 @@ export default function MainPage() {
             </div>
 
             <Swimlane
+              fecha={fecha}
               tickets={tickets}
               orders={orders}
               search={search}
@@ -225,7 +242,7 @@ export default function MainPage() {
         <DetallePedidoModal orderId={openOrderId} onClose={() => setOpenOrderId(null)} />
       )}
       {showCierre && (
-        <CierreCajaModal fecha={fecha} orders={orders} onClose={() => setShowCierre(false)} />
+        <CierreCajaModal fecha={fecha} orders={orders} tickets={tickets} onClose={() => setShowCierre(false)} />
       )}
       <Toast />
     </div>
