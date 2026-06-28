@@ -23,8 +23,12 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 const fastify = Fastify({ logger: config.NODE_ENV === 'development' });
 
 async function start() {
+  const allowedOrigins = config.FRONTEND_URL.split(',').map((o) => o.trim());
   await fastify.register(cors, {
-    origin: config.FRONTEND_URL,
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error('Not allowed by CORS'), false);
+    },
     credentials: true,
   });
 
