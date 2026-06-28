@@ -1,86 +1,180 @@
-import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import crypto from 'crypto';
 import { config } from '../config.js';
 
-// WhatsApp message payload shape (subset of Meta Cloud API)
-const metaMessageSchema = z.object({
-  object: z.string(),
-  entry: z.array(z.object({
-    id: z.string(),
-    changes: z.array(z.object({
-      value: z.object({
-        messaging_product: z.string(),
-        metadata: z.object({ phone_number_id: z.string() }).passthrough(),
-        contacts: z.array(z.object({
-          profile: z.object({ name: z.string() }),
-          wa_id: z.string(),
-        })).optional(),
-        messages: z.array(z.object({
-          from: z.string(),
-          id: z.string(),
-          timestamp: z.string(),
-          type: z.string(),
-          text: z.object({ body: z.string() }).optional(),
-        })).optional(),
-        statuses: z.array(z.unknown()).optional(),
-      }).passthrough(),
-      field: z.string(),
-    })),
-  })),
-});
+interface MetaWebhookPayload {
+  object: string;
+  entry: Array<{
+    id: string;
+    changes: Array<{
+      value: {
+        messaging_product: string;
+        metadata: { phone_number_id: string; display_phone_number: string };
+        contacts?: Array<{ profile: { name: string }; wa_id: string }>;
+        messages?: Array<{
+          from: string;
+          id: string;
+          timestamp: string;
+          type: string;
+          text?: { body: string };
+        }>;
+        statuses?: unknown[];
+      };
+      field: string;
+    }>;
+  }>;
+}
 
-export default async function webhookRoutes(fastify: FastifyInstance) {
-  // GET /api/v1/webhook — Meta verification handshake
-  fastify.get('/', async (req, reply) => {
-    const query = req.query as Record<string, string>;
-    const mode      = query['hub.mode'];
-    const token     = query['hub.verify_token'];
-    const challenge = query['hub.challenge'];
+function verifyHmac(rawBody: Buffer, signature: string, appSecret: string): boolean {
+  const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  } catch {
+    return false;
+  }
+}
 
-    if (mode === 'subscribe' && token === config.META_WEBHOOK_VERIFY_TOKEN) {
-      fastify.log.info('Webhook Meta verificado correctamente');
-      return reply.status(200).send(challenge);
-    }
-    return reply.status(403).send({ error: 'Token de verificación inválido' });
+async function ingestMessage(
+  fastify: FastifyInstance,
+  phoneNumberId: string,
+  phone: string,
+  name: string,
+  text: string,
+  waMsgId: string,
+  sentAt: Date,
+) {
+  // Find org by phone_number_id
+  const org = await fastify.prisma.organization.findFirst({
+    where: { wpp_meta_phone_id: phoneNumberId, active: true },
+  });
+  if (!org) {
+    fastify.log.warn({ phoneNumberId }, 'WPP: no org for phone_number_id');
+    return;
+  }
+
+  // Deduplication: skip if already ingested
+  const dup = await fastify.prisma.ticketMessage.findUnique({
+    where: { wpp_message_id: waMsgId },
+  });
+  if (dup) return;
+
+  const todayUTC = new Date(new Date().toISOString().split('T')[0]);
+
+  // Find or create today's ticket for this phone
+  let ticket = await fastify.prisma.ticket.findFirst({
+    where: { org_id: org.id, phone, fecha: todayUTC },
   });
 
-  // POST /api/v1/webhook — incoming messages from Meta
-  fastify.post('/', async (req, reply) => {
-    const parsed = metaMessageSchema.safeParse(req.body);
-    if (!parsed.success || parsed.data.object !== 'whatsapp_business_account') {
-      return reply.status(200).send({ ok: true }); // Always 200 to Meta to avoid retries
+  if (!ticket) {
+    ticket = await fastify.prisma.ticket.create({
+      data: {
+        org_id: org.id,
+        phone,
+        customer_name: name,
+        fecha: todayUTC,
+        last_message_at: sentAt,
+        unread_count: 1,
+      },
+    });
+  } else {
+    await fastify.prisma.ticket.update({
+      where: { id: ticket.id },
+      data: {
+        unread_count: { increment: 1 },
+        last_message_at: sentAt,
+        customer_name: name,
+      },
+    });
+  }
+
+  const message = await fastify.prisma.ticketMessage.create({
+    data: {
+      ticket_id: ticket.id,
+      direction: 'in',
+      text,
+      wpp_message_id: waMsgId,
+      sent_at: sentAt,
+    },
+    include: { sender: { select: { id: true, name: true } } },
+  });
+
+  const newUnread = (ticket.unread_count ?? 0) + 1;
+  type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+  const socketMsg = {
+    ...message,
+    direction: message.direction as 'in' | 'out',
+    media_type: message.media_type as MediaType | null,
+    sent_at: message.sent_at.toISOString(),
+    sent_by_name: message.sender?.name ?? null,
+  };
+  fastify.io.to(`org:${org.id}`).emit('ticket:message', { ticketId: ticket.id, message: socketMsg });
+  fastify.io.to(`org:${org.id}`).emit('ticket:unread', { ticketId: ticket.id, count: newUnread });
+  fastify.log.info({ phone, ticketId: ticket.id }, 'WPP: mensaje entrante ingresado');
+}
+
+export default async function webhookRoutes(fastify: FastifyInstance) {
+  // Capture raw body for HMAC validation before JSON parsing
+  fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
+    try {
+      const parsed = JSON.parse((body as Buffer).toString());
+      (_req as FastifyRequest & { rawBody: Buffer }).rawBody = body as Buffer;
+      done(null, parsed);
+    } catch (err) {
+      done(err as Error);
+    }
+  });
+
+  // GET — Meta webhook verification handshake
+  fastify.get('/', async (req: FastifyRequest, reply: FastifyReply) => {
+    const q = req.query as Record<string, string>;
+    if (q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === config.META_WEBHOOK_VERIFY_TOKEN) {
+      fastify.log.info('WPP webhook verificado por Meta');
+      return reply.status(200).send(q['hub.challenge']);
+    }
+    return reply.status(403).send({ error: 'Token inválido' });
+  });
+
+  // POST — incoming messages from Meta
+  fastify.post('/', async (req: FastifyRequest, reply: FastifyReply) => {
+    // HMAC-SHA256 signature validation
+    const signature = (req.headers['x-hub-signature-256'] as string) ?? '';
+    const rawBody = (req as FastifyRequest & { rawBody?: Buffer }).rawBody;
+
+    if (config.META_APP_SECRET && rawBody && signature) {
+      if (!verifyHmac(rawBody, signature, config.META_APP_SECRET)) {
+        fastify.log.warn('WPP: firma HMAC inválida');
+        return reply.status(403).send({ error: 'Firma inválida' });
+      }
+    } else if (config.META_APP_SECRET && !signature) {
+      fastify.log.warn('WPP: request sin firma X-Hub-Signature-256');
     }
 
-    for (const entry of parsed.data.entry) {
-      for (const change of entry.changes) {
+    const payload = req.body as MetaWebhookPayload;
+
+    // Always return 200 fast — Meta retries if we're slow or error
+    reply.status(200).send({ ok: true });
+
+    if (payload?.object !== 'whatsapp_business_account') return;
+
+    for (const entry of payload.entry ?? []) {
+      for (const change of entry.changes ?? []) {
         if (change.field !== 'messages') continue;
-        const { contacts, messages } = change.value;
-        if (!messages?.length || !contacts?.length) continue;
+
+        const { metadata, contacts, messages } = change.value;
+        if (!messages?.length) continue;
 
         for (const msg of messages) {
           if (msg.type !== 'text' || !msg.text?.body) continue;
 
-          const phone    = msg.from;
-          const name     = contacts.find(c => c.wa_id === phone)?.profile.name ?? phone;
-          const text     = msg.text.body;
-          const waMsgId  = msg.id;
-          const sentAt   = new Date(parseInt(msg.timestamp) * 1000);
+          const phone  = msg.from;
+          const name   = contacts?.find(c => c.wa_id === phone)?.profile.name ?? phone;
+          const text   = msg.text.body;
+          const sentAt = new Date(parseInt(msg.timestamp) * 1000);
 
-          fastify.log.info({ phone, name, text }, 'WPP mensaje entrante');
-
-          // TODO Fase 1C: implementar lógica real
-          // 1. Buscar o crear Ticket por phone + org
-          // 2. Crear TicketMessage (direction: 'in')
-          // 3. Actualizar ticket.last_message_at y unread_count
-          // 4. Emitir socket 'ticket:message' a la org
-          // Ejemplo:
-          // await ingestIncomingMessage(fastify, { phone, name, text, waMsgId, sentAt, orgId });
-          void [phone, name, text, waMsgId, sentAt]; // evitar lint unused hasta Fase 1C
+          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt)
+            .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }
       }
     }
-
-    // Meta requiere 200 rápido (< 20s)
-    return reply.status(200).send({ ok: true });
   });
 }

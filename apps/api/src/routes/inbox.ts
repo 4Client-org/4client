@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
   // GET /api/v1/inbox — lista de todas las conversaciones, solo admin
@@ -84,8 +85,15 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     // move a ticket up in the queue, so the inbox order stays stable when agents reply.
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
 
-    // TODO Fase 1C: enviar via Meta Cloud API
-    // await whatsappService.sendText(ticket.phone, body.data.text);
+    // Enviar via Meta Cloud API
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    if (provider) {
+      provider.sendText(ticket.phone, body.data.text).catch(err =>
+        fastify.log.error({ err, ticketId }, 'WPP: error enviando respuesta via Meta API'),
+      );
+    } else {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, mensaje solo guardado en BD');
+    }
 
     return reply.status(201).send({ data: message });
   });
