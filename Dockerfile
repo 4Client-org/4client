@@ -13,4 +13,4 @@ RUN pnpm --filter api build
 
 EXPOSE 3000
 
-CMD ["node", "apps/api/dist/server.js"]
+CMD ["sh", "/app/start.sh"]
