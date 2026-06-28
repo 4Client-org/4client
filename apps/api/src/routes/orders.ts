@@ -151,6 +151,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const { items, ...fields } = body.data;
     const historyEntries: any[] = [];
 
+    const PAYMENT_LABELS: Record<string, string> = {
+      cod: 'Cobro en casa', cash: 'Efectivo', transfer: 'Transferencia',
+    };
+
     // Registrar cambios en historial
     const trackFields: Record<string, string> = {
       customer_name: 'Nombre', customer_phone: 'Teléfono',
@@ -158,14 +162,36 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       employee_id: 'Domiciliario', notes: 'Notas',
     };
 
+    // Prefetch employee names for readable history
+    const empIdsBefore = existing.employee_id ? [existing.employee_id] : [];
+    const empIdAfter = (fields as any).employee_id;
+    const empIdsAfter = empIdAfter ? [empIdAfter] : [];
+    const allEmpIds = [...new Set([...empIdsBefore, ...empIdsAfter])];
+    const empMap = new Map<string, string>();
+    if (allEmpIds.length > 0) {
+      const emps = await fastify.prisma.employee.findMany({
+        where: { id: { in: allEmpIds } },
+        select: { id: true, name: true },
+      });
+      for (const e of emps) empMap.set(e.id, e.name);
+    }
+
+    function displayVal(key: string, val: any): string {
+      if (val == null) return key === 'employee_id' ? 'Sin asignar' : '';
+      if (key === 'payment_method') return PAYMENT_LABELS[String(val)] ?? String(val);
+      if (key === 'employee_id') return empMap.get(String(val)) ?? String(val);
+      return String(val);
+    }
+
     for (const [key, label] of Object.entries(trackFields)) {
       const newVal = (fields as any)[key];
       const oldVal = (existing as any)[key];
-      if (newVal !== undefined && String(newVal) !== String(oldVal ?? '')) {
+      if (newVal !== undefined && String(newVal ?? '') !== String(oldVal ?? '')) {
         historyEntries.push({
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
           action_type: 'edit', field: label,
-          value_before: String(oldVal ?? ''), value_after: String(newVal ?? ''),
+          value_before: displayVal(key, oldVal),
+          value_after: displayVal(key, newVal),
         });
       }
     }

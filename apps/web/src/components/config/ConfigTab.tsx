@@ -46,7 +46,7 @@ function ProductsSection() {
   const qc = useQueryClient();
   const [form, setForm] = useState<ProductForm | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
 
   const { data: products = [], isLoading } = useQuery({
@@ -111,7 +111,7 @@ function ProductsSection() {
   }
 
   function toggleCat(cat: string) {
-    setCollapsedCats(prev => {
+    setExpandedCats(prev => {
       const next = new Set(prev);
       next.has(cat) ? next.delete(cat) : next.add(cat);
       return next;
@@ -201,7 +201,7 @@ function ProductsSection() {
         <div style={{ color: 'var(--gt)', fontSize: 14, padding: 16 }}>No hay productos. Crea el primero.</div>
       ) : (
         Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([cat, prods]) => {
-          const collapsed = collapsedCats.has(cat);
+          const collapsed = !expandedCats.has(cat);
           return (
             <div key={cat} style={{ marginBottom: 12, border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
               {/* Category header — clickable to collapse */}

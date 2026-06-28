@@ -36,6 +36,7 @@ const fastify = Fastify({
     level: config.NODE_ENV === 'production' ? 'warn' : 'info',
     transport: config.NODE_ENV === 'development' ? { target: 'pino-pretty' } : undefined,
   },
+  trustProxy: true,
 });
 
 fastify.setErrorHandler((error, _req, reply) => {
