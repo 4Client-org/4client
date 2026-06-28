@@ -7,13 +7,13 @@ const createUserSchema = z.object({
   name:     z.string().min(2),
   email:    z.string().email(),
   password: z.string().min(6),
-  role:     z.enum(['admin', 'encargado', 'domiciliario']),
+  role:     z.enum(['admin', 'encargado', 'domiciliario', 'dev']),
 });
 
 const updateUserSchema = z.object({
   name:   z.string().min(2).optional(),
   email:  z.string().email().optional(),
-  role:   z.enum(['admin', 'encargado', 'domiciliario']).optional(),
+  role:   z.enum(['admin', 'encargado', 'domiciliario', 'dev']).optional(),
   active: z.boolean().optional(),
 });
 
@@ -23,7 +23,7 @@ const resetPassSchema = z.object({
 
 export default async function userRoutes(fastify: FastifyInstance) {
   // GET /api/v1/users — list org users, admin only
-  fastify.get('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  fastify.get('/', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
     const users = await fastify.prisma.user.findMany({
       where: { org_id: req.user.orgId },
       select: { id: true, name: true, email: true, role: true, active: true, last_login: true, created_at: true },
@@ -33,7 +33,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/users — create user in org, admin only
-  fastify.post('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  fastify.post('/', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
     const body = createUserSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
@@ -57,7 +57,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   });
 
   // PATCH /api/v1/users/:id — update user (name, role, active), admin only
-  fastify.patch('/:id', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  fastify.patch('/:id', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = updateUserSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
@@ -85,7 +85,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/users/:id/reset-password — admin resets any user's password
-  fastify.post('/:id/reset-password', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  fastify.post('/:id/reset-password', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = resetPassSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'La contraseña debe tener al menos 6 caracteres', code: 'VALIDATION_ERROR' });

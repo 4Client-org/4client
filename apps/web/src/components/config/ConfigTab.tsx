@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, RotateCcw, X, Check, Package, Truck, Users, ChevronDown, ChevronRight, AlertTriangle, MessageSquare, Code2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, RotateCcw, X, Check, Package, Truck, Users, ChevronDown, ChevronRight, AlertTriangle, Code2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { toast } from '../ui/Toast';
 import { useAuthStore } from '../../store/auth';
@@ -1154,7 +1154,6 @@ export default function ConfigTab() {
         { key: 'productos',     label: 'Productos',     icon: <Package size={15} /> },
         { key: 'domiciliarios', label: 'Domiciliarios', icon: <Truck size={15} /> },
         { key: 'usuarios',      label: 'Usuarios',      icon: <Users size={15} /> },
-        { key: 'whatsapp',      label: 'WhatsApp',      icon: <MessageSquare size={15} /> },
       ];
 
   return (
@@ -1186,7 +1185,7 @@ export default function ConfigTab() {
       {section === 'productos'     && !isDev && <ProductsSection />}
       {section === 'domiciliarios' && !isDev && <EmployeesSection />}
       {section === 'usuarios'      && !isDev && <UsersSection />}
-      {section === 'whatsapp'      && !isDev && <WhatsAppSection />}
+
       {section === 'dev'           &&  isDev && <DevSection />}
     </div>
   );
