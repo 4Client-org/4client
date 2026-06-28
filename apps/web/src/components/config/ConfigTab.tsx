@@ -831,8 +831,8 @@ function DevSeedPanel() {
           Crea la org y usuarios base. Idempotente (upsert). Bloqueado en producción.
         </p>
         <div style={{ background: 'var(--gm)', borderRadius: 8, padding: '10px 14px', fontSize: 12, fontFamily: 'monospace', marginBottom: 16, color: 'var(--n)', lineHeight: 1.8 }}>
-          admin@fruver.com &nbsp;→ $SEED_ADMIN_PASS<br />
-          dev@fruver.com &nbsp;&nbsp;&nbsp;→ $SEED_DEV_PASS
+          admin@fruver.com &nbsp;→ env: SEED_ADMIN_PASS<br />
+          dev@fruver.com &nbsp;&nbsp;&nbsp;→ env: SEED_DEV_PASS
         </div>
         {!confirm ? (
           <button className="bdel" onClick={() => setConfirm(true)}>▶ Ejecutar seed</button>
