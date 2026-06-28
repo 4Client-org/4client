@@ -56,6 +56,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         user: {
           id: user.id,
           org_id: user.org_id,
+          org_name: user.org.name,
           email: user.email,
           name: user.name,
           role: user.role,
@@ -81,7 +82,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       include: { user: true },
     });
 
-    if (!stored || stored.expires_at < new Date()) {
+    if (!stored || stored.expires_at <= new Date()) {
       return reply.status(401).send({ error: 'Token inválido o expirado', code: 'INVALID_REFRESH_TOKEN' });
     }
 

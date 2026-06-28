@@ -183,7 +183,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     let y = 10;
 
     doc.setFontSize(13); doc.setFont('helvetica', 'bold');
-    doc.text('Fruver San Gabriel', 40, y, { align: 'center' }); y += 7;
+    doc.text(user?.orgName ?? '4Client', 40, y, { align: 'center' }); y += 7;
     doc.setFontSize(10); doc.setFont('helvetica', 'normal');
     doc.text(`Pedido #${order.num}`, 40, y, { align: 'center' }); y += 5;
     doc.text(new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' }), 40, y, { align: 'center' }); y += 5;

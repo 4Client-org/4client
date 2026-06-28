@@ -80,7 +80,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/orders
-  fastify.post('/', { preHandler: [authenticate] }, async (req, reply) => {
+  fastify.post('/', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const body = createOrderSchema.safeParse(req.body);
     if (!body.success) {
       return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR', details: body.error.flatten() });
@@ -89,7 +89,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const { items, fecha, ...rest } = body.data;
 
     // Generar número de pedido: siguiente num del día
-    const fechaDate = fecha ? new Date(fecha) : new Date();
+    // Parse YYYY-MM-DD as UTC midnight to avoid timezone drift
+    const todayUTC = new Date().toISOString().split('T')[0];
+    const fechaDate = new Date(fecha ?? todayUTC);
     const count = await fastify.prisma.order.count({
       where: { org_id: req.user.orgId, fecha: fechaDate },
     });
@@ -138,7 +140,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // PATCH /api/v1/orders/:id
-  fastify.patch('/:id', { preHandler: [authenticate] }, async (req, reply) => {
+  fastify.patch('/:id', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = updateOrderSchema.safeParse(req.body);
     if (!body.success) {

@@ -20,7 +20,8 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos' });
 
     const id = randomUUID().replace(/-/g, '').slice(0, 12);
-    const filename = `Factura_${body.data.num}_${id}.pdf`;
+    const orgPrefix = req.user.orgId.replace(/-/g, '').slice(0, 12);
+    const filename = `Factura_${orgPrefix}_${body.data.num}_${id}.pdf`;
     const filepath = path.join(UPLOADS_DIR, filename);
 
     const buffer = Buffer.from(body.data.data, 'base64');
@@ -31,11 +32,16 @@ export default async function fileRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/files/:filename — serve PDF file
-  fastify.get('/:filename', async (req, reply) => {
+  fastify.get('/:filename', { preHandler: [authenticate] }, async (req, reply) => {
     const { filename } = req.params as { filename: string };
-    // Only allow safe filenames
-    if (!/^Factura_[a-zA-Z0-9_]+\.pdf$/.test(filename)) {
+    // Filename: Factura_{orgPrefix12}_{num}_{id12}.pdf
+    if (!/^Factura_[a-f0-9]{12}_[a-zA-Z0-9_]+\.pdf$/.test(filename)) {
       return reply.status(400).send({ error: 'Archivo inválido' });
+    }
+    // Verify the file belongs to the requesting user's org
+    const orgPrefix = req.user.orgId.replace(/-/g, '').slice(0, 12);
+    if (!filename.startsWith(`Factura_${orgPrefix}_`)) {
+      return reply.status(403).send({ error: 'Acceso denegado', code: 'FORBIDDEN' });
     }
     const filepath = path.join(UPLOADS_DIR, filename);
     if (!fs.existsSync(filepath)) return reply.status(404).send({ error: 'Archivo no encontrado' });
