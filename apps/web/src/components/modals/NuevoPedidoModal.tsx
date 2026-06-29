@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { Smartphone, Check, Send } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
@@ -41,6 +41,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     queryFn: () => api.get<{ data: any }>(`/inbox/${ticketId}/messages`).then((r) => r.data),
     enabled: !!ticketId,
     refetchInterval: 15000,
+  });
+
+  const { data: org } = useQuery({
+    queryKey: ['config-org'],
+    queryFn: () => api.get<{ data: any }>('/config/org').then(r => r.data),
   });
 
   const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
@@ -124,8 +129,26 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
       }}>
         {hasChat && (
           <div style={{ width: 300, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}>
-            <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', fontWeight: 800, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Smartphone size={15} /> {preNombre || telefono}
+            <div style={{ background: 'var(--vd)', color: '#fff', padding: '10px 12px', fontWeight: 800, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Smartphone size={15} />
+              <span style={{ flex: 1 }}>{preNombre || telefono}</span>
+              {org?.slug && (
+                <button
+                  title="Insertar link del formulario de pedido"
+                  onClick={() => {
+                    const link = `${window.location.origin}/form?org=${encodeURIComponent(org.slug)}`;
+                    setReplyText(prev => prev ? `${prev}\n${link}` : link);
+                  }}
+                  style={{
+                    background: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.35)',
+                    borderRadius: 8, color: '#fff', cursor: 'pointer',
+                    padding: '5px 9px', fontSize: 12, fontWeight: 700,
+                    display: 'flex', alignItems: 'center', gap: 5,
+                  }}
+                >
+                  <ClipboardList size={13} /> Formulario
+                </button>
+              )}
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number) => (
