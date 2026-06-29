@@ -98,6 +98,14 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     onChange(items.filter(i => i.product_name !== productName));
   }
 
+  function editItem(item: Item) {
+    setLocalInputs(prev => ({ ...prev, [item.product_name]: { qty: item.quantity_label, price: item.price } }));
+    setSearch(item.product_name);
+    setCollapsed(false);
+    onLocalDirty?.(true);
+    requestAnimationFrame(() => searchRef.current?.focus());
+  }
+
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
 
   // Locked mode: simple read-only factbox
@@ -256,8 +264,17 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
         {items.map(i => (
           <div key={i.product_name} className="factrow">
             <span>{i.product_name}{i.quantity_label && ` - ${i.quantity_label}`}</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '—'}
+              <button
+                onClick={() => editItem(i)}
+                title="Editar cantidad/precio"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--az)', fontSize: 13, lineHeight: 1, padding: '0 2px',
+                  display: 'flex', alignItems: 'center',
+                }}
+              >✏️</button>
               <button
                 onClick={() => removeItem(i.product_name)}
                 title="Quitar del pedido"
