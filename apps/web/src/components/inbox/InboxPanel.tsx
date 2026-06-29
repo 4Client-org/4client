@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Plus, Send, Eye } from 'lucide-react';
+import { MessageSquare, Plus, Send, Eye, ClipboardList } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -38,6 +38,11 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
     queryKey: ['inbox'],
     queryFn: () => api.get<{ data: any[] }>('/inbox').then((r) => r.data),
     refetchInterval: 60000,
+  });
+
+  const { data: org } = useQuery({
+    queryKey: ['config-org'],
+    queryFn: () => api.get<{ data: any }>('/config/org').then(r => r.data),
   });
 
   // Real-time: reorder sidebar + refresh open conversation on any message
@@ -201,6 +206,16 @@ export default function InboxPanel({ onCreateFromTicket, onOpenOrder }: Props) {
               <div style={{ fontSize: 13, color: 'var(--gt)' }}>{selectedTicket?.phone}</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              {org?.slug && (
+                <button className="bsec" style={{ padding: '8px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
+                  title="Insertar link del formulario en el mensaje"
+                  onClick={() => {
+                    const link = `${window.location.origin}/form?org=${encodeURIComponent(org.slug)}`;
+                    setReplyText(prev => prev ? `${prev}\n${link}` : link);
+                  }}>
+                  <ClipboardList size={13} /> Lista
+                </button>
+              )}
               <button className="bnew" style={{ padding: '8px 14px', fontSize: 13 }}
                 onClick={() => selectedTicket && onCreateFromTicket(selectedTicket)}>
                 <Plus size={13} strokeWidth={3} />
