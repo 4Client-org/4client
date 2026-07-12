@@ -4,6 +4,7 @@ import { tryRestoreSession } from './lib/api';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
 import ClientFormPage from './pages/ClientFormPage';
+import UpdateBanner from './components/ui/UpdateBanner';
 
 export default function App() {
   const isForm = window.location.pathname === '/form';
@@ -16,7 +17,7 @@ export default function App() {
     tryRestoreSession().finally(() => setReady(true));
   }, [isForm]);
 
-  if (isForm) return <ClientFormPage />;
-  if (!ready) return null;
-  return token ? <MainPage /> : <LoginPage />;
+  if (isForm) return <><ClientFormPage /><UpdateBanner /></>;
+  if (!ready) return <UpdateBanner />;
+  return <>{token ? <MainPage /> : <LoginPage />}<UpdateBanner /></>;
 }
