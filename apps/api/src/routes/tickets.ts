@@ -9,7 +9,18 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     const fecha = query.fecha ? new Date(query.fecha) : new Date();
 
     const allTickets = await fastify.prisma.ticket.findMany({
-      where: { org_id: req.user.orgId, OR: [{ fecha }, { deferred_to: fecha }] },
+      where: {
+        org_id: req.user.orgId,
+        OR: [
+          { fecha },
+          { deferred_to: fecha },
+          // A ticket must show up wherever any of its own orders actually live, even if
+          // `deferred_to` was never set on it (e.g. orders deferred before this field was
+          // wired up, or any other path that moves an order's fecha directly) — the
+          // order's own fecha is the source of truth, not a separate field that can drift.
+          { orders: { some: { fecha } } },
+        ],
+      },
       include: {
         messages: { orderBy: { sent_at: 'asc' } },
         orders: {
