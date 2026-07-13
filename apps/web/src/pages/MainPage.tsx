@@ -217,14 +217,14 @@ export default function MainPage() {
         </div>
       </header>
 
-      {isAdmin && (
+      {isAdmin && todayStr().endsWith('-01') && (
         <div style={{
           background: '#FEE2E2', borderBottom: '2px solid #F87171', color: '#991B1B',
           padding: '8px 16px', fontSize: 13, fontWeight: 700,
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center',
         }}>
           <AlertTriangle size={14} style={{ flexShrink: 0 }} />
-          Recuerda pagar la suscripción de 4Client antes del día 1 de cada mes para que el sistema no se deshabilite.
+          Hoy es día 1 — recuerda pagar la suscripción de 4Client para que el sistema no se deshabilite.
         </div>
       )}
 
