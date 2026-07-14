@@ -185,4 +185,93 @@ describe('cierre routes', () => {
     expect(secondCierre.statusCode).toBe(409);
     expect(secondCierre.json().code).toBe('ALREADY_CLOSED');
   });
+
+  it('GET /cierre/status reflects whether the day has been closed', async () => {
+    const fecha = '2026-02-21';
+
+    const before = await app.inject({
+      method: 'GET',
+      url: `/api/v1/cierre/status?fecha=${fecha}`,
+      headers: authHeader(encargadoToken),
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().data.cerrado).toBe(false);
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha }),
+    });
+    const order = create.json().data;
+
+    const cierre = await app.inject({
+      method: 'POST',
+      url: '/api/v1/cierre',
+      headers: authHeader(encargadoToken),
+      payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
+    });
+    expect(cierre.statusCode).toBe(200);
+
+    const after = await app.inject({
+      method: 'GET',
+      url: `/api/v1/cierre/status?fecha=${fecha}`,
+      headers: authHeader(encargadoToken),
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().data.cerrado).toBe(true);
+    expect(after.json().data.closedAt).not.toBeNull();
+  });
+
+  it('once a day is closed, its orders are frozen — even one left "dejar_activo" (not locked) can no longer be created, edited, or moved', async () => {
+    const fecha = '2026-02-22';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha }),
+    });
+    const order = create.json().data;
+
+    const cierre = await app.inject({
+      method: 'POST',
+      url: '/api/v1/cierre',
+      headers: authHeader(encargadoToken),
+      payload: { fecha, decisions: { [order.id]: 'dejar_activo' } },
+    });
+    expect(cierre.statusCode).toBe(200);
+
+    // Left deliberately open, not locked — this is exactly the case a plain
+    // `existing.locked` check would let through.
+    const stillOpen = await app.prisma.order.findUnique({ where: { id: order.id } });
+    expect(stillOpen!.locked).toBe(false);
+
+    const editAttempt = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/orders/${order.id}`,
+      headers: authHeader(encargadoToken),
+      payload: { address: 'Nueva dirección después de cerrado' },
+    });
+    expect(editAttempt.statusCode).toBe(409);
+    expect(editAttempt.json().code).toBe('DAY_CLOSED');
+
+    const statusAttempt = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/orders/${order.id}/status`,
+      headers: authHeader(encargadoToken),
+      payload: { status: 'preparando' },
+    });
+    expect(statusAttempt.statusCode).toBe(409);
+    expect(statusAttempt.json().code).toBe('DAY_CLOSED');
+
+    const createAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha }),
+    });
+    expect(createAttempt.statusCode).toBe(409);
+    expect(createAttempt.json().code).toBe('DAY_CLOSED');
+  });
 });

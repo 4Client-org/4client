@@ -6,6 +6,7 @@ import {
 import { useAuthStore } from '../store/auth';
 import { useOrders } from '../hooks/useOrders';
 import { useDashboard } from '../hooks/useDashboard';
+import { useDiaCerrado } from '../hooks/useCierre';
 import { api } from '../lib/api';
 import { todayStr } from '../lib/format';
 import { getSocket, disconnectSocket } from '../lib/socket';
@@ -48,6 +49,8 @@ export default function MainPage() {
 
   const { data: orders = [], isLoading: loadingOrders } = useOrders(fecha);
   const { data: dashboard } = useDashboard(fecha);
+  const { data: cierreStatus } = useDiaCerrado(fecha);
+  const diaCerrado = cierreStatus?.cerrado ?? false;
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['tickets', fecha],
@@ -124,6 +127,7 @@ export default function MainPage() {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['cierre-status'] });
     };
 
     socket.on('ticket:message', onTicketMessage);
@@ -254,6 +258,7 @@ export default function MainPage() {
               tickets={tickets}
               orders={orders}
               search={search}
+              diaCerrado={diaCerrado}
               onOpenTicket={(id) => setTicketId(id)}
               onCreateFromTicket={handleCreateFromTicket}
             />

@@ -7,6 +7,7 @@ import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
+import { useDiaCerrado } from '../../hooks/useCierre';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL } from '../../lib/format';
 import { toast } from '../ui/Toast';
 import ProductSearch from '../orders/ProductSearch';
@@ -68,6 +69,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     queryKey: ['order', orderId],
     queryFn: () => api.get<{ data: any }>(`/orders/${orderId}`).then((r) => r.data),
   });
+
+  // The order's OWN day, not whatever day the caller happened to be viewing when it
+  // opened this modal — this can be opened from search/notifications too, not just
+  // the board for the currently-selected date.
+  const orderFecha: string | undefined = order?.fecha ? new Date(order.fecha).toISOString().split('T')[0] : undefined;
+  const { data: cierreStatus } = useDiaCerrado(orderFecha);
+  const diaCerrado = cierreStatus?.cerrado ?? false;
 
   const [nombre, setNombre] = useState('');
   const [telefono, setTelefono] = useState('');
@@ -352,6 +360,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   );
 
   const locked = order.locked;
+  // Frozen because its day was closed (regardless of this specific order's own
+  // `locked` flag — even an order left "dejar_activo" at cierre time stops being
+  // editable once that day is history) vs. frozen because it was individually paid
+  // and closed — same read-only effect, different reason, so the "already
+  // paid/closed" info banner below stays tied to `locked` alone, not `readOnly`.
+  const readOnly = locked || diaCerrado;
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
   const recibido = parseFloat(cobroRec) || 0;
   const devolucion = recibido - total;
@@ -468,7 +482,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div>
               <div className="mtit" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Pedido #{order.num}
-                {isDirty && !locked && (
+                {isDirty && !readOnly && (
                   <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--a)' }}>● cambios sin guardar</span>
                 )}
               </div>
@@ -511,7 +525,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {!locked && (
+            {!locked && diaCerrado && (
+              <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Lock size={15} /> Este día ya fue cerrado — vista de solo lectura.
+              </div>
+            )}
+
+            {!readOnly && (
               <>
                 <div className="stit">Mover pedido</div>
                 <div className="movbtns">
@@ -531,24 +551,24 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente</label>
-                <input className="fi2" disabled={locked} value={nombre}
+                <input className="fi2" disabled={readOnly} value={nombre}
                   onChange={(e) => { setNombre(e.target.value); markDirty(); }} />
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
-                <input className="fi2" disabled={locked} value={telefono}
+                <input className="fi2" disabled={readOnly} value={telefono}
                   onChange={(e) => { setTelefono(e.target.value); markDirty(); }} />
               </div>
             </div>
             <div className="fg2">
               <label className="fl2">Dirección</label>
-              <input className="fi2" disabled={locked} value={direccion}
+              <input className="fi2" disabled={readOnly} value={direccion}
                 onChange={(e) => { setDireccion(e.target.value); markDirty(); }} />
             </div>
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Método de pago</label>
-                <select className="fi2" disabled={locked} value={pago}
+                <select className="fi2" disabled={readOnly} value={pago}
                   onChange={(e) => { setPago(e.target.value); markDirty(); }}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
@@ -558,7 +578,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
               <div className="fg2">
                 <label className="fl2">Domiciliario</label>
-                <select className="fi2" disabled={locked} value={empleadoId}
+                <select className="fi2" disabled={readOnly} value={empleadoId}
                   onChange={(e) => { setEmpleadoId(e.target.value); markDirty(); }}>
                   <option value="">Sin asignar</option>
                   {employees.map((emp: any) => (
@@ -572,7 +592,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <ProductSearch
               products={products}
               items={items}
-              locked={locked}
+              locked={readOnly}
               onChange={(it) => { setItems(it); markDirty(); }}
               onLocalDirty={setCatalogDirty}
               clearKey={catalogClearKey}
@@ -597,7 +617,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             )}
 
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
-              {!locked && canManage && order.status !== 'papelera' && (
+              {!readOnly && canManage && order.status !== 'papelera' && (
                 <button className="bdel"
                   onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
                   disabled={papeleraMut.isPending}
@@ -605,7 +625,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   <Trash2 size={13} /> Papelera
                 </button>
               )}
-              {!locked && (
+              {!readOnly && (
                 <button className="bpri"
                   onClick={() => {
                     if (items.length === 0) { toast('El pedido debe tener al menos un producto', true); return; }
