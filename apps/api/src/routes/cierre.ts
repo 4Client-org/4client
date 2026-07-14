@@ -3,6 +3,22 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 export default async function cierreRoutes(fastify: FastifyInstance) {
+  // GET /api/v1/cierre/status?fecha=2026-06-15 — any authenticated role (encargado
+  // included, unlike GET /dashboard which is admin-only) so the board can freeze a
+  // past closed day into a read-only snapshot regardless of who's viewing it.
+  fastify.get('/status', { preHandler: [authenticate] }, async (req, reply) => {
+    const query = z.object({ fecha: z.string() }).safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'fecha requerida', code: 'VALIDATION_ERROR' });
+
+    const fecha = new Date(query.data.fecha);
+    const dailyClose = await fastify.prisma.dailyClose.findUnique({
+      where: { org_id_fecha: { org_id: req.user.orgId, fecha } },
+      select: { closed_at: true },
+    });
+
+    return reply.send({ data: { cerrado: !!dailyClose, closedAt: dailyClose?.closed_at ?? null } });
+  });
+
   // POST /api/v1/cierre — admin y encargado
   fastify.post('/', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const body = z.object({

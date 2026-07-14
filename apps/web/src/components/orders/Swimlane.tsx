@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle } from 'lucide-react';
+import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock } from 'lucide-react';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr } from '../../lib/format';
 import { useMoveOrder } from '../../hooks/useOrders';
 import { toast } from '../ui/Toast';
@@ -26,6 +26,7 @@ interface Props {
   tickets: Ticket[];
   orders: Order[];
   search: string;
+  diaCerrado: boolean;
   onOpenTicket: (ticketId: string) => void;
   onCreateFromTicket: (ticket: Ticket) => void;
 }
@@ -77,7 +78,7 @@ function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
   return ticketElapsedMins(ticket, ticketOrders) > 20;
 }
 
-export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket, onCreateFromTicket }: Props) {
+export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, onOpenTicket, onCreateFromTicket }: Props) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [cobroDirectId, setCobroDirectId] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
@@ -123,6 +124,7 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
   );
 
   function moveNext(order: Order) {
+    if (diaCerrado) return;
     const idx = STATUS_ORDER.indexOf(order.status);
     if (idx < 0 || idx >= STATUS_ORDER.length - 1) return; // already 'cerrado'
     const nextStatus = STATUS_ORDER[idx + 1];
@@ -144,6 +146,7 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
   }
 
   function movePrev(order: Order) {
+    if (diaCerrado) return;
     const idx = STATUS_ORDER.indexOf(order.status);
     if (idx <= 0) return;
     moveOrder.mutate({ id: order.id, status: STATUS_ORDER[idx - 1] }, {
@@ -159,6 +162,7 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
   function handleDrop(e: React.DragEvent, targetStatus: string, targetTicketId: string | null) {
     e.preventDefault();
     if (!drag.current) return;
+    if (diaCerrado) { toast('Día cerrado — vista de solo lectura', true); drag.current = null; return; }
     if (drag.current.ticketId !== targetTicketId) {
       toast('Solo puedes mover el pedido dentro de la fila de este cliente', true);
       drag.current = null;
@@ -218,18 +222,23 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
     // Arrived: viewing the day it's actually on now (its real, current fecha) — fully
     // active/interactive, just flagged with a badge noting it came from a deferral.
     const isDeferred = !!sourceFecha && ordFecha !== null && ordFecha === fecha;
+    // Once cierre ran for this day, the whole board becomes a read-only snapshot —
+    // every card on it freezes (not just the specific order that got deferred away),
+    // so a "dejar_activo" order left open at close time doesn't stay silently
+    // draggable/editable forever on a day that's supposed to be closed history.
+    const frozen = diaCerrado || isGhost;
 
     return (
       <div
         className="dc-card"
         style={{
           borderLeftColor: COL_COLORS[ord.status],
-          cursor: (ord.locked || isGhost) ? 'default' : 'grab',
-          opacity: isGhost ? 0.72 : 1,
+          cursor: (ord.locked || frozen) ? 'default' : 'grab',
+          opacity: frozen ? 0.72 : 1,
           ...(urg ? { background: '#FFF5F5', borderColor: '#FECACA' } : {}),
         }}
-        draggable={!ord.locked && !isGhost}
-        onDragStart={(e) => !isGhost && handleDragStart(e, ord, ticketId)}
+        draggable={!ord.locked && !frozen}
+        onDragStart={(e) => !frozen && handleDragStart(e, ord, ticketId)}
         onClick={() => setDetailId(ord.id)}
       >
         {(isGhost || isDeferred) && (
@@ -282,7 +291,7 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
-            disabled={ord.locked || STATUS_ORDER.indexOf(ord.status) === 0}
+            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0}
             onClick={(e) => { e.stopPropagation(); movePrev(ord); }}>
             <ChevronLeft size={14} />
           </button>
@@ -290,7 +299,7 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
             <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />Ver
           </button>
           <button className="dc-btn" title={ord.status === 'entregado' ? 'Cerrar pedido' : 'Avanzar'}
-            disabled={ord.locked || ord.status === 'cerrado'}
+            disabled={ord.locked || frozen || ord.status === 'cerrado'}
             onClick={(e) => { e.stopPropagation(); moveNext(ord); }}>
             <ChevronRight size={14} />
           </button>
@@ -327,6 +336,18 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
               );
             })}
           </div>
+        </div>
+      )}
+
+      {diaCerrado && (
+        <div style={{
+          background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)',
+          padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <Lock size={16} color="var(--gt)" />
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--gt)' }}>
+            Día cerrado — vista de solo lectura, nada se puede mover ni modificar.
+          </span>
         </div>
       )}
 
@@ -410,10 +431,12 @@ export default function Swimlane({ fecha, tickets, orders, search, onOpenTicket,
                     onClick={(e) => { e.stopPropagation(); onOpenTicket(ticket.id); }}>
                     Ver conversación <ChevronRight size={12} strokeWidth={2.5} />
                   </button>
-                  <button className="tk-crear-btn"
-                    onClick={(e) => { e.stopPropagation(); onCreateFromTicket(ticket); }}>
-                    <Plus size={11} strokeWidth={3} /> Crear pedido de despacho
-                  </button>
+                  {!diaCerrado && (
+                    <button className="tk-crear-btn"
+                      onClick={(e) => { e.stopPropagation(); onCreateFromTicket(ticket); }}>
+                      <Plus size={11} strokeWidth={3} /> Crear pedido de despacho
+                    </button>
+                  )}
                 </div>
 
                 {STATUS_ORDER.map((s) => {
