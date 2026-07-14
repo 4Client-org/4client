@@ -38,14 +38,28 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
   const completados = nonPapelera.filter((o) => o.paid || o.status === 'cerrado');
   const pendingOrders = nonPapelera.filter((o) => !o.paid && o.status !== 'cerrado');
 
-  // Tickets que requieren decisión: sin pedidos del día actual, con pedidos aún sin
-  // cerrar (mostrados indentados abajo para ubicarlos rápido), o con mensajes sin leer.
-  const pendingTickets = tickets.filter((t: any) => {
+  // A pending order tied to a chat drives its ticket's fate on its own — cierre.ts
+  // already sets ticket.deferred_to when that order's decision is "manana" — so there's
+  // no separate ticket-level decision to make for these; showing both was two decisions
+  // for what's really one action. Group them: chat header, its pending order(s) indented
+  // underneath with their normal per-order decision selects.
+  const pendingOrdersWithTicket = pendingOrders.filter((o) => o.ticket_id);
+  const pendingOrdersNoTicket = pendingOrders.filter((o) => !o.ticket_id);
+  const groupedTicketIds = new Set(pendingOrdersWithTicket.map((o) => o.ticket_id));
+  const ticketGroups = Array.from(groupedTicketIds).map((ticketId) => ({
+    ticketId,
+    ticketInfo: tickets.find((t: any) => t.id === ticketId),
+    orders: pendingOrdersWithTicket.filter((o) => o.ticket_id === ticketId),
+  }));
+
+  // Chats that still need their OWN decision — nothing pending to hang it on (already
+  // shown grouped above), just no order at all or unread messages to acknowledge.
+  const ticketOnlyRows = tickets.filter((t: any) => {
     if (t.deferred_to) return false; // ya fue diferido antes, no mostrar de nuevo
+    if (groupedTicketIds.has(t.id)) return false; // ya se muestra arriba con su pedido
     const hasNoOrders = !t.orders || t.orders.length === 0;
-    const hasPendingOrder = (t.orders ?? []).some((o: any) => !o.paid && o.status !== 'cerrado');
     const hasUnread = t.unread_count > 0;
-    return hasNoOrders || hasPendingOrder || hasUnread;
+    return hasNoOrders || hasUnread;
   });
 
   // No defaults — user must explicitly choose for each pending order
@@ -53,7 +67,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
     Object.fromEntries(pendingOrders.map((o) => [o.id, '' as Decision | '']))
   );
   const [ticketDecisions, setTicketDecisions] = useState<Record<string, TicketDecision | ''>>(() =>
-    Object.fromEntries(pendingTickets.map((t: any) => [t.id, '' as TicketDecision | '']))
+    Object.fromEntries(ticketOnlyRows.map((t: any) => [t.id, '' as TicketDecision | '']))
   );
 
   const totalEfectivo = completados
@@ -65,7 +79,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
 
   const allDecided =
     pendingOrders.every((o) => decisions[o.id]) &&
-    pendingTickets.every((t: any) => ticketDecisions[t.id]);
+    ticketOnlyRows.every((t: any) => ticketDecisions[t.id]);
 
   const cierreMut = useMutation({
     mutationFn: () => api.post('/cierre', {
@@ -77,6 +91,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['cierre-status'] });
       toast('Caja cerrada correctamente');
       onClose();
     },
@@ -193,11 +208,11 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
             </div>
           )}
 
-          {pendingOrders.length > 0 ? (
+          {(ticketGroups.length > 0 || ticketOnlyRows.length > 0 || pendingOrdersNoTicket.length > 0) ? (
             <div className="cierre-sect">
               <div className="cierre-stit" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <AlertTriangle size={13} color="var(--a)" />
-                Pedidos pendientes - decide qué hacer ({pendingOrders.length})
+                Pedidos y chats pendientes - decide qué hacer ({pendingOrders.length + ticketOnlyRows.length})
                 <button
                   className="bsec"
                   style={{ marginLeft: 'auto', fontSize: 11, padding: '4px 10px', whiteSpace: 'nowrap' }}
@@ -215,7 +230,81 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
                   <AlertTriangle size={13} /> {pendingSinDecision} pedido{pendingSinDecision !== 1 ? 's' : ''} sin decisión
                 </div>
               )}
-              {pendingOrders.map((o) => {
+
+              {/* Chat + su(s) pedido(s) pendiente(s) indentados debajo — una sola decisión
+                  (la del pedido) mueve ambos, cierre.ts ya difiere el ticket junto con él. */}
+              {ticketGroups.map(({ ticketId, ticketInfo, orders: tOrders }) => (
+                <div key={ticketId} className="warn-ord" style={{ flexDirection: 'column', alignItems: 'stretch', borderLeft: '3px solid var(--az)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <MessageSquare size={13} color="var(--az)" />
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      {ticketInfo?.customer_name ?? tOrders[0].customer_name} - {ticketInfo?.phone ?? tOrders[0].customer_phone ?? ''}
+                    </div>
+                    {ticketInfo?.unread_count > 0 && (
+                      <span style={{ color: 'var(--az)', fontWeight: 700, fontSize: 12 }}>{ticketInfo.unread_count} sin leer</span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: '2px solid var(--brd)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {tOrders.map((o) => {
+                      const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
+                      const hasDecision = !!decisions[o.id];
+                      return (
+                        <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13 }}>#{o.num}</div>
+                            <div style={{ fontSize: 12, color: 'var(--gt)' }}>
+                              {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(total)}
+                            </div>
+                          </div>
+                          <select
+                            className="warn-sel"
+                            value={decisions[o.id] ?? ''}
+                            onChange={(e) => setDecisions({ ...decisions, [o.id]: e.target.value as Decision | '' })}
+                            style={{ borderColor: hasDecision ? 'var(--v)' : 'var(--a)' }}
+                          >
+                            <option value="" disabled>— Elegir acción —</option>
+                            <option value="dejar_activo">Dejar activo (sin cambios)</option>
+                            <option value="manana">Pasar a mañana</option>
+                            <option value="forzar_cierre">Cerrar sin cobro</option>
+                            <option value="cancelar">Enviar a papelera</option>
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {/* Chats sin pedido pendiente que igual necesitan una decisión propia
+                  (sin pedido, o con mensajes sin leer) */}
+              {ticketOnlyRows.map((t: any) => {
+                const hasDecision = !!ticketDecisions[t.id];
+                const hasNoOrders = !t.orders || t.orders.length === 0;
+                return (
+                  <div key={t.id} className="warn-ord" style={{ borderLeft: hasDecision ? '3px solid var(--v)' : '3px solid var(--az)' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700 }}>{t.customer_name} - {t.phone}</div>
+                      <div style={{ fontSize: 12, color: 'var(--gt)' }}>
+                        {hasNoOrders ? 'Sin pedido' : 'Pedidos completados'}
+                        {t.unread_count > 0 && <span style={{ marginLeft: 8, color: 'var(--az)', fontWeight: 700 }}>{t.unread_count} sin leer</span>}
+                      </div>
+                    </div>
+                    <select
+                      className="warn-sel"
+                      value={ticketDecisions[t.id] ?? ''}
+                      onChange={(e) => setTicketDecisions({ ...ticketDecisions, [t.id]: e.target.value as TicketDecision | '' })}
+                      style={{ borderColor: hasDecision ? 'var(--v)' : 'var(--az)' }}
+                    >
+                      <option value="" disabled>— Elegir acción —</option>
+                      <option value="manana">Pasar a mañana</option>
+                      <option value="atendido">Marcar como atendido</option>
+                    </select>
+                  </div>
+                );
+              })}
+
+              {/* Pedidos sin chat asociado (llamada/en persona) — no hay ticket bajo el cual agrupar */}
+              {pendingOrdersNoTicket.map((o) => {
                 const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
                 const hasDecision = !!decisions[o.id];
                 return (
@@ -244,61 +333,11 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
             </div>
           ) : (
             <div style={{ background: 'var(--vc)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: 'var(--vd)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CheckCircle size={15} /> Todos los pedidos están cerrados o cobrados.
+              <CheckCircle size={15} /> Todos los pedidos y chats están resueltos.
             </div>
           )}
 
-          {pendingTickets.length > 0 && (
-            <div className="cierre-sect">
-              <div className="cierre-stit" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <MessageSquare size={13} color="var(--az)" />
-                Chats sin resolver - decide qué hacer ({pendingTickets.length})
-              </div>
-              {pendingTickets.map((t: any) => {
-                const hasDecision = !!ticketDecisions[t.id];
-                const hasNoOrders = !t.orders || t.orders.length === 0;
-                const ticketPendingOrders = (t.orders ?? []).filter((o: any) => !o.paid && o.status !== 'cerrado');
-                return (
-                  <div key={t.id} className="warn-ord" style={{ flexDirection: 'column', alignItems: 'stretch', borderLeft: hasDecision ? '3px solid var(--v)' : '3px solid var(--az)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700 }}>{t.customer_name} - {t.phone}</div>
-                        <div style={{ fontSize: 12, color: 'var(--gt)' }}>
-                          {hasNoOrders
-                            ? 'Sin pedido'
-                            : ticketPendingOrders.length > 0
-                              ? `${ticketPendingOrders.length} pedido(s) pendiente(s)`
-                              : 'Pedidos completados'}
-                          {t.unread_count > 0 && <span style={{ marginLeft: 8, color: 'var(--az)', fontWeight: 700 }}>{t.unread_count} sin leer</span>}
-                        </div>
-                      </div>
-                      <select
-                        className="warn-sel"
-                        value={ticketDecisions[t.id] ?? ''}
-                        onChange={(e) => setTicketDecisions({ ...ticketDecisions, [t.id]: e.target.value as TicketDecision | '' })}
-                        style={{ borderColor: hasDecision ? 'var(--v)' : 'var(--az)' }}
-                      >
-                        <option value="" disabled>— Elegir acción —</option>
-                        <option value="manana">Pasar a mañana</option>
-                        <option value="atendido">Marcar como atendido</option>
-                      </select>
-                    </div>
-                    {ticketPendingOrders.length > 0 && (
-                      <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: '2px solid var(--brd)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {ticketPendingOrders.map((o: any) => (
-                          <div key={o.id} style={{ fontSize: 12, color: 'var(--gt)' }}>
-                            #{o.num} · {STATUS_LABEL[o.status] ?? o.status}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {!allDecided && (pendingOrders.length > 0 || pendingTickets.length > 0) && (
+          {!allDecided && (pendingOrders.length > 0 || ticketOnlyRows.length > 0) && (
             <div style={{ background: 'var(--ac)', border: '1px solid var(--a)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 14, fontSize: 13, color: 'var(--a)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
               <AlertTriangle size={14} /> Decide la acción de cada pedido y chat pendiente para poder cerrar o descargar el informe.
             </div>

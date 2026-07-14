@@ -92,6 +92,15 @@ function orderValidationMessage(error: z.ZodError): string {
   return 'Revisa: ' + parts.join(', ');
 }
 
+// A day with a DailyClose row is a frozen, closed-out snapshot — cierre.ts already
+// forced a decision on every order that was open when it ran, so nothing on that day
+// should change afterward, no matter which specific decision an order got (even
+// "dejar_activo", deliberately left as-is at the time). Mirrors the `existing.locked`
+// check already on these routes, just scoped to the whole day instead of one order.
+async function findDayClose(prisma: PrismaClient, orgId: string, fecha: Date) {
+  return prisma.dailyClose.findUnique({ where: { org_id_fecha: { org_id: orgId, fecha } } });
+}
+
 function buildOrderSelect(includeHistory = false) {
   return {
     id: true, org_id: true, ticket_id: true, num: true,
@@ -150,6 +159,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const todayUTC = new Date().toISOString().split('T')[0];
     const fechaDate = new Date(fecha ?? todayUTC);
 
+    if (await findDayClose(fastify.prisma, req.user.orgId, fechaDate)) {
+      return reply.status(409).send({ error: 'Ese día ya fue cerrado — no se pueden crear pedidos en él', code: 'DAY_CLOSED' });
+    }
+
     const order = await createOrderWithRetryNum(fastify.prisma, req.user.orgId, fechaDate, (num) =>
       fastify.prisma.order.create({
         data: {
@@ -205,6 +218,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
     if (existing.locked) return reply.status(409).send({ error: 'Pedido bloqueado', code: 'ORDER_LOCKED' });
+    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
+      return reply.status(409).send({ error: 'Ese día ya fue cerrado — el pedido quedó congelado', code: 'DAY_CLOSED' });
+    }
 
     const { items, ...fields } = body.data;
     const historyEntries: any[] = [];
@@ -313,6 +329,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
     if (existing.locked) return reply.status(409).send({ error: 'Pedido bloqueado', code: 'ORDER_LOCKED' });
+    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
+      return reply.status(409).send({ error: 'Ese día ya fue cerrado — el pedido quedó congelado', code: 'DAY_CLOSED' });
+    }
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
       const order = await tx.order.update({
@@ -358,6 +377,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
     if (existing.locked) return reply.status(409).send({ error: 'Pedido ya cobrado', code: 'ORDER_LOCKED' });
+    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
+      return reply.status(409).send({ error: 'Ese día ya fue cerrado — el pedido quedó congelado', code: 'DAY_CLOSED' });
+    }
 
     // A pedido must be fully filled in before it can be closed — required so orders
     // created from the client form (which starts with a placeholder address, no
