@@ -195,4 +195,17 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     return reply.send({ data: { ok: true } });
   });
+
+  // POST /api/v1/inbox/form-links/block-all - org-wide kill switch, admin only.
+  // Instantly invalidates every currently-outstanding form link across every ticket
+  // in the org (e.g. the store closes early one day) - no need to revoke one ticket
+  // at a time. A fresh link issued AFTER this moment works normally again; this
+  // isn't a permanent shutdown, just "everything sent out as of right now is dead."
+  fastify.post('/form-links/block-all', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    await fastify.prisma.organization.update({
+      where: { id: req.user.orgId },
+      data: { form_links_blocked_at: new Date() },
+    });
+    return reply.send({ data: { ok: true } });
+  });
 }

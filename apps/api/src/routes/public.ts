@@ -106,27 +106,38 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   }
 
   // Checked separately from JWT verification (which only proves the token is
-  // well-formed and unexpired) - two ways a structurally-valid token can still be
-  // dead: (1) explicitly revoked via POST /inbox/:ticketId/form-link/revoke, or
-  // (2) superseded - staff sent a NEWER link for this same ticket since this one was
+  // well-formed and unexpired) - three ways a structurally-valid token can still be
+  // dead: (1) explicitly revoked via POST /inbox/:ticketId/form-link/revoke, (2)
+  // superseded - staff sent a NEWER link for this same ticket since this one was
   // issued (inbox.ts's GET /form-link stamps `form_token_min_iat` every time it
   // mints a token), so this older one is silently retired without needing a
-  // separate manual revoke. Both fail the same generic way on every public
-  // endpoint below - never reveals which of the two it was.
+  // separate manual revoke, or (3) org-wide blocked - admin hit "Bloquear todos los
+  // links" (POST /inbox/form-links/block-all), which stamps Organization.
+  // form_links_blocked_at the exact same way, just scoped to every ticket in the
+  // org at once instead of one. All three fail the same generic way on every public
+  // endpoint below - never reveals which of them it was.
   async function assertLinkStillValid(ticketId: string, tokenIat: number | undefined): Promise<void> {
     const ticket = await fastify.prisma.ticket.findUnique({
       where: { id: ticketId },
-      select: { form_token_min_iat: true, revoked_form_token: { select: { id: true } } },
+      select: {
+        form_token_min_iat: true,
+        revoked_form_token: { select: { id: true } },
+        org: { select: { form_links_blocked_at: true } },
+      },
     });
     if (!ticket) throw new Error('ticket not found');
     if (ticket.revoked_form_token) throw new Error('revoked');
+    // Whole-second resolution on both sides - `iat` is JWT-standard seconds-since-
+    // epoch, but the stamped column is millisecond precision, so comparing raw ms
+    // would make a token superseded by the very same issuance that minted it (its
+    // `iat` always floors to <= that instant).
     if (ticket.form_token_min_iat) {
-      // Compare at whole-second resolution on both sides - `iat` is JWT-standard
-      // seconds-since-epoch, but form_token_min_iat is stored with millisecond
-      // precision, so comparing raw ms would make a token superseded by the very
-      // same issuance that minted it (its `iat` always floors to <= that instant).
       const minIatSec = Math.floor(ticket.form_token_min_iat.getTime() / 1000);
       if (!tokenIat || tokenIat < minIatSec) throw new Error('superseded');
+    }
+    if (ticket.org.form_links_blocked_at) {
+      const blockedAtSec = Math.floor(ticket.org.form_links_blocked_at.getTime() / 1000);
+      if (!tokenIat || tokenIat < blockedAtSec) throw new Error('org blocked');
     }
   }
 

@@ -520,4 +520,71 @@ describe('public form routes', () => {
     expect(blocked.statusCode).toBe(429);
     expect(blocked.json().code).toBe('FORM_LIMIT_REACHED');
   });
+
+  describe('POST /inbox/form-links/block-all - org-wide kill switch', () => {
+    it('requires admin - encargado forbidden, no auth rejected', async () => {
+      const ENCARGADO_PASS = 'BlockAllEncargado1!';
+      const encargado = await createTestUser(app.prisma, orgId, 'encargado', ENCARGADO_PASS, {
+        email: `blockall-encargado-${Date.now()}@example.com`,
+      });
+      const encargadoToken = await login(app, encargado.email, ENCARGADO_PASS);
+
+      const forbidden = await app.inject({
+        method: 'POST',
+        url: '/api/v1/inbox/form-links/block-all',
+        headers: { authorization: `Bearer ${encargadoToken}` },
+      });
+      expect(forbidden.statusCode).toBe(403);
+      expect(forbidden.json().code).toBe('FORBIDDEN');
+
+      const noAuth = await app.inject({ method: 'POST', url: '/api/v1/inbox/form-links/block-all' });
+      expect(noAuth.statusCode).toBe(401);
+    });
+
+    it('blocks every outstanding link across every ticket in the org at once, and a link issued afterward still works', async () => {
+      const phoneA = '573001112211';
+      const phoneB = '573001112222';
+      const ticketA = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneA, customer_name: 'Cliente Block A' } });
+      const ticketB = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneB, customer_name: 'Cliente Block B' } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sign = (ticketId: string, orgName: string, clientName: string, clientPhone: string) => (app.jwt.sign as any)(
+        { type: 'form_link', ticketId, orgId, clientName, clientPhone, orgName },
+        { expiresIn: '7d' },
+      );
+      const tokenA = sign(ticketA.id, 'org', 'Cliente Block A', phoneA);
+      const tokenB = sign(ticketB.id, 'org', 'Cliente Block B', phoneB);
+
+      const aWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenA}&device_token=block-a` });
+      expect(aWorks.statusCode).toBe(200);
+      const bWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenB}&device_token=block-b` });
+      expect(bWorks.statusCode).toBe(200);
+
+      // Past the second boundary so the block timestamp is genuinely later than
+      // either token's `iat` (whole-second comparison, same reasoning as the
+      // supersede test above).
+      await new Promise(r => setTimeout(r, 1100));
+
+      const block = await app.inject({
+        method: 'POST',
+        url: '/api/v1/inbox/form-links/block-all',
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(block.statusCode).toBe(200);
+
+      const aBlocked = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenA}&device_token=block-a` });
+      expect(aBlocked.statusCode).toBe(401);
+      const bBlocked = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenB}&device_token=block-b` });
+      expect(bBlocked.statusCode).toBe(401);
+
+      await new Promise(r => setTimeout(r, 1100));
+      const freshToken = sign(ticketA.id, 'org', 'Cliente Block A', phoneA);
+      // Same device_token as before - ticketA's FormLinkSession is still claimed by
+      // "block-a" (only inbox.ts's real GET /form-link clears it on a fresh send,
+      // which this test bypasses by signing the JWT directly); a different
+      // device_token here would 401 on the device-lock check, not proving anything
+      // about the org-block feature this test is actually about.
+      const freshWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=block-a` });
+      expect(freshWorks.statusCode).toBe(200);
+    });
+  });
 });
