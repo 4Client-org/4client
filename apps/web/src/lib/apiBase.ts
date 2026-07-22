@@ -22,3 +22,13 @@ export function resolveApiBase(): string {
   if (host.startsWith('dev.') && host.endsWith('.pages.dev')) return DEV_API;
   return PROD_API;
 }
+
+// Same signal as above, exposed separately so the UI can show an unmissable "DEV"
+// banner - staff switching between the real app and the dev copy have no other
+// visual cue they're different (same logo, same everything) short of reading the
+// URL bar closely, which is exactly the kind of thing that's easy to miss mid-shift.
+export function isDevEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || (host.startsWith('dev.') && host.endsWith('.pages.dev'));
+}

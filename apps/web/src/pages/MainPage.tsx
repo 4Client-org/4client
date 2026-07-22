@@ -10,6 +10,7 @@ import { useDiaCerrado } from '../hooks/useCierre';
 import { api } from '../lib/api';
 import { todayStr } from '../lib/format';
 import { getSocket, disconnectSocket } from '../lib/socket';
+import { isDevEnvironment } from '../lib/apiBase';
 import { useIdleLogout } from '../hooks/useIdleLogout';
 import { useQueryClient } from '@tanstack/react-query';
 import Swimlane from '../components/orders/Swimlane';
@@ -174,6 +175,15 @@ export default function MainPage() {
             <div className="hlogo">
               <img src="/icon.png" alt="4Client" style={{ height: 34, objectFit: 'contain' }} />
             </div>
+            {isDevEnvironment() && (
+              <div style={{
+                background: '#DC2626', color: '#fff', fontWeight: 900, fontSize: 15,
+                padding: '4px 14px', borderRadius: 8, letterSpacing: '1px',
+                display: 'flex', alignItems: 'center', flexShrink: 0,
+              }}>
+                DEV
+              </div>
+            )}
             <div className="tabs">
               <button className={`tab${tab === 'swimlane' ? ' on' : ''}`} onClick={() => setTab('swimlane')}>
                 <ClipboardList size={15} /> Tickets & Pedidos

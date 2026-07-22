@@ -377,7 +377,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       const url = res.url;
       const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
       const orgName = user?.orgName ?? '4Client';
-      const msg = `Factura Pedido #${order.num} - ${orgName}\nCliente: ${order.customer_name}\nTotal: $${total.toLocaleString('es-CO')}\nVisualiza tu factura: ${url}`;
+      const msg = `Factura Pedido #${order.num} - ${orgName}\nFecha: ${formatFechaLong(order.fecha)}\nCliente: ${order.customer_name}\nTotal: $${total.toLocaleString('es-CO')}\nVisualiza tu factura: ${url}`;
       invoiceMut.mutate(msg);
     } catch {
       toast('Error al subir la factura', true);
@@ -389,6 +389,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
     const lines = [
       `Pedido #${order.num} - ${user?.orgName ?? '4Client'}`,
+      `Fecha: ${formatFechaLong(order.fecha)}`,
       `Cliente: ${order.customer_name}`,
       ...(order.customer_phone ? [`Teléfono: ${order.customer_phone}`] : []),
       `Dirección: ${order.address}`,
