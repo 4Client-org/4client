@@ -242,7 +242,7 @@ export default function MainPage() {
         </div>
       )}
 
-      <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ''}`}>
+      <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ' wm'}`}>
         {tab === 'swimlane' && (
           <>
             <div className="khead">
