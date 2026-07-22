@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { useAuthStore } from '../store/auth';
 import PasswordInput from '../components/ui/PasswordInput';
+import { isDevEnvironment } from '../lib/apiBase';
 
 export default function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -39,6 +40,15 @@ export default function LoginPage() {
     <div className="lbg">
       <div className="lbg-overlay" />
       <div className="lcard">
+        {isDevEnvironment() && (
+          <div style={{
+            background: '#DC2626', color: '#fff', fontWeight: 900, fontSize: 20,
+            padding: '8px 0', borderRadius: 10, letterSpacing: '2px',
+            textAlign: 'center', marginBottom: 14,
+          }}>
+            DEV
+          </div>
+        )}
         <div className="llogo">
           <img src="/logo.png" alt="4Client" style={{ height: 120, objectFit: 'contain' }} />
         </div>
