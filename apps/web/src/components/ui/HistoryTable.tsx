@@ -16,6 +16,13 @@ function fmtHistVal(v: string | null | undefined): string {
   return HIST_VAL_MAP[v] ?? v;
 }
 
+// Every history entry the client made through the public form has this substring
+// in its notes (see orders.ts and public.ts) - a reliable signal that actor_id
+// records the staff member who SENT the link, not who made the actual change.
+function isFromClient(h: any): boolean {
+  return typeof h.notes === 'string' && h.notes.includes('formulario');
+}
+
 const th: CSSProperties = {
   textAlign: 'left', padding: '7px 10px', fontWeight: 800, color: 'var(--gt)',
   fontSize: 10, textTransform: 'uppercase', letterSpacing: '.4px',
@@ -67,8 +74,14 @@ export default function HistoryTable({ history, showOrder }: Props) {
                     <div style={{ fontSize: 11, color: 'var(--gt)', fontWeight: 400 }}>{h.order?.customer_name ?? ''}</div>
                   </td>
                 )}
-                <td style={{ ...td, fontWeight: 700, color: 'var(--n)' }}>
-                  {h.actor?.name ?? 'Sistema'}
+                <td style={{ ...td, fontWeight: 700, color: isFromClient(h) ? 'var(--r)' : 'var(--n)' }}>
+                  {/* actor_id is really "whoever sent the client this form link" - it's
+                      never the client themselves (clients have no User account), so
+                      showing that staff member's name here as if THEY typed the
+                      change reads as misleading. The notes already say "vía
+                      formulario... enviado por X"; this just makes the primary
+                      column say who actually made the change. */}
+                  {isFromClient(h) ? 'Cliente' : (h.actor?.name ?? 'Sistema')}
                 </td>
                 <td style={{
                   ...td, fontWeight: 600,
