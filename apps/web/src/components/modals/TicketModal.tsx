@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRef, useEffect, useState, KeyboardEvent } from 'react';
 import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban } from 'lucide-react';
 import { api } from '../../lib/api';
+import { buildFormLinkMessage } from '../../lib/formLinkMessage';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { fmtCOP, STATUS_LABEL, todayStr } from '../../lib/format';
@@ -105,7 +106,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   async function sendFormLink() {
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-      formLinkMut.mutate(res.data.url);
+      formLinkMut.mutate(buildFormLinkMessage(res.data.url));
     } catch {
       toast('No se pudo generar el link', true);
     }

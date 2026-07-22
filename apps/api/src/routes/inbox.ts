@@ -119,13 +119,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.get('/:ticketId/form-link', { preHandler: [authenticate] }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
 
-    const ticket = await fastify.prisma.ticket.findFirst({
-      where: { id: ticketId, org_id: req.user.orgId },
-      include: { org: { select: { name: true, slug: true } } },
-    });
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
-
-    const sender = await fastify.prisma.user.findUnique({ where: { id: req.user.userId }, select: { name: true } });
 
     // Expires at the end of the current Colombia calendar day (UTC-5), not a flat N
     // days from now - a link generated at 11pm and one generated at 8am must both die
@@ -152,11 +147,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         iat: issuedAtSec,
         ticketId: ticket.id,
         orgId: req.user.orgId,
-        clientName: ticket.customer_name,
-        clientPhone: ticket.phone,
-        orgName: ticket.org.name,
         sentByUserId: req.user.userId,
-        sentByName: sender?.name ?? null,
       },
       { expiresIn: expiresInSeconds },
     ) as string;
@@ -173,7 +164,16 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticket.id } });
 
     const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
-    const url = `${frontendUrl}/form?t=${token}`;
+    // Percent-encode underscores - base64url tokens routinely contain them, and
+    // WhatsApp's renderer treats a pair of underscores as italic-markdown delimiters.
+    // An odd one anywhere in the URL leaves WhatsApp "waiting for a closing
+    // underscore", which silently truncates how much of the link is actually
+    // tappable (matches the exact issue files.ts's invoice filenames hit before -
+    // this is the same fix, applied to the query string instead of a filename).
+    // %5F round-trips transparently: the browser decodes it back to `_` before the
+    // app ever reads `?t=`, so nothing downstream needs to know this happened.
+    const safeToken = token.replace(/_/g, '%5F');
+    const url = `${frontendUrl}/form?t=${safeToken}`;
     return reply.send({ data: { url } });
   });
 

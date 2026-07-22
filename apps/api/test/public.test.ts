@@ -315,7 +315,11 @@ describe('public form routes', () => {
 
     const decoded = app.jwt.decode(sentToken) as any;
     expect(decoded.sentByUserId).toBe(adminId);
-    expect(decoded.sentByName).toBe(adminName);
+    // clientName/clientPhone/orgName/sentByName used to be embedded here too - now
+    // dropped to keep the token (and the WhatsApp link built from it) shorter; every
+    // route that needs them reads the current value off the ticket/org instead.
+    expect(decoded.clientName).toBeUndefined();
+    expect(decoded.sentByName).toBeUndefined();
     // Bounded well under the old 7-day expiry, and never more than ~24h out.
     const secondsUntilExpiry = decoded.exp - Math.floor(Date.now() / 1000);
     expect(secondsUntilExpiry).toBeGreaterThan(0);

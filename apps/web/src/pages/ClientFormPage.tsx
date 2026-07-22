@@ -729,16 +729,24 @@ export default function ClientFormPage() {
         ))}
       </div>
 
-      {/* Bottom bar */}
-      {selectedCount > 0 && (
-        <div style={{
-          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 20,
-          background: '#fff', borderTop: '2px solid #e0e0e0',
-          padding: '12px 16px',
-          boxShadow: '0 -4px 16px rgba(0,0,0,.08)',
-        }}>
-          {submitError && <div style={{ color: '#DC2626', fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{submitError}</div>}
-          <div style={{ display: 'flex', gap: 10 }}>
+      {/* Bottom bar - stays visible even with zero items (client deleted everything
+          from an order they'd already started) instead of vanishing along with the
+          last item, which left them stuck with no visible way to submit or even see
+          why. Submit just shows disabled + the same red reason instead. */}
+      <div style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 20,
+        background: '#fff', borderTop: '2px solid #e0e0e0',
+        padding: '12px 16px',
+        boxShadow: '0 -4px 16px rgba(0,0,0,.08)',
+      }}>
+        {selectedCount === 0 && (
+          <div style={{ color: '#DC2626', fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
+            Debe haber al menos un producto
+          </div>
+        )}
+        {submitError && <div style={{ color: '#DC2626', fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{submitError}</div>}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {selectedCount > 0 && (
             <button
               onClick={() => summaryRef.current?.scrollIntoView({ behavior: 'smooth' })}
               title="Ver productos agregados"
@@ -750,6 +758,8 @@ export default function ClientFormPage() {
               }}>
               <Check size={14} color={GREEN} /> {selectedCount}
             </button>
+          )}
+          {selectedCount > 0 && (
             <button
               onClick={clearOrder}
               disabled={submitting}
@@ -765,15 +775,15 @@ export default function ClientFormPage() {
               }}>
               <Trash2 size={16} /> Borrar
             </button>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting || !!liveWarning}
-              style={{ ...btnPrimary, flex: 1, opacity: (submitting || liveWarning) ? 0.6 : 1 }}>
-              {submitting ? 'Enviando...' : 'Enviar pedido'}
-            </button>
-          </div>
+          )}
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !!liveWarning || selectedCount === 0}
+            style={{ ...btnPrimary, flex: 1, opacity: (submitting || liveWarning || selectedCount === 0) ? 0.6 : 1 }}>
+            {submitting ? 'Enviando...' : 'Enviar pedido'}
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

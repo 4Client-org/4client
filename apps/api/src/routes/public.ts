@@ -10,13 +10,17 @@ interface FormTokenPayload {
   type: string;
   ticketId: string;
   orgId: string;
-  clientName: string;
-  clientPhone: string;
-  orgName: string;
+  // clientName/clientPhone/orgName/sentByName used to be embedded here too, padding
+  // out the token (and, via WhatsApp's link-preview quirks, sometimes breaking the
+  // very link it's part of - see inbox.ts's /form-link route). Every one of those is
+  // just a snapshot of a DB column the ticketId can already look up fresh - dropped
+  // in favor of always reading current values off `ticket`/`ticket.org`, which is
+  // also strictly more correct (a client whose name got corrected after the link was
+  // sent isn't stuck seeing the old one). Old already-issued tokens still carry these
+  // extra keys - jwt.verify just ignores fields this interface doesn't declare.
   // Optional - older already-issued tokens (before this field existed) won't have it,
   // so every use of it below falls back to an arbitrary active staff member.
   sentByUserId?: string;
-  sentByName?: string;
   // Always present (jsonwebtoken sets it automatically, and inbox.ts's /form-link
   // route now sets it explicitly too) - seconds since epoch this specific token was
   // signed, used to detect a superseded link. See assertLinkStillValid below.
@@ -206,6 +210,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       await assertLinkStillValid(payload.ticketId, payload.iat);
       await assertDeviceOk(payload.ticketId, q.data.device_token);
 
+      const ticketInfo = await fastify.prisma.ticket.findFirst({
+        where: { id: payload.ticketId, org_id: payload.orgId },
+        select: { customer_name: true, org: { select: { name: true } } },
+      });
+      if (!ticketInfo) throw new Error('ticket not found');
+
       // Colombia UTC-5 local date - same "today" the client's own submissions land on.
       const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
 
@@ -226,8 +236,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         data: {
-          clientName: payload.clientName,
-          orgName: payload.orgName,
+          clientName: ticketInfo.customer_name ?? '',
+          orgName: ticketInfo.org.name,
           orgId: payload.orgId,
           orders: todaysOrders.map(o => ({
             id: o.id,
@@ -551,8 +561,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           org_id: payload.orgId,
           ticket_id: ticket.id,
           num,
-          customer_name: payload.clientName,
-          customer_phone: payload.clientPhone,
+          customer_name: ticket.customer_name ?? '',
+          customer_phone: ticket.phone,
           address: body.data.address,
           channel: 'whatsapp',
           payment_method: body.data.payment_method ?? 'sin_asignar',
