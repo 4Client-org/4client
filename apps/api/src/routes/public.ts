@@ -32,6 +32,20 @@ const MAX_FORM_ORDERS_PER_TICKET = 3;
 // used in orders.ts (which says "Efectivo" instead of "En tienda" for `cash`).
 const PAYMENT_LABEL_CLIENT: Record<string, string> = { transfer: 'Transferencia', cash: 'En tienda', cod: 'Cobro en casa' };
 
+// The full date always goes in these WhatsApp confirmations - a staff member
+// resending/checking an order days later (or a client re-reading an old chat) has
+// no other way to tell WHICH day's pedido a message is actually about otherwise.
+// Pinned to noon UTC before formatting (matches DetallePedidoModal.tsx's
+// formatFechaLong) - `fecha` is a DATE-only column serialized as midnight UTC for
+// that calendar day, and converting that through a Bogota (UTC-5) offset directly
+// would read it as 7pm the PREVIOUS day.
+function formatFechaLong(fecha: Date): string {
+  const ymd = fecha.toISOString().split('T')[0];
+  return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('es-CO', {
+    day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Bogota',
+  });
+}
+
 // Form links only work between 4am and 8pm Colombia time (UTC-5, no DST), every day -
 // outside that window an order needs a staff member handling it directly (chat), not
 // self-service via the link (overnight self-service orders showed up unattended for
@@ -477,7 +491,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const updatedPaymentLabel = updated.payment_method && updated.payment_method !== 'sin_asignar'
           ? (PAYMENT_LABEL_CLIENT[updated.payment_method] ?? updated.payment_method)
           : 'Sin especificar';
-        const msgText = `*Tu pedido #${updated.num} fue actualizado*\n${lines.join('\n')}\n\n_Dirección: ${sanitizeForWhatsApp(updated.address)}_\n_Método de pago: ${updatedPaymentLabel}_\n\n_El encargado revisará los cambios._`;
+        const msgText = `*Tu pedido #${updated.num} fue actualizado*\n${lines.join('\n')}\n\n_Fecha: ${formatFechaLong(updated.fecha)}_\n_Dirección: ${sanitizeForWhatsApp(updated.address)}_\n_Método de pago: ${updatedPaymentLabel}_\n\n_El encargado revisará los cambios._`;
 
         const message = await fastify.prisma.ticketMessage.create({
           data: { ticket_id: ticket.id, direction: 'out', text: msgText, sent_at: new Date(), sent_by: actorUser.id },
@@ -563,7 +577,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const paymentLabel = body.data.payment_method
       ? (PAYMENT_LABEL_CLIENT[body.data.payment_method] ?? body.data.payment_method)
       : 'Sin especificar';
-    const msgText = `*Pedido #${num} recibido desde el formulario*\n${lines.join('\n')}\n\n_Dirección: ${sanitizeForWhatsApp(body.data.address)}_\n_Método de pago: ${paymentLabel}_\n\n_El encargado revisará y confirmará el pedido._`;
+    const msgText = `*Pedido #${num} recibido desde el formulario*\n${lines.join('\n')}\n\n_Fecha: ${formatFechaLong(todayLocal)}_\n_Dirección: ${sanitizeForWhatsApp(body.data.address)}_\n_Método de pago: ${paymentLabel}_\n\n_El encargado revisará y confirmará el pedido._`;
 
     const message = await fastify.prisma.ticketMessage.create({
       data: {
