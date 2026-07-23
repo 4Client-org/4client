@@ -29,9 +29,14 @@ jobs:
         run: |
           STAMP=$(date -u +%Y%m%d-%H%M%S)
           echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          # The bare `pg_dump` on PATH still resolved to the runner's preinstalled
+          # v16 (via update-alternatives) even after installing postgresql-client-18
+          # above - Debian/Ubuntu's postgresql-common doesn't reliably re-point it to
+          # the newly-installed version. Calling the versioned binary directly
+          # sidesteps that entirely, no dependency on whatever alternatives picked.
           # --format=custom: compressed, and restorable with pg_restore (selectively,
           # e.g. one table at a time) rather than a giant plain-text SQL file.
-          pg_dump "${{ secrets.PROD_DATABASE_BACKUP_URL }}" --format=custom --file="backup-${STAMP}.dump"
+          /usr/lib/postgresql/18/bin/pg_dump "${{ secrets.PROD_DATABASE_BACKUP_URL }}" --format=custom --file="backup-${STAMP}.dump"
 
       - name: Upload to Cloudflare R2 (backups bucket - separate from invoices)
         env:
