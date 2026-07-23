@@ -34,7 +34,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     // the order itself (never the client) can supply.
     const order = await fastify.prisma.order.findFirst({
       where: { id: body.data.order_id, org_id: req.user.orgId },
-      select: { customer_phone: true },
+      select: { customer_phone: true, ticket_id: true },
     });
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
     const phoneLast4 = (order.customer_phone ?? '').replace(/\D/g, '').slice(-4);
@@ -61,7 +61,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     const filename = `Factura-${stamp}-${orgPrefix}-${safeNum}-${id}.pdf`;
 
     await fastify.prisma.invoiceLink.create({
-      data: { org_id: req.user.orgId, filename, phone_last4: phoneLast4 },
+      data: { org_id: req.user.orgId, ticket_id: order.ticket_id, filename, phone_last4: phoneLast4 },
     });
 
     // Points at the FRONTEND app now, not directly at this API - GET /:filename below
@@ -120,12 +120,25 @@ export default async function fileRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Archivo inválido' });
     }
 
-    const link = await fastify.prisma.invoiceLink.findUnique({ where: { filename } });
+    const link = await fastify.prisma.invoiceLink.findUnique({
+      where: { filename },
+      include: { org: { select: { form_links_blocked_at: true } } },
+    });
     // No row = either a pre-hardening invoice link (nothing to check against) or a
     // bogus filename - both dead ends the same way: ask staff to resend, which always
     // regenerates a fresh, fully-protected link.
     if (!link) {
       return reply.status(404).send({ error: 'Archivo no encontrado. Pide que te reenvíen la factura.', code: 'NOT_FOUND' });
+    }
+    // Same two kill switches a form link has (inbox.ts): "Bloquear link" on this
+    // specific ticket, and the org-wide "Bloquear todos los links" - a factura sent
+    // to the same conversation as a form link staff just revoked must die with it,
+    // not stay quietly downloadable through a completely separate mechanism.
+    if (link.revoked_at) {
+      return reply.status(410).send({ error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
+    }
+    if (link.org.form_links_blocked_at && link.created_at < link.org.form_links_blocked_at) {
+      return reply.status(410).send({ error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
     }
     if (Date.now() - link.created_at.getTime() > 24 * 3600 * 1000) {
       return reply.status(410).send({ error: 'Este link de factura ya expiró (válido 24 horas). Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });

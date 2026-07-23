@@ -196,6 +196,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       create: { org_id: req.user.orgId, ticket_id: ticket.id, reason: body.data.reason, revoked_by: req.user.userId },
     });
 
+    // A factura sent to this same conversation must die with the form link, not
+    // stay quietly downloadable through files.ts's separate mechanism - only
+    // touches ones not already opened+expired-out on their own; harmless either way.
+    await fastify.prisma.invoiceLink.updateMany({
+      where: { ticket_id: ticket.id, org_id: req.user.orgId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
+
     return reply.send({ data: { ok: true } });
   });
 

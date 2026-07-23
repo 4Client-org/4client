@@ -158,4 +158,87 @@ describe('files routes (invoice PDF)', () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it('"Bloquear link" on a ticket also kills any factura already sent to that same conversation', async () => {
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: '573001115500', customer_name: 'Cliente Con Ticket' },
+    });
+    const orderWithTicket = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '006', customer_name: 'Cliente Con Ticket',
+        customer_phone: '573001115500', address: 'Calle Ticket 1',
+        payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+      },
+    });
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: '/api/v1/files/invoice',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '006', order_id: orderWithTicket.id },
+    });
+    const filename = new URL(upload.json().url).searchParams.get('f')!;
+
+    const beforeRevoke = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=5500` });
+    expect(beforeRevoke.statusCode).toBe(200);
+
+    const revoke = await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${ticket.id}/form-link/revoke`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {},
+    });
+    expect(revoke.statusCode).toBe(200);
+
+    const afterRevoke = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=5500` });
+    expect(afterRevoke.statusCode).toBe(410);
+    expect(afterRevoke.json().code).toBe('INVOICE_EXPIRED');
+  });
+
+  it('the org-wide "Bloquear todos los links" also kills every outstanding factura, and a fresh one issued afterward still works', async () => {
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: '573001116600', customer_name: 'Cliente Block All' },
+    });
+    const orderForBlockAll = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '007', customer_name: 'Cliente Block All',
+        customer_phone: '573001116600', address: 'Calle Block All 1',
+        payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+      },
+    });
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: '/api/v1/files/invoice',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '007', order_id: orderForBlockAll.id },
+    });
+    const filename = new URL(upload.json().url).searchParams.get('f')!;
+
+    // Past the second boundary so the block timestamp is genuinely later than this
+    // link's created_at (same reasoning as public.test.ts's supersede tests).
+    await new Promise((r) => setTimeout(r, 1100));
+
+    const blockAll = await app.inject({
+      method: 'POST',
+      url: '/api/v1/inbox/form-links/block-all',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(blockAll.statusCode).toBe(200);
+
+    const blocked = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=6600` });
+    expect(blocked.statusCode).toBe(410);
+    expect(blocked.json().code).toBe('INVOICE_EXPIRED');
+
+    await new Promise((r) => setTimeout(r, 1100));
+    const freshUpload = await app.inject({
+      method: 'POST',
+      url: '/api/v1/files/invoice',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '007', order_id: orderForBlockAll.id },
+    });
+    const freshFilename = new URL(freshUpload.json().url).searchParams.get('f')!;
+    const freshWorks = await app.inject({ method: 'GET', url: `/api/v1/files/${freshFilename}?phone_last4=6600` });
+    expect(freshWorks.statusCode).toBe(200);
+  });
 });
