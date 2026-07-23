@@ -14,6 +14,9 @@ const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 // misdirected one (wrong number, forwarded by mistake) stays usable.
 const UNOPENED_INVOICE_TTL_SECONDS = 10 * 60;
 
+// Exactly 4 digits, nothing else - same schema as public.ts's phoneLast4Schema.
+const phoneLast4Schema = z.string().regex(/^\d{4}$/, 'phone_last4 debe ser 4 dígitos');
+
 export default async function fileRoutes(fastify: FastifyInstance) {
   const MAX_BASE64_BYTES = 28_000_000; // ~20 MB decoded
 
@@ -105,7 +108,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
   // regenerates fresh from the order's current items every time, nothing is cached).
   fastify.get('/:filename', async (req, reply) => {
     const { filename } = req.params as { filename: string };
-    const q = z.object({ phone_last4: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ phone_last4: phoneLast4Schema }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Verificación requerida', code: 'VALIDATION_ERROR' });
 
     // Deliberately not tied to the exact current segment layout (timestamp/org/num/id)

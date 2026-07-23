@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, FileWarning, Download } from 'lucide-react';
+import { Lock, FileWarning } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
 
 const API = resolveApiBase();
@@ -11,11 +11,10 @@ const GREEN = '#1A7A4A';
 export default function FacturaPage() {
   const filename = new URLSearchParams(window.location.search).get('f') ?? '';
 
-  const [state, setState] = useState<'verify' | 'error' | 'ready'>('verify');
+  const [state, setState] = useState<'verify' | 'error'>('verify');
   const [phoneInput, setPhoneInput] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [pdfUrl, setPdfUrl] = useState('');
 
   async function handleVerify() {
     const last4 = phoneInput.trim();
@@ -26,8 +25,15 @@ export default function FacturaPage() {
     }
     setVerifying(true);
     setErrorMsg('');
+    const fileUrl = `${API}/api/v1/files/${encodeURIComponent(filename)}?phone_last4=${encodeURIComponent(last4)}`;
     try {
-      const res = await fetch(`${API}/api/v1/files/${encodeURIComponent(filename)}?phone_last4=${encodeURIComponent(last4)}`);
+      // A HEAD-ish check first (via GET, cheapest reliable option) just to catch a
+      // wrong/dead link with a proper message - on success we hand off to a real
+      // navigation instead of rendering the PDF ourselves, so the browser's own
+      // native PDF viewer takes over exactly like tapping the old, unprotected link
+      // used to: full-screen, no download button bolted on, nothing to render badly
+      // inside a restrictive in-app browser's iframe/blob support.
+      const res = await fetch(fileUrl);
       if (!res.ok) {
         const err = await res.json().catch(() => ({} as { error?: string; code?: string }));
         if (err.code === 'PHONE_MISMATCH') {
@@ -38,9 +44,7 @@ export default function FacturaPage() {
         }
         return;
       }
-      const blob = await res.blob();
-      setPdfUrl(URL.createObjectURL(blob));
-      setState('ready');
+      window.location.replace(fileUrl);
     } catch {
       setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.');
     } finally {
@@ -56,20 +60,6 @@ export default function FacturaPage() {
     border: 'none', borderRadius: 12, cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
   };
-
-  if (state === 'ready') {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#333' }}>
-        <div style={{ background: GREEN, padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>Tu factura</span>
-          <a href={pdfUrl} download={filename} style={{ color: '#fff', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>
-            <Download size={16} /> Descargar
-          </a>
-        </div>
-        <iframe title="Factura" src={pdfUrl} style={{ flex: 1, border: 'none' }} />
-      </div>
-    );
-  }
 
   if (state === 'error') return (
     <div style={page}>

@@ -29,6 +29,11 @@ export const STATUS_LABEL: Record<string, string> = {
 
 export const STATUS_ORDER = ['nuevo', 'preparando', 'listo', 'camino', 'entregado', 'cerrado'];
 
+// Must match the wording staff actually picks (DetallePedidoModal's <select>
+// options) exactly - this same constant drives the factura PDF, the copied invoice
+// text, the CSV export, and the informe/dashboard display, so a mismatched label
+// here made the factura say "Efectivo" for an order the edit screen itself (and
+// everywhere else) calls "Pagado en tienda".
 export const PAYMENT_LABEL: Record<string, string> = {
-  cod: 'Cobro en casa', cash: 'Efectivo', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
+  cod: 'Cobro en casa', cash: 'Pagado en tienda', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
 };

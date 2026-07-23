@@ -94,6 +94,11 @@ async function createOrderWithRetryNum<T>(
   throw new Error('No se pudo generar un número de pedido único');
 }
 
+// Exactly 4 digits, nothing else - rejects letters, symbols, or anything longer at
+// the schema level before it ever reaches a comparison, not just relying on the
+// last4() equality check to fail closed on its own for bad input.
+const phoneLast4Schema = z.string().regex(/^\d{4}$/, 'phone_last4 debe ser 4 dígitos');
+
 export default async function publicRoutes(fastify: FastifyInstance) {
   // Allow any origin - these endpoints are genuinely public (client-facing form)
   fastify.addHook('onRequest', async (_req, reply) => {
@@ -246,7 +251,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // token y devuelve info del cliente + sus pedidos activos de hoy
   fastify.get('/form-info', async (req, reply) => {
     if (shouldBlockForHours()) return sendFormClosed(reply);
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: phoneLast4Schema }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
       const payload = verifyFormToken(q.data.t);
@@ -308,7 +313,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // público (sin precios)
   fastify.get('/products', async (req, reply) => {
     if (shouldBlockForHours()) return sendFormClosed(reply);
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: phoneLast4Schema }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
       const payload = verifyFormToken(q.data.t);
@@ -349,7 +354,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const body = z.object({
       token: z.string().min(1),
       device_token: z.string().min(1),
-      phone_last4: z.string().min(1),
+      phone_last4: phoneLast4Schema,
       // Required - a pedido without a delivery address can't actually be dispatched,
       // and staff kept having to chase clients down for it after the fact.
       address: z.string().trim().min(1, 'La dirección es obligatoria').max(500),
