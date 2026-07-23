@@ -125,7 +125,7 @@ describe('public form routes', () => {
     expect(orders[0].id).toBe(firstOrderId);
     expect(orders[0].editable).toBe(true);
     expect(orders[0].status).toBe('nuevo');
-    expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg' }]);
+    expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg', price: 3000 }]);
   });
 
   it('the device lock only guards /submit - viewing form-info/products from a different device_token still works, only submitting from one does not', async () => {
@@ -266,6 +266,36 @@ describe('public form routes', () => {
     expect(pina.added_by_client).toBe(true); // provenance survives the staff save untouched
   });
 
+  it('a client resubmit NEVER overwrites an existing item\'s price with the catalog price, even when the catalog has one - only a brand-new line gets the catalog price', async () => {
+    // Mango has a real catalog price_per_unit (3000, set in beforeAll) - staff
+    // hand-overrides it on THIS specific order to something different (say, a
+    // bulk discount), matching a real "encargado adjusts the price" scenario.
+    await app.prisma.orderItem.updateMany({
+      where: { order_id: firstOrderId, product_name: 'Mango' },
+      data: { price: 2500 },
+    });
+
+    // Client resubmits with only the address changed (even a single-letter edit is
+    // the exact bug report) - Mango isn't touched at all, just resent as part of
+    // "this is the whole order now".
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/public/submit',
+      payload: {
+        token, device_token: DEVICE, phone_last4: PHONE4,
+        merge_order_id: firstOrderId,
+        address: 'Calle 123 #45-67x',
+        items: [{ product_name: 'Mango', quantity_label: '2 kg' }, { product_name: 'Piña', quantity_label: '1 unidad' }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const order = await app.prisma.order.findUniqueOrThrow({ where: { id: firstOrderId }, include: { items: true } });
+    const mango = order.items.find(i => i.product_name === 'Mango')!;
+    // Still 2500 - the catalog's 3000 must NOT have silently won.
+    expect(Number(mango.price)).toBe(2500);
+  });
+
   it('resubmitting the exact same items/address/payment is a no-op - does not touch client_modified or items', async () => {
     const before = await app.prisma.order.findUniqueOrThrow({ where: { id: firstOrderId }, include: { items: true } });
 
@@ -320,6 +350,64 @@ describe('public form routes', () => {
     const formOrders = await app.prisma.order.findMany({ where: { ticket_id: ticket.id } });
     expect(formOrders).toHaveLength(1);
     expect(formOrders[0].id).toBe(caminoOrderId);
+  });
+
+  it('a pedido an encargado typed up manually (source !== "form") can never be merged into via the client form, even while it\'s otherwise in an editable status', async () => {
+    const staffPhone = '573001112260';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: staffPhone, customer_name: 'Cliente Pedido Encargado' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const staffOrderToken = (app.jwt.sign as any)(
+      { type: 'form_link', ticketId: ticket.id, orgId },
+      { expiresIn: '7d' },
+    );
+    // Created the way an encargado would - directly via POST /orders, not the form.
+    const staffOrder = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '900', customer_name: 'Cliente Pedido Encargado',
+        customer_phone: staffPhone, address: 'Calle Encargado 1', payment_method: 'cash',
+        registered_by: adminId, fecha: new Date(), source: 'encargado', status: 'nuevo',
+        items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/public/submit',
+      payload: {
+        token: staffOrderToken, device_token: 'device-staff-order', phone_last4: '2260',
+        merge_order_id: staffOrder.id, address: 'Calle Encargado 1',
+        items: [{ product_name: 'Mango', quantity_label: '1 kg' }],
+      },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('ORDER_NOT_EDITABLE');
+
+    // Untouched - still exactly the one item staff put on it, at staff's price.
+    const after = await app.prisma.order.findUniqueOrThrow({ where: { id: staffOrder.id }, include: { items: true } });
+    expect(after.items).toHaveLength(1);
+    expect(Number(after.items[0].price)).toBe(3000);
+  });
+
+  it('GET /form-info marks a pedido an encargado typed up manually as not editable, even while it\'s in an editable status - the client can only view it', async () => {
+    const staffPhone2 = '573001112261';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: staffPhone2, customer_name: 'Cliente Ver Pedido Encargado' } });
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '901', customer_name: 'Cliente Ver Pedido Encargado',
+        customer_phone: staffPhone2, address: 'Calle Encargado 2', payment_method: 'cash',
+        registered_by: adminId, fecha: new Date(), source: 'encargado', status: 'nuevo',
+        items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewToken = (app.jwt.sign as any)({ type: 'form_link', ticketId: ticket.id, orgId }, { expiresIn: '7d' });
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${viewToken}&device_token=device-view&phone_last4=2261` });
+    expect(res.statusCode).toBe(200);
+    const orders = res.json().data.orders as any[];
+    expect(orders).toHaveLength(1);
+    expect(orders[0].editable).toBe(false);
+    expect(orders[0].items[0].price).toBe(3000);
   });
 
   it('POST /submit with a merge_order_id that is no longer open (closed in the meantime) is rejected with 409, not silently duplicated', async () => {
