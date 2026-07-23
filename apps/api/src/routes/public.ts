@@ -170,7 +170,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     return phone.replace(/\D/g, '').slice(-4);
   }
 
-  async function assertLinkStillValid(ticketId: string, tokenIat: number | undefined, phoneLast4: string): Promise<void> {
+  // Split from the phone check below on purpose - GET /link-status calls only this
+  // half, with no phone_last4 at all, so the client can tell a genuinely dead link
+  // (revoked/superseded/org-blocked/never-opened-in-time) apart from "just needs the
+  // 4 digits" BEFORE ever showing the digit-entry screen. Without this split, a
+  // visitor opening an already-blocked link had to type 4 digits first and only then
+  // find out the link itself was dead - same mistake this is fixing on the factura
+  // side (files.ts), just here for form links.
+  async function assertLinkNotDead(ticketId: string, tokenIat: number | undefined) {
     const ticket = await fastify.prisma.ticket.findUnique({
       where: { id: ticketId },
       select: {
@@ -195,11 +202,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const blockedAtSec = Math.floor(ticket.org.form_links_blocked_at.getTime() / 1000);
       if (!tokenIat || tokenIat < blockedAtSec) throw new Error('org blocked');
     }
-    // Proves whoever's holding the link right now actually knows the phone number
-    // it was issued for - the token itself only proves it's a real link for THIS
-    // ticket, not that the person using it is the intended customer (a link can end
-    // up with the wrong person: staff typo, an accidental forward, etc).
-    if (!phoneLast4 || phoneLast4 !== last4(ticket.phone)) throw new Error('phone mismatch');
     // Only matters while it's still unopened - once form-info's handler stamps
     // form_link_opened_at (below), this never fires again for this link, no matter
     // how much later a later call comes in.
@@ -207,6 +209,16 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const ageSeconds = Math.floor(Date.now() / 1000) - tokenIat;
       if (ageSeconds > UNOPENED_LINK_TTL_SECONDS) throw new Error('never opened in time');
     }
+    return ticket;
+  }
+
+  async function assertLinkStillValid(ticketId: string, tokenIat: number | undefined, phoneLast4: string): Promise<void> {
+    const ticket = await assertLinkNotDead(ticketId, tokenIat);
+    // Proves whoever's holding the link right now actually knows the phone number
+    // it was issued for - the token itself only proves it's a real link for THIS
+    // ticket, not that the person using it is the intended customer (a link can end
+    // up with the wrong person: staff typo, an accidental forward, etc).
+    if (!phoneLast4 || phoneLast4 !== last4(ticket.phone)) throw new Error('phone mismatch');
   }
 
   // Claims this ticket's form-link for whichever browser SUBMITS first. There's no
@@ -246,6 +258,25 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // change too: once an order is 'camino' or 'cerrado', only staff can touch it from
   // here on, the client's copy becomes view-only.
   const EDITABLE_STATUSES = ['nuevo', 'preparando', 'listo'] as const;
+
+  // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever shows
+  // its "confirm your phone" screen, so a dead link (blocked/expired/revoked) shows
+  // the same "Link inválido" screen immediately instead of making the visitor type
+  // 4 digits first only to be told the link never had a chance in the first place.
+  // No phone_last4 here at all - this only answers "is this link alive", not
+  // "is this you", so it can't be used to brute-force/confirm the phone digits.
+  fastify.get('/link-status', async (req, reply) => {
+    if (shouldBlockForHours()) return sendFormClosed(reply);
+    const q = z.object({ t: z.string().min(1) }).safeParse(req.query);
+    if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
+    try {
+      const payload = verifyFormToken(q.data.t);
+      await assertLinkNotDead(payload.ticketId, payload.iat);
+      return reply.send({ data: { valid: true } });
+    } catch {
+      return reply.status(401).send({ error: 'Link inválido o expirado', code: 'INVALID_TOKEN' });
+    }
+  });
 
   // GET /api/v1/public/form-info?t=TOKEN&device_token=X&phone_last4=XXXX - verifica
   // token y devuelve info del cliente + sus pedidos activos de hoy

@@ -162,6 +162,28 @@ describe('public form routes', () => {
     expect(right.statusCode).toBe(200);
   });
 
+  it('GET /link-status answers "is this link alive" with no phone_last4 at all - a revoked link is caught here before the visitor ever sees the digit-entry screen', async () => {
+    const statusTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001117700', customer_name: 'Cliente Status' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statusToken = (app.jwt.sign as any)({ type: 'form_link', ticketId: statusTicket.id, orgId }, { expiresIn: '7d' });
+
+    const alive = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${statusToken}` });
+    expect(alive.statusCode).toBe(200);
+    expect(alive.json().data.valid).toBe(true);
+
+    const revoke = await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${statusTicket.id}/form-link/revoke`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {},
+    });
+    expect(revoke.statusCode).toBe(200);
+
+    const dead = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${statusToken}` });
+    expect(dead.statusCode).toBe(401);
+    expect(dead.json().code).toBe('INVALID_TOKEN');
+  });
+
   it('a link nobody opens within 10 minutes of being issued dies on its own - one opened in time keeps working past that mark', async () => {
     const staleTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112233', customer_name: 'Cliente Nunca Abrio' } });
     const openedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112234', customer_name: 'Cliente Si Abrio' } });

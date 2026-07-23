@@ -195,7 +195,20 @@ export default function ClientFormPage() {
     // brand new visitor (or one whose saved digits somehow stop matching, handled
     // inside loadFormInfo) sees the verify screen.
     const saved = getSavedPhoneLast4(token);
-    if (!saved) { setState('verify'); return; }
+    if (!saved) {
+      // Checked BEFORE showing the digit-entry screen, same reasoning as
+      // FacturaPage's own pre-check: a blocked/expired link should show "Link
+      // inválido" immediately, not make a brand new visitor type 4 digits first
+      // only to find out the link was already dead.
+      fetch(`${API}/api/v1/public/link-status?t=${encodeURIComponent(token)}`)
+        .then(r => r.json().then(body => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+          if (!ok) { setState('invalid'); setErrorMsg(body.error ?? 'Link inválido o expirado.'); return; }
+          setState('verify');
+        })
+        .catch(() => { setState('invalid'); setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.'); });
+      return;
+    }
     setPhoneLast4(saved);
     loadFormInfo(saved).then(orders => {
       if (orders === null) return;

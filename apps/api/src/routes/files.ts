@@ -100,6 +100,63 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ url: publicUrl });
   });
 
+  // Shared by GET /:filename/status and GET /:filename below - everything that
+  // makes a factura link dead EXCEPT the phone check, so /status can answer "is this
+  // link alive" with no phone_last4 at all (see that route for why that split
+  // matters). Throws a Fastify-reply-shaped error object; callers just forward it.
+  async function loadLiveInvoiceLink(filename: string) {
+    // Deliberately not tied to the exact current segment layout (timestamp/org/num/id)
+    // - only what actually matters for safety: starts with "Factura", ends in ".pdf",
+    // and the middle can't contain a path separator or traversal. This way every past
+    // filename shape we've generated (and any future one) keeps resolving without
+    // needing this regex to be revised in lockstep every time that layout changes.
+    if (!/^Factura[_-][a-zA-Z0-9_-]+\.pdf$/.test(filename)) {
+      throw { status: 400, error: 'Archivo inválido' };
+    }
+
+    const link = await fastify.prisma.invoiceLink.findUnique({
+      where: { filename },
+      include: { org: { select: { form_links_blocked_at: true } } },
+    });
+    // No row = either a pre-hardening invoice link (nothing to check against) or a
+    // bogus filename - both dead ends the same way: ask staff to resend, which always
+    // regenerates a fresh, fully-protected link.
+    if (!link) {
+      throw { status: 404, error: 'Archivo no encontrado. Pide que te reenvíen la factura.', code: 'NOT_FOUND' };
+    }
+    // Same two kill switches a form link has (inbox.ts): "Bloquear link" on this
+    // specific ticket, and the org-wide "Bloquear todos los links" - a factura sent
+    // to the same conversation as a form link staff just revoked must die with it,
+    // not stay quietly downloadable through a completely separate mechanism.
+    if (link.revoked_at) {
+      throw { status: 410, error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
+    }
+    if (link.org.form_links_blocked_at && link.created_at < link.org.form_links_blocked_at) {
+      throw { status: 410, error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
+    }
+    if (Date.now() - link.created_at.getTime() > 24 * 3600 * 1000) {
+      throw { status: 410, error: 'Este link de factura ya expiró (válido 24 horas). Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
+    }
+    if (!link.opened_at && Date.now() - link.created_at.getTime() > UNOPENED_INVOICE_TTL_SECONDS * 1000) {
+      throw { status: 410, error: 'Este link de factura expiró por no abrirse a tiempo. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
+    }
+    return link;
+  }
+
+  // GET /api/v1/files/:filename/status - checked BEFORE the client shows its "confirm
+  // your phone" screen, same reasoning as public.ts's GET /link-status: a blocked/
+  // expired factura should show "Link inválido" immediately, not make the visitor
+  // type 4 digits first only to find out the link was already dead.
+  fastify.get('/:filename/status', async (req, reply) => {
+    const { filename } = req.params as { filename: string };
+    try {
+      await loadLiveInvoiceLink(filename);
+      return reply.send({ data: { valid: true } });
+    } catch (err: any) {
+      return reply.status(err.status ?? 500).send({ error: err.error ?? 'Error', code: err.code });
+    }
+  });
+
   // GET /api/v1/files/:filename?phone_last4=XXXX - public (no staff auth - this is the
   // client's own download), but gated the same way a form link is: the caller must
   // prove they know the customer's phone, and a factura nobody opens within 10 minutes
@@ -111,40 +168,11 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     const q = z.object({ phone_last4: phoneLast4Schema }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Verificación requerida', code: 'VALIDATION_ERROR' });
 
-    // Deliberately not tied to the exact current segment layout (timestamp/org/num/id)
-    // - only what actually matters for safety: starts with "Factura", ends in ".pdf",
-    // and the middle can't contain a path separator or traversal. This way every past
-    // filename shape we've generated (and any future one) keeps resolving without
-    // needing this regex to be revised in lockstep every time that layout changes.
-    if (!/^Factura[_-][a-zA-Z0-9_-]+\.pdf$/.test(filename)) {
-      return reply.status(400).send({ error: 'Archivo inválido' });
-    }
-
-    const link = await fastify.prisma.invoiceLink.findUnique({
-      where: { filename },
-      include: { org: { select: { form_links_blocked_at: true } } },
-    });
-    // No row = either a pre-hardening invoice link (nothing to check against) or a
-    // bogus filename - both dead ends the same way: ask staff to resend, which always
-    // regenerates a fresh, fully-protected link.
-    if (!link) {
-      return reply.status(404).send({ error: 'Archivo no encontrado. Pide que te reenvíen la factura.', code: 'NOT_FOUND' });
-    }
-    // Same two kill switches a form link has (inbox.ts): "Bloquear link" on this
-    // specific ticket, and the org-wide "Bloquear todos los links" - a factura sent
-    // to the same conversation as a form link staff just revoked must die with it,
-    // not stay quietly downloadable through a completely separate mechanism.
-    if (link.revoked_at) {
-      return reply.status(410).send({ error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
-    }
-    if (link.org.form_links_blocked_at && link.created_at < link.org.form_links_blocked_at) {
-      return reply.status(410).send({ error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
-    }
-    if (Date.now() - link.created_at.getTime() > 24 * 3600 * 1000) {
-      return reply.status(410).send({ error: 'Este link de factura ya expiró (válido 24 horas). Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
-    }
-    if (!link.opened_at && Date.now() - link.created_at.getTime() > UNOPENED_INVOICE_TTL_SECONDS * 1000) {
-      return reply.status(410).send({ error: 'Este link de factura expiró por no abrirse a tiempo. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' });
+    let link: Awaited<ReturnType<typeof loadLiveInvoiceLink>>;
+    try {
+      link = await loadLiveInvoiceLink(filename);
+    } catch (err: any) {
+      return reply.status(err.status ?? 500).send({ error: err.error ?? 'Error', code: err.code });
     }
     if (q.data.phone_last4 !== link.phone_last4) {
       return reply.status(401).send({ error: 'Número incorrecto. Verifica los últimos 4 dígitos.', code: 'PHONE_MISMATCH' });

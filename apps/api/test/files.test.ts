@@ -79,6 +79,39 @@ describe('files routes (invoice PDF)', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('GET /:filename/status answers "is this link alive" with no phone_last4 at all - dies the same way once revoked, catches it before the visitor sees the digit-entry screen', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001118800', customer_name: 'Cliente Status Factura' } });
+    const orderWithTicket = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '008', customer_name: 'Cliente Status Factura',
+        customer_phone: '573001118800', address: 'Calle Status 1',
+        payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+      },
+    });
+    const upload = await app.inject({
+      method: 'POST',
+      url: '/api/v1/files/invoice',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '008', order_id: orderWithTicket.id },
+    });
+    const filename = new URL(upload.json().url).searchParams.get('f')!;
+
+    const alive = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}/status` });
+    expect(alive.statusCode).toBe(200);
+    expect(alive.json().data.valid).toBe(true);
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${ticket.id}/form-link/revoke`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {},
+    });
+
+    const dead = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}/status` });
+    expect(dead.statusCode).toBe(410);
+    expect(dead.json().code).toBe('INVOICE_EXPIRED');
+  });
+
   it('a link nobody opens within 10 minutes of being issued dies on its own, even though it\'s well under the 24h absolute cap', async () => {
     const upload = await app.inject({
       method: 'POST',

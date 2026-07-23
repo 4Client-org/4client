@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Lock, XCircle } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
 
@@ -11,14 +11,28 @@ const GREEN = '#1A7A4A';
 export default function FacturaPage() {
   const filename = new URLSearchParams(window.location.search).get('f') ?? '';
 
-  const [state, setState] = useState<'verify' | 'error'>('verify');
+  // 'loading' while GET /:filename/status runs - a blocked/expired factura goes
+  // straight to 'error' from there, never showing the digit-entry screen at all
+  // (matches ClientFormPage: typing 4 digits into a link that was already dead is
+  // pointless and just delays telling the visitor it's dead).
+  const [state, setState] = useState<'loading' | 'verify' | 'error'>('loading');
   const [phoneInput, setPhoneInput] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  useEffect(() => {
+    if (!filename) { setState('error'); setErrorMsg('Link inválido.'); return; }
+    fetch(`${API}/api/v1/files/${encodeURIComponent(filename)}/status`)
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) { setState('error'); setErrorMsg(body.error ?? 'Este link ya no es válido.'); return; }
+        setState('verify');
+      })
+      .catch(() => { setState('error'); setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.'); });
+  }, [filename]);
+
   async function handleVerify() {
     const last4 = phoneInput.trim();
-    if (!filename) { setState('error'); setErrorMsg('Link inválido.'); return; }
     if (last4.length !== 4 || !/^\d{4}$/.test(last4)) {
       setErrorMsg('Escribe los 4 dígitos.');
       return;
@@ -60,6 +74,12 @@ export default function FacturaPage() {
     border: 'none', borderRadius: 12, cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
   };
+
+  if (state === 'loading') return (
+    <div style={page}>
+      <div style={{ textAlign: 'center', padding: 60, color: '#888', fontSize: 18 }}>Cargando...</div>
+    </div>
+  );
 
   // Same exact layout/copy-shape as ClientFormPage's 'invalid' screen (icon, heading,
   // message) - a blocked/expired/dead link should look and read the same way
