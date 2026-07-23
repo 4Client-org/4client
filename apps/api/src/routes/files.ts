@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { registerFailedLinkAttempt, MAX_ATTEMPTS_PER_LINK } from '../lib/linkSecurity.js';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
@@ -145,6 +146,24 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     if (link.org.form_links_blocked_at && link.created_at < link.org.form_links_blocked_at) {
       throw { status: 410, error: 'Este link de factura fue bloqueado. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
     }
+    // Same wrong-PIN ladder as form links (public.ts / linkSecurity.ts): this
+    // specific factura dies after too many wrong digits, and if the CHAT it belongs
+    // to hit the ticket-wide cumulative limit, every link for it (form + every
+    // other factura) is locked out for TICKET_BLOCK_HOURS regardless of this one's
+    // own count.
+    if (link.failed_attempts >= MAX_ATTEMPTS_PER_LINK) {
+      throw { status: 403, error: 'Demasiados intentos incorrectos con este link. Pide que te reenvíen la factura.', code: 'LINK_ATTEMPTS_EXCEEDED' };
+    }
+    if (link.ticket_id) {
+      const ticket = await fastify.prisma.ticket.findUnique({ where: { id: link.ticket_id }, select: { link_blocked_until: true } });
+      if (ticket?.link_blocked_until && ticket.link_blocked_until > new Date()) {
+        throw {
+          status: 403,
+          error: 'Demasiados intentos incorrectos. Este chat quedó bloqueado temporalmente por seguridad. Intenta de nuevo en 24 horas o contáctanos directamente.',
+          code: 'TICKET_BLOCKED',
+        };
+      }
+    }
     if (Date.now() - link.created_at.getTime() > 24 * 3600 * 1000) {
       throw { status: 410, error: 'Este link de factura ya expiró (válido 24 horas). Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
     }
@@ -186,6 +205,12 @@ export default async function fileRoutes(fastify: FastifyInstance) {
       return reply.status(err.status ?? 500).send({ error: err.error ?? 'Error', code: err.code });
     }
     if (q.data.phone_last4 !== link.phone_last4) {
+      // Recorded before failing - bumps this invoice's own count (dies at
+      // MAX_ATTEMPTS_PER_LINK, checked in loadLiveInvoiceLink above on the next
+      // call) and, if this factura belongs to a ticket, the ticket-wide cumulative
+      // count shared with its form link and every other factura in the same chat.
+      await fastify.prisma.invoiceLink.update({ where: { filename }, data: { failed_attempts: { increment: 1 } } });
+      if (link.ticket_id) await registerFailedLinkAttempt(fastify.prisma, link.ticket_id);
       return reply.status(401).send({ error: 'Número incorrecto. Verifica los últimos 4 dígitos.', code: 'PHONE_MISMATCH' });
     }
     if (!link.opened_at) {
