@@ -308,8 +308,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const payload = verifyFormToken(q.data.t);
       await assertLinkNotDead(payload.ticketId, payload.iat);
       return reply.send({ data: { valid: true } });
-    } catch {
-      return reply.status(401).send({ error: 'Link inválido o expirado', code: 'INVALID_TOKEN' });
+    } catch (err) {
+      // sendInvalidToken - not a bare generic catch - so a ticket-wide block or an
+      // exhausted link shows ITS OWN message here too, same as files.ts's factura
+      // /status already does. Was swallowing those into "Link inválido o expirado"
+      // before, so a client who hit the lockout only ever saw the specific reason
+      // on the factura side, never on the form link.
+      return sendInvalidToken(err, reply);
     }
   });
 

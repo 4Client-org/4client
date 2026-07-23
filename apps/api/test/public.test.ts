@@ -800,6 +800,14 @@ describe('link abuse lockout - repeated wrong PIN guesses', () => {
     const afterLimit = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=lockout-link&phone_last4=9900` });
     expect(afterLimit.statusCode).toBe(403);
     expect(afterLimit.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
+
+    // GET /link-status - checked BEFORE the digit-entry screen even shows - must
+    // surface this SAME specific reason, not the generic "Link inválido o expirado"
+    // (that was the bug: the PDF's equivalent /status route already showed the
+    // specific reason, this one didn't).
+    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${token}` });
+    expect(status.statusCode).toBe(403);
+    expect(status.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
   });
 
   it('a freshly-issued link resets the per-link count, so it works again even after the old one got exhausted', async () => {
@@ -842,6 +850,12 @@ describe('link abuse lockout - repeated wrong PIN guesses', () => {
     const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=lockout-ticket-final&phone_last4=9902` });
     expect(res.statusCode).toBe(403);
     expect(res.json().code).toBe('TICKET_BLOCKED');
+
+    // Same check via /link-status, the pre-digit-entry precheck a fresh page load
+    // actually hits first - must show TICKET_BLOCKED there too, not a generic error.
+    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${freshToken}` });
+    expect(status.statusCode).toBe(403);
+    expect(status.json().code).toBe('TICKET_BLOCKED');
   });
 
   it('10 wrong guesses on the FORM link also block that ticket\'s already-outstanding factura link, not just the form link - the soft block is shared, not per-token', async () => {
