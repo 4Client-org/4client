@@ -311,8 +311,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const todaysOrders = await fastify.prisma.order.findMany({
         where: { ticket_id: payload.ticketId, org_id: payload.orgId, fecha: todayLocal, status: { notIn: ['cerrado', 'papelera'] } },
         select: {
-          id: true, num: true, address: true, payment_method: true, status: true, created_at: true,
-          items: { select: { id: true, product_name: true, quantity_label: true }, orderBy: { sort_order: 'asc' } },
+          id: true, num: true, address: true, payment_method: true, status: true, source: true, created_at: true,
+          items: { select: { id: true, product_name: true, quantity_label: true, price: true }, orderBy: { sort_order: 'asc' } },
         },
         orderBy: { created_at: 'desc' },
         take: 20,
@@ -329,8 +329,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             address: o.address === 'Pendiente de confirmar' ? '' : o.address,
             paymentMethod: o.payment_method === 'sin_asignar' ? '' : o.payment_method,
             status: o.status,
-            editable: (EDITABLE_STATUSES as readonly string[]).includes(o.status),
-            items: o.items.map(i => ({ id: i.id, product_name: i.product_name, quantity_label: i.quantity_label ?? '' })),
+            // A pedido an encargado typed up manually is view-only from here, always -
+            // see the same source !== 'form' check in /submit's merge path. Prices in
+            // it may well be hand-set on purpose; a client edit merging their own item
+            // list on top would clobber that.
+            editable: o.source === 'form' && (EDITABLE_STATUSES as readonly string[]).includes(o.status),
+            items: o.items.map(i => ({ id: i.id, product_name: i.product_name, quantity_label: i.quantity_label ?? '', price: Number(i.price) })),
             createdAt: o.created_at,
           })),
         },
@@ -469,6 +473,19 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
       }
 
+      // A pedido an encargado typed up manually (source !== 'form') is view-only
+      // for the client - always, regardless of status. Staff builds those with
+      // their own judgment (prices, substitutions, whatever the customer asked for
+      // over a call) and a client edit merging their own item list on top would
+      // clobber that. Only a pedido the client themselves created via this same
+      // form can be edited back through it.
+      if (target.source !== 'form') {
+        return reply.status(409).send({
+          error: `Tu pedido #${target.num} fue creado por el negocio y no se puede modificar desde aquí. Si necesitas hacer un cambio, contáctanos directamente.`,
+          code: 'ORDER_NOT_EDITABLE',
+        });
+      }
+
       const isEditable = (EDITABLE_STATUSES as readonly string[]).includes(target.status) && !target.locked;
       if (!isEditable) {
         const STATUS_LABEL_ES: Record<string, string> = { camino: 'en camino', entregado: 'entregado', cerrado: 'cerrado', papelera: 'cancelado' };
@@ -487,7 +504,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           return {
             product_name: item.product_name,
             quantity_label: item.quantity_label,
-            price: priceMap.get(item.product_name) ?? Number(prior?.price ?? 0),
+            // An item already on the order ALWAYS keeps its existing price, no
+            // matter what - staff often hand-prices an item because the catalog's
+            // price_per_unit is wrong, missing, or just doesn't apply to this
+            // specific pedido, and re-deriving it from the catalog on every resubmit
+            // (even one triggered by an unrelated one-letter address edit) silently
+            // threw that away. The catalog price only ever applies to a genuinely
+            // NEW line the client is adding right now (`prior` undefined) - it can
+            // never overwrite a price that already existed on the order.
+            price: prior ? Number(prior.price) : (priceMap.get(item.product_name) ?? 0),
             sort_order: idx,
             // Sticky once true - an item the client already touched before stays
             // flagged even if this particular submission left it untouched.

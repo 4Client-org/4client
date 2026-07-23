@@ -6,7 +6,7 @@ const API = resolveApiBase();
 
 interface Product { id: string; name: string; category: string; unit_type?: string | null; }
 interface SelectedItem { product_name: string; quantity_label: string; productId: string; }
-interface DayOrderItem { id: string; product_name: string; quantity_label: string; }
+interface DayOrderItem { id: string; product_name: string; quantity_label: string; price: number; }
 interface DayOrder {
   id: string; num: string; address: string; paymentMethod: string;
   status: string; editable: boolean; items: DayOrderItem[]; createdAt: string;
@@ -573,10 +573,15 @@ export default function ClientFormPage() {
                   {isExpanded && (
                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #ddd' }}>
                       {o.items.map(i => (
-                        <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#666', padding: '3px 0' }}>
-                          <span>{i.product_name}</span><span>{i.quantity_label}</span>
+                        <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#666', padding: '3px 0', gap: 8 }}>
+                          <span>{i.product_name}{i.quantity_label ? ` · ${i.quantity_label}` : ''}</span>
+                          <span style={{ flexShrink: 0, fontWeight: 700 }}>${i.price.toLocaleString('es-CO')}</span>
                         </div>
                       ))}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#333', padding: '7px 0 0', marginTop: 4, borderTop: '1px solid #ddd', fontWeight: 800 }}>
+                        <span>Total</span>
+                        <span>${o.items.reduce((s, i) => s + i.price, 0).toLocaleString('es-CO')}</span>
+                      </div>
                     </div>
                   )}
                 </div>
