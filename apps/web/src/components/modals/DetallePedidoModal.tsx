@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
+import { buildFormLinkMessage } from '../../lib/formLinkMessage';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -280,7 +281,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     if (!order?.ticket_id) return;
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${order.ticket_id}/form-link`);
-      formLinkMut.mutate(res.data.url);
+      formLinkMut.mutate(buildFormLinkMessage(res.data.url));
     } catch {
       toast('No se pudo generar el link', true);
     }

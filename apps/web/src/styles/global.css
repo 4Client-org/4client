@@ -64,6 +64,7 @@ input,select,textarea{font-family:var(--f);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
 .ac{padding:22px;flex:1;min-height:0;overflow-y:auto;}
 .ac.inbox-mode{overflow:hidden;display:flex;flex-direction:column;padding-bottom:0;}
+.ac.wm{background-image:url('/fruver-san-gabriel-watermark.png');background-repeat:no-repeat;background-position:center 120px;background-size:520px auto;}
 
 /* SWIMLANE */
 .slane-wrap{overflow-x:auto;margin-bottom:20px;}

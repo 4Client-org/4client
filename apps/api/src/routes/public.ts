@@ -10,13 +10,17 @@ interface FormTokenPayload {
   type: string;
   ticketId: string;
   orgId: string;
-  clientName: string;
-  clientPhone: string;
-  orgName: string;
+  // clientName/clientPhone/orgName/sentByName used to be embedded here too, padding
+  // out the token (and, via WhatsApp's link-preview quirks, sometimes breaking the
+  // very link it's part of - see inbox.ts's /form-link route). Every one of those is
+  // just a snapshot of a DB column the ticketId can already look up fresh - dropped
+  // in favor of always reading current values off `ticket`/`ticket.org`, which is
+  // also strictly more correct (a client whose name got corrected after the link was
+  // sent isn't stuck seeing the old one). Old already-issued tokens still carry these
+  // extra keys - jwt.verify just ignores fields this interface doesn't declare.
   // Optional - older already-issued tokens (before this field existed) won't have it,
   // so every use of it below falls back to an arbitrary active staff member.
   sentByUserId?: string;
-  sentByName?: string;
   // Always present (jsonwebtoken sets it automatically, and inbox.ts's /form-link
   // route now sets it explicitly too) - seconds since epoch this specific token was
   // signed, used to detect a superseded link. See assertLinkStillValid below.
@@ -163,15 +167,21 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   }
 
-  // Claims this ticket's form-link for whichever browser opens it first. There's no
+  // Claims this ticket's form-link for whichever browser SUBMITS first. There's no
   // real device identity reachable from a web page - deviceToken is a random value
   // the client generates once and keeps in its own localStorage (ClientFormPage.tsx),
-  // sent on every request. First caller for a ticket with no session yet claims it;
-  // anyone presenting a different deviceToken afterward is rejected the same way an
-  // expired/revoked token is (never reveals *why*, just "link inválido"). The
-  // find-then-create dance (instead of a plain upsert) is so a second, genuinely
-  // legitimate request racing the very first one (form-info + products fire together
-  // on page load) reads back whatever the winner actually claimed instead of erroring.
+  // sent on every request. Only /submit calls this (form-info and /products don't) -
+  // it used to run on every request including the merely-read-only ones, which
+  // claimed the ticket the moment the link was so much as opened. On iPhone that
+  // broke real orders: WhatsApp often opens a tapped link in its own in-app browser
+  // first (separate localStorage from Safari), so that preview silently claimed the
+  // slot with a throwaway device_token before the customer ever got to Safari -
+  // their real, second open then got flatly rejected as "device mismatch". Only
+  // gating the actual write means looking at the catalog can't burn the claim;
+  // rejecting a second submitter from a different device is the one place this was
+  // ever meant to matter. The find-then-create dance (instead of a plain upsert) is
+  // so two submits racing each other read back whatever the winner actually claimed
+  // instead of erroring.
   async function assertDeviceOk(ticketId: string, deviceToken: string): Promise<void> {
     if (!deviceToken) throw new Error('device token required');
     let session = await fastify.prisma.formLinkSession.findUnique({ where: { ticket_id: ticketId } });
@@ -204,7 +214,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     try {
       const payload = verifyFormToken(q.data.t);
       await assertLinkStillValid(payload.ticketId, payload.iat);
-      await assertDeviceOk(payload.ticketId, q.data.device_token);
+
+      const ticketInfo = await fastify.prisma.ticket.findFirst({
+        where: { id: payload.ticketId, org_id: payload.orgId },
+        select: { customer_name: true, org: { select: { name: true } } },
+      });
+      if (!ticketInfo) throw new Error('ticket not found');
 
       // Colombia UTC-5 local date - same "today" the client's own submissions land on.
       const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
@@ -226,8 +241,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         data: {
-          clientName: payload.clientName,
-          orgName: payload.orgName,
+          clientName: ticketInfo.customer_name ?? '',
+          orgName: ticketInfo.org.name,
           orgId: payload.orgId,
           orders: todaysOrders.map(o => ({
             id: o.id,
@@ -254,7 +269,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     try {
       const payload = verifyFormToken(q.data.t);
       await assertLinkStillValid(payload.ticketId, payload.iat);
-      await assertDeviceOk(payload.ticketId, q.data.device_token);
       const products = await fastify.prisma.product.findMany({
         where: { org_id: payload.orgId, active: true },
         select: { id: true, name: true, category: true, unit_type: true, sort_order: true },
@@ -551,8 +565,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           org_id: payload.orgId,
           ticket_id: ticket.id,
           num,
-          customer_name: payload.clientName,
-          customer_phone: payload.clientPhone,
+          customer_name: ticket.customer_name ?? '',
+          customer_phone: ticket.phone,
           address: body.data.address,
           channel: 'whatsapp',
           payment_method: body.data.payment_method ?? 'sin_asignar',

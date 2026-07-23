@@ -173,7 +173,7 @@ export default function MainPage() {
         <div className="ht">
           <div className="hleft">
             <div className="hlogo">
-              <img src="/icon.png" alt="4Client" style={{ height: 34, objectFit: 'contain' }} />
+              <img src="/fruver-san-gabriel.jpeg" alt="Fruver San Gabriel" style={{ height: 34, objectFit: 'contain' }} />
             </div>
             {isDevEnvironment() && (
               <div style={{
@@ -242,7 +242,7 @@ export default function MainPage() {
         </div>
       )}
 
-      <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ''}`}>
+      <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ' wm'}`}>
         {tab === 'swimlane' && (
           <>
             <div className="khead">

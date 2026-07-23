@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Smartphone, Check, Send, ClipboardList, Ban } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
+import { buildFormLinkMessage } from '../../lib/formLinkMessage';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
 import { api } from '../../lib/api';
@@ -186,7 +187,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   onClick={async () => {
                     try {
                       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-                      replyMut.mutate(res.data.url);
+                      replyMut.mutate(buildFormLinkMessage(res.data.url));
                     } catch { toast('No se pudo generar el link', true); }
                   }}
                 >

@@ -127,14 +127,19 @@ describe('public form routes', () => {
     expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg' }]);
   });
 
-  it('a different device_token for the same ticket is rejected on every public endpoint', async () => {
+  it('the device lock only guards /submit - viewing form-info/products from a different device_token still works, only submitting from one does not', async () => {
+    // Merely looking (GET) never claims or checks a device - only a real submit does
+    // (see public.ts's assertDeviceOk comment: this used to run on every request,
+    // which broke iPhone links whose first "open" was WhatsApp's own in-app browser
+    // previewing it before the customer ever reached Safari).
     const formInfo = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=some-other-device` });
-    expect(formInfo.statusCode).toBe(401);
-    expect(formInfo.json().code).toBe('INVALID_TOKEN');
+    expect(formInfo.statusCode).toBe(200);
 
     const products = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${token}&device_token=some-other-device` });
-    expect(products.statusCode).toBe(401);
+    expect(products.statusCode).toBe(200);
 
+    // firstOrderId's earlier submit (above) already claimed the ticket for DEVICE -
+    // a different device_token submitting now is rejected.
     const submit = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
@@ -315,7 +320,11 @@ describe('public form routes', () => {
 
     const decoded = app.jwt.decode(sentToken) as any;
     expect(decoded.sentByUserId).toBe(adminId);
-    expect(decoded.sentByName).toBe(adminName);
+    // clientName/clientPhone/orgName/sentByName used to be embedded here too - now
+    // dropped to keep the token (and the WhatsApp link built from it) shorter; every
+    // route that needs them reads the current value off the ticket/org instead.
+    expect(decoded.clientName).toBeUndefined();
+    expect(decoded.sentByName).toBeUndefined();
     // Bounded well under the old 7-day expiry, and never more than ~24h out.
     const secondsUntilExpiry = decoded.exp - Math.floor(Date.now() / 1000);
     expect(secondsUntilExpiry).toBeGreaterThan(0);
