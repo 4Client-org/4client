@@ -1,0 +1,48 @@
+name: Backup Production Database
+
+# Runs completely independently of Railway/Cloudflare - if either of those has a
+# problem (billing lapse, outage, accidental deletion), this backup already exists
+# somewhere else. That independence is the entire point; it must never be merged
+# into the app's own infra.
+on:
+  schedule:
+    # 08:00 UTC = 3:00am Bogotá (no DST) - quiet hours, no live orders to interrupt.
+    - cron: '0 8 * * *'
+  workflow_dispatch: {} # manual "run now" button in the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      # Ubuntu's default apt repo ships an older postgresql-client than Railway's
+      # Postgres 18 - pg_dump only guarantees compatibility when the client version
+      # is >= the server's, so this pulls the matching v18 client from the official
+      # PGDG repo instead of whatever apt-get install postgresql-client would give.
+      - name: Install matching postgresql-client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
+
+      - name: Dump production database
+        run: |
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          # --format=custom: compressed, and restorable with pg_restore (selectively,
+          # e.g. one table at a time) rather than a giant plain-text SQL file.
+          pg_dump "${{ secrets.PROD_DATABASE_BACKUP_URL }}" --format=custom --file="backup-${STAMP}.dump"
+
+      - name: Upload to Cloudflare R2 (backups bucket - separate from invoices)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp "backup-${STAMP}.dump" \
+            "s3://${{ secrets.BACKUP_R2_BUCKET_NAME }}/db-backups/backup-${STAMP}.dump" \
+            --endpoint-url "https://${{ secrets.BACKUP_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+
+      # Retention is a bucket-level lifecycle rule in the Cloudflare dashboard
+      # (delete objects after N days), not scripted here - a lifecycle rule can't
+      # have a bug that wipes every backup at once the way a custom delete step could.

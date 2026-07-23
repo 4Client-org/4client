@@ -11,6 +11,7 @@ import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
+import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import ProductSearch from '../orders/ProductSearch';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -202,7 +203,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const saveMut = useMutation({
     mutationFn: () => api.patch(`/orders/${orderId}`, {
       customer_name: nombre,
-      customer_phone: telefono,
       address: direccion,
       payment_method: pago,
       employee_id: empleadoId || null,
@@ -214,6 +214,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         added_by_client: !!i.added_by_client,
       })),
     }),
+    // No onClose() here on purpose - staff kept having to save, reopen the same
+    // order, and keep going for a string of small edits. Saving now just refreshes
+    // this modal in place with the saved data; only actually leaving (X, Escape,
+    // backdrop) closes it. The one exception is the "unsaved changes" dialog's own
+    // "save and exit" option below, which explicitly closes after its own save.
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
@@ -221,7 +226,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       setCatalogDirty(false);
       setCatalogClearKey(k => k + 1);
       toast('Cambios guardados');
-      onClose();
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -322,7 +326,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
     if (order.customer_phone) {
       doc.setFont('helvetica', 'bold'); doc.text('Tel:', 3, y);
-      doc.setFont('helvetica', 'normal'); doc.text(order.customer_phone, 15, y); y += 5;
+      doc.setFont('helvetica', 'normal'); doc.text(formatPhoneDisplay(order.customer_phone), 15, y); y += 5;
     }
 
     doc.line(3, y, 77, y); y += 5;
@@ -374,7 +378,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     if (!doc || !order) return;
     try {
       const base64 = doc.output('datauristring').split(',')[1];
-      const res = await api.post<{ url: string }>('/files/invoice', { data: base64, num: order.num });
+      const res = await api.post<{ url: string }>('/files/invoice', { data: base64, num: order.num, order_id: order.id });
       const url = res.url;
       const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
       const orgName = user?.orgName ?? '4Client';
@@ -392,7 +396,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       `Pedido #${order.num} - ${user?.orgName ?? '4Client'}`,
       `Fecha: ${formatFechaLong(order.fecha)}`,
       `Cliente: ${order.customer_name}`,
-      ...(order.customer_phone ? [`Teléfono: ${order.customer_phone}`] : []),
+      ...(order.customer_phone ? [`Teléfono: ${formatPhoneDisplay(order.customer_phone)}`] : []),
       `Dirección: ${order.address}`,
       `Método de pago: ${PAYMENT_LABEL[pago] ?? pago}`,
       '',
@@ -431,7 +435,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       setConfirmDlg({
         msg: 'Hay cambios sin guardar.',
         onOk: onClose,
-        onSave: () => saveMut.mutate(undefined, { onSuccess: () => setConfirmDlg(null) }),
+        // Unlike a plain "Guardar cambios" click, this save came from trying to
+        // CLOSE the modal - so unlike saveMut's own onSuccess (which deliberately
+        // no longer closes), finishing this one should actually close it.
+        onSave: () => saveMut.mutate(undefined, { onSuccess: () => { setConfirmDlg(null); onClose(); } }),
       });
       return;
     }
@@ -503,7 +510,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 <div style={{ fontWeight: 800, fontSize: 14 }}>
                   {order.customer_name}
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.8 }}>{order.customer_phone}</div>
+                <div style={{ fontSize: 12, opacity: 0.8 }}>{formatPhoneDisplay(order.customer_phone)}</div>
               </div>
               <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
                 <button
@@ -684,8 +691,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
-                <input className="fi2" disabled={readOnly} value={telefono}
-                  onChange={(e) => { setTelefono(e.target.value); markDirty(); }} />
+                {/* Always disabled, even when the rest of the order is editable - this
+                    is the real WhatsApp number the conversation is on, never a value
+                    staff types in, and the backend no longer accepts changes to it
+                    (see orders.ts's updateOrderSchema). */}
+                <input className="fi2" disabled value={formatPhoneDisplay(telefono)} title="El teléfono no se puede modificar - es el número de WhatsApp del ticket" />
               </div>
             </div>
             <div className="fg2">

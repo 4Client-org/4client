@@ -159,7 +159,10 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     // a new one. Also clears any device lock (public.ts's FormLinkSession) -
     // sending a new link is a deliberate "start over" action, e.g. to fix a
     // false-positive lockout from the wrong device claiming an earlier link.
-    await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_token_min_iat: issuedAt } });
+    // form_link_opened_at resets too - this new link has its own fresh 10-minute
+    // unopened-dies window (public.ts's assertLinkStillValid), independent of
+    // whether the previous link was ever opened.
+    await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_token_min_iat: issuedAt, form_link_opened_at: null } });
     await fastify.prisma.revokedFormToken.deleteMany({ where: { ticket_id: ticket.id, org_id: req.user.orgId } });
     await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticket.id } });
 
@@ -191,6 +194,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       where: { ticket_id: ticket.id },
       update: { reason: body.data.reason, revoked_at: new Date(), revoked_by: req.user.userId },
       create: { org_id: req.user.orgId, ticket_id: ticket.id, reason: body.data.reason, revoked_by: req.user.userId },
+    });
+
+    // A factura sent to this same conversation must die with the form link, not
+    // stay quietly downloadable through files.ts's separate mechanism - only
+    // touches ones not already opened+expired-out on their own; harmless either way.
+    await fastify.prisma.invoiceLink.updateMany({
+      where: { ticket_id: ticket.id, org_id: req.user.orgId, revoked_at: null },
+      data: { revoked_at: new Date() },
     });
 
     return reply.send({ data: { ok: true } });

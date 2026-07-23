@@ -37,6 +37,7 @@ model Organization {
   daily_closes        DailyClose[]
   revoked_form_tokens RevokedFormToken[]
   audit_logs          AuditLog[]
+  invoice_links       InvoiceLink[]
 
   @@map("organizations")
 }
@@ -130,6 +131,13 @@ model Ticket {
   // issued before this field existed) - nothing to compare against, so old
   // already-issued tokens keep working until their own expiry.
   form_token_min_iat DateTime? @db.Timestamptz
+  // Set the first time GET /form-info actually succeeds for the CURRENT link (reset
+  // to null every time a fresh link is issued, same as form_token_min_iat above). A
+  // link nobody opens within 10 minutes of being sent dies on its own (public.ts's
+  // assertLinkStillValid) - shrinks how long a link that went to the wrong person
+  // (typo'd number, accidental forward) stays usable, without touching the normal
+  // end-of-day expiry for a link that WAS opened in time.
+  form_link_opened_at DateTime? @db.Timestamptz
 
   org                Organization      @relation(fields: [org_id], references: [id])
   messages           TicketMessage[]
@@ -161,8 +169,17 @@ model TicketMessage {
   sent_by        String?  @db.Uuid
   wpp_message_id String?  @unique @db.VarChar(200)
   sent_at        DateTime @default(now()) @db.Timestamptz
+  // All three driven by Meta's webhook `statuses` array (webhook.ts), matched back
+  // to this row by wpp_message_id - previously declared but never actually written,
+  // so every outbound message looked permanently "unconfirmed" regardless of what
+  // really happened on WhatsApp's side.
   delivered      Boolean  @default(false)
   read_by_client Boolean  @default(false)
+  // Set when Meta reports this specific message failed to deliver (invalid number,
+  // blocked the business, phone off WhatsApp, etc.) - null means "no failure
+  // reported", not "confirmed fine". Distinct from delivered/read_by_client staying
+  // false, which just means no status has come back yet (could still be in transit).
+  failed_reason  String?  @db.VarChar(255)
 
   ticket Ticket @relation(fields: [ticket_id], references: [id])
   sender User?  @relation(fields: [sent_by], references: [id])
@@ -320,6 +337,44 @@ model FormLinkSession {
   ticket Ticket @relation(fields: [ticket_id], references: [id])
 
   @@map("form_link_sessions")
+}
+
+// A factura PDF is shared with the client the exact same way a form link is - a
+// bare URL sent over WhatsApp, so it gets the same protections (routes/files.ts):
+// a phone_last4 check (proves whoever opens it knows the customer's number), a
+// 10-minute-unopened-dies window, and now the same "Bloquear link"/"Bloquear todos
+// los links" kill switches a form link already had - staff blocking a ticket's link
+// (e.g. sent to the wrong number) must kill any factura sent to that same
+// conversation too, not just the form link. Unlike a form link there's no Ticket/
+// Order row this naturally lives on (the file itself is just a blob in R2/local disk
+// with no DB identity), so this is its own small table instead.
+model InvoiceLink {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id      String    @db.Uuid
+  // Nullable - an invoice for an order with no linked ticket (e.g. a phone-channel
+  // order with no WhatsApp thread) has nothing to scope a per-ticket revoke to;
+  // it still gets the org-wide block-all and its own phone_last4/TTL protections.
+  ticket_id   String?   @db.Uuid
+  // Nullable only for rows created before this column existed (old test data) -
+  // POST /invoice always sets it going forward. The factura PDF is a static
+  // snapshot generated once, not re-rendered live, so if staff edits the order
+  // afterward (items, address, payment method...) an already-sent factura silently
+  // goes stale with no way to tell the client "there's a newer one." Scoped to the
+  // ORDER specifically, not the whole ticket - editing order A must not kill order
+  // B's still-accurate factura just because they're in the same conversation
+  // (unlike ticket_id above, which IS meant to cascade for the manual block button).
+  order_id    String?   @db.Uuid
+  filename    String    @unique @db.VarChar(300)
+  phone_last4 String    @db.VarChar(4)
+  opened_at   DateTime? @db.Timestamptz
+  revoked_at  DateTime? @db.Timestamptz
+  created_at  DateTime  @default(now()) @db.Timestamptz
+
+  org Organization @relation(fields: [org_id], references: [id])
+
+  @@index([ticket_id])
+  @@index([order_id])
+  @@map("invoice_links")
 }
 
 // Trail for security-sensitive account/config actions (user create, password reset,

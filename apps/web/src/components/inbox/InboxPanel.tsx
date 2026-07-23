@@ -6,6 +6,8 @@ import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
 import { colombiaDateStr } from '../../lib/format';
+import { formatPhoneDisplay } from '../../lib/formatPhone';
+import DeliveryStatus from '../ui/DeliveryStatus';
 
 // Safe URL regex - no backtracking ambiguity, no ReDoS risk
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
@@ -57,12 +59,19 @@ export default function InboxPanel() {
       qc.invalidateQueries({ queryKey: ['inbox'] });
       qc.invalidateQueries({ queryKey: ['inbox-convo'] });
     };
+    // Delivery/read/failure updates on a message already shown - same refresh as
+    // a new message.
+    const onMsgStatus = (data: { ticketId: string }) => {
+      if (data?.ticketId) qc.invalidateQueries({ queryKey: ['inbox-convo', data.ticketId] });
+    };
     sock.on('ticket:message', onMsg);
+    sock.on('ticket:message-status', onMsgStatus);
     sock.on('order:moved', onOrderChange);
     sock.on('order:updated', onOrderChange);
     sock.on('order:paid', onOrderChange);
     return () => {
       sock.off('ticket:message', onMsg);
+      sock.off('ticket:message-status', onMsgStatus);
       sock.off('order:moved', onOrderChange);
       sock.off('order:updated', onOrderChange);
       sock.off('order:paid', onOrderChange);
@@ -163,7 +172,7 @@ export default function InboxPanel() {
               onClick={() => setSelectedId(t.id)}
             >
               <div className="inbox-item-head">
-                <span className="inbox-item-name">{t.customer_name || t.phone}</span>
+                <span className="inbox-item-name">{t.customer_name || formatPhoneDisplay(t.phone)}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   {t.unread_count > 0 && (
                     <span className="inbox-unread">{t.unread_count}</span>
@@ -173,7 +182,7 @@ export default function InboxPanel() {
                   </span>
                 </div>
               </div>
-              <div className="inbox-item-phone">{t.phone}</div>
+              <div className="inbox-item-phone">{formatPhoneDisplay(t.phone)}</div>
               {lastMsg && (
                 <div className="inbox-item-preview">
                   {lastMsg.direction === 'out' ? '› ' : ''}{lastMsg.text}
@@ -198,9 +207,9 @@ export default function InboxPanel() {
           <div className="inbox-chat-head">
             <div>
               <div style={{ fontWeight: 800, fontSize: 16 }}>
-                {selectedTicket?.customer_name || selectedTicket?.phone}
+                {selectedTicket?.customer_name || formatPhoneDisplay(selectedTicket?.phone)}
               </div>
-              <div style={{ fontSize: 13, color: 'var(--gt)' }}>{selectedTicket?.phone}</div>
+              <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
             </div>
           </div>
 
@@ -230,7 +239,12 @@ export default function InboxPanel() {
                       <div className="chat-bub-who">{msg.sender.name}</div>
                     )}
                     <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
-                    <div className="chat-bub-time">{formatMsgTime(msg.sent_at)}</div>
+                    <div className="chat-bub-time" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                      {formatMsgTime(msg.sent_at)}
+                      {isOut && msg.wpp_message_id && (
+                        <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
+                      )}
+                    </div>
                   </div>
                 </div>
               );

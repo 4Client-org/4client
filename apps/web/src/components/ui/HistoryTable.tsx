@@ -5,7 +5,7 @@
 import type { CSSProperties } from 'react';
 
 const HIST_VAL_MAP: Record<string, string> = {
-  cod: 'Cobro en casa', cash: 'Efectivo', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
+  cod: 'Cobro en casa', cash: 'Pagado en tienda', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo',
   camino: 'En camino', entregado: 'Entregado', cerrado: 'Cerrado',
   whatsapp: 'WhatsApp', call: 'Llamada',
