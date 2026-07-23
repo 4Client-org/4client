@@ -604,6 +604,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           fastify.log.warn({ ticketId: ticket.id }, 'WPP: org sin credenciales Meta, confirmación solo guardada en BD');
         }
 
+        // Same as staff editing the order (orders.ts's PATCH /:id) - the client just
+        // changed something real about this order via the form, so any factura
+        // already sent for it is now a stale snapshot.
+        await fastify.prisma.invoiceLink.updateMany({
+          where: { order_id: updated.id, org_id: payload.orgId, revoked_at: null },
+          data: { revoked_at: new Date() },
+        });
+
         fastify.io.to(`org:${payload.orgId}`).emit('order:updated', updated as any);
         fastify.io.to(`org:${payload.orgId}`).emit('ticket:message', {
           ticketId: ticket.id,

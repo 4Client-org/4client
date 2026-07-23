@@ -355,6 +355,15 @@ model InvoiceLink {
   // order with no WhatsApp thread) has nothing to scope a per-ticket revoke to;
   // it still gets the org-wide block-all and its own phone_last4/TTL protections.
   ticket_id   String?   @db.Uuid
+  // Nullable only for rows created before this column existed (old test data) -
+  // POST /invoice always sets it going forward. The factura PDF is a static
+  // snapshot generated once, not re-rendered live, so if staff edits the order
+  // afterward (items, address, payment method...) an already-sent factura silently
+  // goes stale with no way to tell the client "there's a newer one." Scoped to the
+  // ORDER specifically, not the whole ticket - editing order A must not kill order
+  // B's still-accurate factura just because they're in the same conversation
+  // (unlike ticket_id above, which IS meant to cascade for the manual block button).
+  order_id    String?   @db.Uuid
   filename    String    @unique @db.VarChar(300)
   phone_last4 String    @db.VarChar(4)
   opened_at   DateTime? @db.Timestamptz
@@ -364,6 +373,7 @@ model InvoiceLink {
   org Organization @relation(fields: [org_id], references: [id])
 
   @@index([ticket_id])
+  @@index([order_id])
   @@map("invoice_links")
 }
 

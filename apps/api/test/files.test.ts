@@ -112,7 +112,7 @@ describe('files routes (invoice PDF)', () => {
     expect(dead.json().code).toBe('INVOICE_EXPIRED');
   });
 
-  it('sending a fresh factura for the same ticket auto-supersedes every earlier one, no manual block needed', async () => {
+  it('sending a fresh factura for the same ORDER auto-supersedes every earlier one for it, no manual block needed', async () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119900', customer_name: 'Cliente Supersede' } });
     const orderWithTicket = await app.prisma.order.create({
       data: {
@@ -146,6 +146,73 @@ describe('files routes (invoice PDF)', () => {
     expect(secondDead.statusCode).toBe(410);
     const thirdAlive = await app.inject({ method: 'GET', url: `/api/v1/files/${thirdFilename}/status` });
     expect(thirdAlive.statusCode).toBe(200);
+  });
+
+  it('resending a factura for one order does NOT touch a different order\'s still-accurate factura, even in the same conversation', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119901', customer_name: 'Cliente Dos Pedidos' } });
+    const orderA = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '010', customer_name: 'Cliente Dos Pedidos',
+        customer_phone: '573001119901', address: 'Calle A', payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+      },
+    });
+    const orderB = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '011', customer_name: 'Cliente Dos Pedidos',
+        customer_phone: '573001119901', address: 'Calle B', payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+      },
+    });
+
+    const invoiceA1 = await app.inject({
+      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '010', order_id: orderA.id },
+    });
+    const invoiceB = await app.inject({
+      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '011', order_id: orderB.id },
+    });
+    const filenameB = new URL(invoiceB.json().url).searchParams.get('f')!;
+
+    // Resend order A's factura - must supersede A's own previous one, not B's.
+    await app.inject({
+      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '010', order_id: orderA.id },
+    });
+
+    const filenameA1 = new URL(invoiceA1.json().url).searchParams.get('f')!;
+    const a1Dead = await app.inject({ method: 'GET', url: `/api/v1/files/${filenameA1}/status` });
+    expect(a1Dead.statusCode).toBe(410);
+    const bStillAlive = await app.inject({ method: 'GET', url: `/api/v1/files/${filenameB}/status` });
+    expect(bStillAlive.statusCode).toBe(200);
+  });
+
+  it('editing an order (PATCH /orders/:id) invalidates its own outstanding factura - a stale PDF must not keep looking current', async () => {
+    const order = await app.prisma.order.create({
+      data: {
+        org_id: orgId, num: '012', customer_name: 'Cliente Edicion',
+        customer_phone: '573001119902', address: 'Calle Original', payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+        items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
+      },
+    });
+    const upload = await app.inject({
+      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPdfBase64, num: '012', order_id: order.id },
+    });
+    const filename = new URL(upload.json().url).searchParams.get('f')!;
+
+    const beforeEdit = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}/status` });
+    expect(beforeEdit.statusCode).toBe(200);
+
+    const edit = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { address: 'Calle Nueva Editada' },
+    });
+    expect(edit.statusCode).toBe(200);
+
+    const afterEdit = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}/status` });
+    expect(afterEdit.statusCode).toBe(410);
+    expect(afterEdit.json().code).toBe('INVOICE_EXPIRED');
   });
 
   it('a link nobody opens within 10 minutes of being issued dies on its own, even though it\'s well under the 24h absolute cap', async () => {

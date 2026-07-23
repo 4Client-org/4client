@@ -391,6 +391,16 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return updated;
     });
 
+    // The factura PDF is a static snapshot generated once, never re-rendered live -
+    // any edit here (items, address, payment method...) makes an already-sent one
+    // silently stale, with nothing telling the client a newer version exists. Kills
+    // every outstanding factura for THIS order (files.ts's POST /invoice does the
+    // same on resend); staff just hits "Enviar factura" again to send a fresh one.
+    await fastify.prisma.invoiceLink.updateMany({
+      where: { order_id: id, org_id: req.user.orgId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
+
     fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
     return reply.send({ data: updatedOrder });
   });

@@ -61,21 +61,19 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     const filename = `Factura-${stamp}-${orgPrefix}-${safeNum}-${id}.pdf`;
 
     await fastify.prisma.invoiceLink.create({
-      data: { org_id: req.user.orgId, ticket_id: order.ticket_id, filename, phone_last4: phoneLast4 },
+      data: { org_id: req.user.orgId, ticket_id: order.ticket_id, order_id: body.data.order_id, filename, phone_last4: phoneLast4 },
     });
 
     // Same auto-supersede a form link already has (inbox.ts's /form-link route
-    // bumping form_token_min_iat): sending a fresh factura kills every earlier one
-    // for this same conversation, not just the ones staff happens to manually
-    // block - only the most recently sent link should ever still work. Scoped to
-    // ticket_id, same as the form link, not to this one order - if the ticket has
-    // no linked ticket at all, there's nothing to supersede.
-    if (order.ticket_id) {
-      await fastify.prisma.invoiceLink.updateMany({
-        where: { ticket_id: order.ticket_id, org_id: req.user.orgId, filename: { not: filename }, revoked_at: null },
-        data: { revoked_at: new Date() },
-      });
-    }
+    // bumping form_token_min_iat): sending a fresh factura for this SAME ORDER kills
+    // every earlier one for it - only the most recently sent one should ever still
+    // work. Scoped to order_id, not ticket_id - a ticket can have several different
+    // orders, each with its own factura history; resending order A's invoice must
+    // not touch order B's still-accurate one just because they're in the same chat.
+    await fastify.prisma.invoiceLink.updateMany({
+      where: { order_id: body.data.order_id, org_id: req.user.orgId, filename: { not: filename }, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
 
     // Points at the FRONTEND app now, not directly at this API - GET /:filename below
     // requires phone_last4 on every request, which only a page that can prompt for it
