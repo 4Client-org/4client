@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, FileWarning } from 'lucide-react';
+import { Lock, XCircle } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
 
 const API = resolveApiBase();
@@ -61,11 +61,14 @@ export default function FacturaPage() {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
   };
 
+  // Same exact layout/copy-shape as ClientFormPage's 'invalid' screen (icon, heading,
+  // message) - a blocked/expired/dead link should look and read the same way
+  // whether it's a form link or a factura link, not like two different features.
   if (state === 'error') return (
     <div style={page}>
       <div style={{ background: '#fff', borderRadius: 18, margin: '24px 16px', padding: '32px 20px', textAlign: 'center', boxShadow: '0 2px 12px rgba(0,0,0,.1)' }}>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}><FileWarning size={56} color="#DC2626" strokeWidth={1.5} /></div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>Factura no disponible</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}><XCircle size={56} color="#DC2626" strokeWidth={1.5} /></div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#DC2626', marginBottom: 8 }}>Link inválido</div>
         <div style={{ fontSize: 15, color: '#666' }}>{errorMsg}</div>
       </div>
     </div>
