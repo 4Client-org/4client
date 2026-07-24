@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, KeyboardEvent } from 'react';
+import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef, KeyboardEvent } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
 
 interface Product { id: string; name: string; category: string; }
@@ -13,6 +13,19 @@ interface Props {
   clearKey?: number;
 }
 
+// Exposed so a parent (NuevoPedidoModal/DetallePedidoModal) can force-commit
+// whatever's mid-edit in the Factbox table right before it reads `items` to save -
+// otherwise a row left open (typed but not confirmed with Enter/✓) was silently
+// dropped by a direct click on the modal's own "Guardar" button: that button only
+// ever read the `items` PROP, which commitEditField/saveEdit only update via
+// onChange, a step the person never triggered. Returns the fully-merged array
+// synchronously (not just via the onChange side effect) because the caller needs it
+// in the SAME tick, before its own save fires - onChange's resulting setItems is
+// only visible on the next render, too late for a save already about to happen.
+export interface ProductSearchHandle {
+  commitPendingEdit: () => Item[];
+}
+
 function groupByCategory(products: Product[]) {
   const order: string[] = [];
   const groups: Record<string, Product[]> = {};
@@ -23,7 +36,9 @@ function groupByCategory(products: Product[]) {
   return order.map(cat => ({ category: cat, products: groups[cat] }));
 }
 
-export default function ProductSearch({ products, items, locked, onChange, onLocalDirty, clearKey }: Props) {
+const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
+  { products, items, locked, onChange, onLocalDirty, clearKey }, ref,
+) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -80,9 +95,13 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     setLocalInputs(prev => ({ ...prev, [name]: { ...getLocal(name), [field]: val } }));
   }
 
-  function commitProduct(productName: string) {
+  // Returns the resulting items array (not just void) - commitPendingEdit below
+  // needs the ACTUAL merged list synchronously, not the state update this also
+  // triggers via onChange, which only lands on the next render and would still be
+  // stale to whatever reads `items` right after calling it in the same tick.
+  function commitProduct(productName: string): Item[] {
     const local = localInputs[productName];
-    if (!local?.qty.trim() && !local?.price.trim()) return;
+    if (!local?.qty.trim() && !local?.price.trim()) return items;
 
     // Preserve provenance - staff editing qty/price on a line the client added
     // (typically filling in the price, which the client's form never sets) must not
@@ -112,6 +131,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     // the catalog is collapsed, e.g. when this commit came from an inline Factbox edit)
     setSearch('');
     requestAnimationFrame(() => searchRef.current?.focus());
+    return next;
   }
 
   function handleKey(e: KeyboardEvent<HTMLInputElement>, productName: string) {
@@ -176,10 +196,15 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     setEditingRow(null);
   }
 
-  function saveEdit(productName: string) {
-    commitProduct(productName);
+  function saveEdit(productName: string): Item[] {
+    const next = commitProduct(productName);
     setEditingRow(null);
+    return next;
   }
+
+  useImperativeHandle(ref, () => ({
+    commitPendingEdit: () => editingRow ? saveEdit(editingRow) : items,
+  }));
 
   function addManualProduct() {
     const name = manualName.trim();
@@ -331,6 +356,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
+                        min="0"
                         value={local.price}
                         onChange={e => setLocal(p.name, 'price', e.target.value)}
                         onKeyDown={e => handleKey(e, p.name)}
@@ -410,6 +436,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
+                        min="0"
                         value={local.price}
                         onChange={e => setLocal(i.product_name, 'price', e.target.value)}
                         onKeyDown={e => {
@@ -487,6 +514,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
             className="iinput no-spin"
             placeholder="$0"
             type="number"
+            min="0"
             value={manualPrice}
             onChange={e => setManualPrice(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
@@ -513,4 +541,6 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
       </div>
     </>
   );
-}
+});
+
+export default ProductSearch;

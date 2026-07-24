@@ -391,11 +391,16 @@ describe('public form routes', () => {
   it('GET /form-info marks a pedido an encargado typed up manually as not editable, even while it\'s in an editable status - the client can only view it', async () => {
     const staffPhone2 = '573001112261';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: staffPhone2, customer_name: 'Cliente Ver Pedido Encargado' } });
+    // Colombia-local "today" (UTC-5), same formula GET /form-info itself uses to
+    // filter - a bare `new Date()` is the real UTC date, which drifts a calendar day
+    // behind Colombia's between 00:00-05:00 UTC (7pm-midnight Colombia), making this
+    // order invisible to the very query being tested during exactly that window.
+    const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
     await app.prisma.order.create({
       data: {
         org_id: orgId, ticket_id: ticket.id, num: '901', customer_name: 'Cliente Ver Pedido Encargado',
         customer_phone: staffPhone2, address: 'Calle Encargado 2', payment_method: 'cash',
-        registered_by: adminId, fecha: new Date(), source: 'encargado', status: 'nuevo',
+        registered_by: adminId, fecha: todayLocal, source: 'encargado', status: 'nuevo',
         items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
       },
     });
@@ -888,5 +893,51 @@ describe('link abuse lockout - repeated wrong PIN guesses', () => {
     const res = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=9903` });
     expect(res.statusCode).toBe(403);
     expect(res.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
+  });
+});
+
+describe('public /submit - Meta WhatsApp delivery tracking on the order confirmation message', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let originalFetch: typeof fetch;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    // No WPP_TOKEN_ENC_KEY in the test env - crypto.ts treats an unprefixed value as
+    // legacy plaintext, so a plain string round-trips fine without real encryption.
+    await app.prisma.organization.update({
+      where: { id: orgId },
+      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+    });
+    await createTestUser(app.prisma, orgId, 'admin', 'SubmitWppAdmin1!');
+    originalFetch = global.fetch;
+  });
+
+  afterAll(async () => {
+    global.fetch = originalFetch;
+    await app.close();
+  });
+
+  it('the "pedido recibido" confirmation sent to the client stores the real Meta message id, not the hardcoded null it used to send', async () => {
+    const phone = '573001119920';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Submit WPP' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const token = (app.jwt.sign as any)({ type: 'form_link', ticketId: ticket.id, orgId }, { expiresIn: '7d' });
+    // Unique per test run, not a fixed literal - wpp_message_id is globally unique,
+    // and a hardcoded value would collide with a leftover row from a previous run
+    // against the same (not wiped between runs) test database.
+    const fakeWamid = `wamid.SUBMITOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { token, device_token: 'device-wpp-submit', phone_last4: '9920', address: 'Calle WPP 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const message = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: ticket.id, direction: 'out' } });
+    expect(message!.wpp_message_id).toBe(fakeWamid);
   });
 });

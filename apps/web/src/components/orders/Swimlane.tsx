@@ -317,7 +317,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
-            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0}
+            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); movePrev(ord); }}>
             <ChevronLeft size={14} />
           </button>
@@ -325,7 +325,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />Ver
           </button>
           <button className="dc-btn" title={ord.status === 'entregado' ? 'Cerrar pedido' : 'Avanzar'}
-            disabled={ord.locked || frozen || ord.status === 'cerrado'}
+            disabled={ord.locked || frozen || ord.status === 'cerrado' || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); moveNext(ord); }}>
             <ChevronRight size={14} />
           </button>

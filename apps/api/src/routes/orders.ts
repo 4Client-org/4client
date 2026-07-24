@@ -63,24 +63,44 @@ const createOrderSchema = z.object({
   notes:          z.string().max(1000).optional(),
   fecha:          z.string().optional(),
   items:          z.array(orderItemSchema).min(1).max(100),
+  // "¿Con cuánto paga el cliente?" for a cobro-en-casa (cod) order - set as soon as
+  // staff knows it (not gated behind the final password-protected /cobro), so the
+  // domiciliario can be told how much change to bring. Reuses the SAME column the
+  // final cobro already writes (amount_received) rather than a separate field - see
+  // updateOrderSchema below for the full reasoning and validation.
+  amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
 });
 
 const updateOrderSchema = z.object({
   customer_name:  z.string().min(1).max(200).optional(),
   // customer_phone deliberately absent - it's always the ticket's real WhatsApp
   // number (set once at creation, see POST / above) and must never drift from it,
-  // so there's no field here for staff to send a different value through.
+  // so there's no field here for staff to send a different value through. EXCEPT for
+  // a ticket-less order (channel 'call', no ticket_id) - there's no ticket to source
+  // a phone from, so the PATCH handler below allows this field through ONLY in that
+  // case (checked against `existing.ticket_id`, not a client-supplied flag).
+  customer_phone: z.string().max(20).optional(),
   address:        z.string().max(500).optional(),
   payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod']).optional(),
   employee_id:    z.string().uuid().nullable().optional(),
   notes:          z.string().max(1000).optional(),
   items:          z.array(orderItemSchema).min(1).max(100).optional(),
+  // Same field as createOrderSchema above - staff picks "completo" (send the order's
+  // current total) or "necesita vuelta" (send what the client will pay with) as soon
+  // as cobro-en-casa is selected, on THIS order's regular save, no password needed.
+  // null explicitly clears it (e.g. switching away from cod). Validated below against
+  // the order's own total - must be > 0 and >= total, same rule the final /cobro
+  // already enforces, so whatever gets recorded here is guaranteed to still be a
+  // valid answer once cobro time actually comes (assuming the total hasn't changed
+  // since - the final /cobro re-validates against the total lit AT that time too).
+  amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
 });
 
 const ORDER_FIELD_LABELS: Record<string, string> = {
   ticket_id: 'ticket', customer_name: 'nombre del cliente', customer_phone: 'teléfono',
   address: 'dirección', channel: 'canal', payment_method: 'método de pago',
   employee_id: 'domiciliario', notes: 'notas', fecha: 'fecha', items: 'productos',
+  amount_received: 'monto de pago',
 };
 
 // A blanket "Datos inválidos" doesn't tell anyone which field actually failed - turns
@@ -108,6 +128,20 @@ function orderValidationMessage(error: z.ZodError): string {
 // check already on these routes, just scoped to the whole day instead of one order.
 async function findDayClose(prisma: PrismaClient, orgId: string, fecha: Date) {
   return prisma.dailyClose.findUnique({ where: { org_id_fecha: { org_id: orgId, fecha } } });
+}
+
+// Shared by POST / and PATCH /:id - validates the "¿con cuánto paga?" amount for a
+// cobro-en-casa order against the SAME rule the final /cobro enforces (must be a
+// real answer, > 0, and enough to cover the total): a value recorded here that
+// couldn't survive that same check later would be worse than not recording anything
+// at all - staff would trust a number that's already known-wrong. Returns an error
+// string, or null if the value (or its absence) is fine.
+function validateCodAmount(amountReceived: number | null | undefined, paymentMethod: string, total: number): string | null {
+  if (amountReceived === undefined || amountReceived === null) return null;
+  if (paymentMethod !== 'cod') return 'El monto de pago solo aplica a pedidos con cobro en casa';
+  if (amountReceived <= 0) return 'El monto debe ser mayor que cero';
+  if (amountReceived < total) return `El monto debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`;
+  return null;
 }
 
 function buildOrderSelect(includeHistory = false) {
@@ -163,6 +197,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
 
     const { items, fecha, ...rest } = body.data;
+
+    const codError = validateCodAmount(rest.amount_received, rest.payment_method, items.reduce((s, i) => s + i.price, 0));
+    if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // ticket_id/employee_id are just UUIDs from the request body - Prisma's FK check
     // only confirms the row exists SOMEWHERE, not that it belongs to this org (both
@@ -268,6 +305,21 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
 
     const { items, ...fields } = body.data;
+
+    // customer_phone only ever settable when this order has no ticket - one with a
+    // ticket must always mirror that ticket's real WhatsApp number (see
+    // updateOrderSchema's comment), so a value sent here is silently dropped rather
+    // than trusted in that case. This is what actually lets a ticket-less (channel
+    // 'call') order that was created with no phone yet get one later - previously
+    // there was no path to set it at all, permanently blocking that order's cobro.
+    if (fields.customer_phone !== undefined && existing.ticket_id) {
+      delete fields.customer_phone;
+    }
+
+    const totalForCodCheck = (items ?? await fastify.prisma.orderItem.findMany({ where: { order_id: id }, select: { price: true } }))
+      .reduce((s, i) => s + Number(i.price), 0);
+    const codError = validateCodAmount(fields.amount_received, fields.payment_method ?? existing.payment_method, totalForCodCheck);
+    if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // Same cross-org guard as POST / - employee_id is a bare UUID from the request
     // body, and Employee.id is globally unique (not scoped per org), so an id
@@ -481,6 +533,13 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // all-zero order.
     const unpriced = existing.items.filter(i => Number(i.price) <= 0);
     if (unpriced.length > 0) missing.push(`precio de ${unpriced.map(i => i.product_name).join(', ')}`);
+    // A cobro-en-casa order must already have its "¿con cuánto paga?" answer recorded
+    // (set at creation/edit time, see updateOrderSchema/validateCodAmount above) -
+    // staff can't reach the final password-gated confirmation without ever having
+    // decided "completo" or a real amount, matching every other required field here.
+    if (existing.payment_method === 'cod' && existing.amount_received == null) {
+      missing.push('monto de pago en efectivo (completo o con vuelta)');
+    }
     if (missing.length > 0) {
       return reply.status(400).send({ error: `Faltan datos para cerrar el pedido: ${missing.join(', ')}`, code: 'MISSING_FIELDS' });
     }
@@ -488,6 +547,16 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const total = existing.items.reduce((s, i) => s + Number(i.price), 0);
     if (total <= 0) {
       return reply.status(400).send({ error: 'No es posible cerrar el pedido porque no tiene un total calculado', code: 'NO_TOTAL' });
+    }
+    // Was previously unchecked - a submitted amount below the total silently produced
+    // a NEGATIVE change_amount, recorded as-is. Same rule as validateCodAmount above,
+    // applied here too since this is the one place that ALWAYS runs regardless of
+    // payment method (cash/transfer confirmations go through this exact same field).
+    if (body.data.amount_received <= 0) {
+      return reply.status(400).send({ error: 'El monto recibido debe ser mayor que cero', code: 'VALIDATION_ERROR' });
+    }
+    if (body.data.amount_received < total) {
+      return reply.status(400).send({ error: `El monto recibido debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`, code: 'VALIDATION_ERROR' });
     }
     const change = body.data.amount_received - total;
 

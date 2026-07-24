@@ -101,12 +101,33 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     if (provider) {
       try {
-        await provider.sendText(ticket.phone, body.data.text);
+        // Capturing and storing this is the whole point - webhook.ts's ingestStatus
+        // matches every later delivered/read/failed status update by THIS id
+        // (wpp_message_id). Without saving it here, every status Meta ever sends for
+        // this message has nothing to match against and is silently dropped -
+        // DeliveryStatus.tsx stays stuck on a single gray check forever, never a
+        // failure either, indistinguishable from "still sending".
+        const { messageId } = await provider.sendText(ticket.phone, body.data.text);
+        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
         wpp_status = 'sent';
       } catch (err: any) {
         wpp_status = 'failed';
         wpp_error = err?.message ?? 'Error desconocido Meta API';
         fastify.log.error({ err, ticketId }, 'WPP: error enviando respuesta via Meta API');
+        // Recorded on the message itself (not just returned in this HTTP response) so
+        // DeliveryStatus shows the red "no se pudo entregar" X - e.g. WhatsApp's 24h
+        // customer-service-window policy rejecting a business-initiated message with
+        // no active session. Broadcast so anyone else with this chat already open
+        // (not just whoever clicked send) sees it update live, same as a real Meta
+        // webhook status would.
+        const failed = await fastify.prisma.ticketMessage.update({
+          where: { id: message.id },
+          data: { failed_reason: String(wpp_error).slice(0, 255) },
+          select: { delivered: true, read_by_client: true, failed_reason: true },
+        });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, ...failed,
+        });
       }
     } else {
       fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, mensaje solo guardado en BD');

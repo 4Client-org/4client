@@ -351,4 +351,110 @@ describe('orders routes', () => {
     expect(cobro.json().code).toBe('MISSING_FIELDS');
     expect(cobro.json().error).toContain('Cebolla Roja');
   });
+
+  it('POST /orders/:id/cobro rejects an amount_received below the total - previously unvalidated, could record a negative change_amount', async () => {
+    const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Cobro Bajo' } });
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-17', customer_phone: '3001112222', employee_id: empleado.id }),
+    });
+    const order = create.json().data; // total = 8000
+
+    const cobro = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 5000, password: ENCARGADO_PASS },
+    });
+    expect(cobro.statusCode).toBe(400);
+    expect(cobro.json().code).toBe('VALIDATION_ERROR');
+
+    const fresh = await app.prisma.order.findUnique({ where: { id: order.id } });
+    expect(fresh!.paid).toBe(false);
+  });
+
+  it('cobro-en-casa: POST /orders rejects amount_received below the total', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 5000 }), // total is 8000
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('mayor o igual al total');
+  });
+
+  it('cobro-en-casa: POST /orders accepts "completo" (amount_received === total), stores it', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-19', payment_method: 'cod', amount_received: 8000 }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(Number(res.json().data.amount_received)).toBe(8000);
+  });
+
+  it('cobro-en-casa: amount_received is rejected on a non-cod order (PATCH and POST)', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-20', payment_method: 'cash', amount_received: 8000 }),
+    });
+    expect(create.statusCode).toBe(400);
+
+    const createOk = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-20', payment_method: 'cash' }),
+    });
+    const order = createOk.json().data;
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 8000 },
+    });
+    expect(patch.statusCode).toBe(400);
+  });
+
+  it('cobro-en-casa: POST /orders/:id/cobro is blocked until amount_received has been recorded, even with every other field filled', async () => {
+    const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Cod Missing' } });
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({
+        fecha: '2026-01-21', customer_phone: '3003334444', employee_id: empleado.id, payment_method: 'cod',
+      }),
+    });
+    const order = create.json().data;
+    expect(order.amount_received).toBeNull();
+
+    const cobro = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 8000, password: ENCARGADO_PASS },
+    });
+    expect(cobro.statusCode).toBe(400);
+    expect(cobro.json().code).toBe('MISSING_FIELDS');
+    expect(cobro.json().error).toContain('monto de pago');
+
+    // Recording it via a normal PATCH (no password) unblocks the cobro.
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000 },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const cobro2 = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000, password: ENCARGADO_PASS },
+    });
+    expect(cobro2.statusCode).toBe(200);
+    expect(Number(cobro2.json().data.change_amount)).toBe(2000);
+  });
+
+  it('a ticket-less order (channel "call") can have customer_phone set via PATCH - closes the previously-permanent cobro gap', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-22' }), // channel: 'call', no ticket_id, no customer_phone
+    });
+    const order = create.json().data;
+    expect(order.customer_phone).toBeFalsy();
+
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { customer_phone: '3005556666' },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().data.customer_phone).toBe('3005556666');
+  });
 });

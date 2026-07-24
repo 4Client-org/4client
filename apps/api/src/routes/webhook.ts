@@ -163,7 +163,23 @@ async function ingestMessage(
             message: { ...autoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: autoReply.sent_at.toISOString(), sent_by_name: null },
           });
         })
-        .catch(err => fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando auto-respuesta'));
+        .catch(async (err) => {
+          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando auto-respuesta');
+          // Same reasoning as inbox.ts's /reply and public.ts's confirmations - a
+          // failed send (e.g. no active 24h WhatsApp session and no approved template)
+          // must leave a visible red-X message, not just a server log nobody sees.
+          const failedAutoReply = await fastify.prisma.ticketMessage.create({
+            data: {
+              ticket_id: ticket.id, direction: 'out', text: org.welcome_message!,
+              sent_at: new Date(), failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255),
+            },
+          });
+          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+          fastify.io.to(`org:${org.id}`).emit('ticket:message', {
+            ticketId: ticket.id,
+            message: { ...failedAutoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedAutoReply.sent_at.toISOString(), sent_by_name: null },
+          });
+        });
     }
   }
   type MediaType = 'pdf' | 'image' | 'audio' | 'video';

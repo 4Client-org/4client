@@ -13,7 +13,8 @@ import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHo
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
-import ProductSearch from '../orders/ProductSearch';
+import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
+import CodPaymentField from '../orders/CodPaymentField';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
@@ -101,8 +102,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [telefono, setTelefono] = useState('');
   const [direccion, setDireccion] = useState('');
   const [pago, setPago] = useState('transfer');
+  // Neither selected by default - same reasoning as NuevoPedidoModal's own copy of
+  // this: staff must actively pick one, not fall into a silent default.
+  const [codChoice, setCodChoice] = useState<'completo' | 'vuelta' | null>(null);
+  const [codCash, setCodCash] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
+  const productSearchRef = useRef<ProductSearchHandle>(null);
   const [catalogDirty, setCatalogDirty] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [catalogClearKey, setCatalogClearKey] = useState(0);
@@ -131,6 +137,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       price: String(i.price ?? ''),
       added_by_client: !!i.added_by_client,
     })));
+    // Reconstruct which of the two choices was made from the stored value - equal to
+    // the order's own total means "completo" (that's exactly what NuevoPedidoModal/
+    // this same save sends for that choice), anything else means "vuelta" with that
+    // exact amount typed in.
+    if (order.amount_received != null) {
+      const orderTotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price), 0);
+      if (Number(order.amount_received) === orderTotal) { setCodChoice('completo'); setCodCash(''); }
+      else { setCodChoice('vuelta'); setCodCash(String(order.amount_received)); }
+    } else {
+      setCodChoice(null); setCodCash('');
+    }
+    // Prefills the FINAL cobro dialog's own amount field with whatever was already
+    // decided here - staff just confirms instead of retyping. Only on first load
+    // (cobroRec still blank) so it never stomps something already being typed there.
+    setCobroRec(prev => (prev === '' && order.amount_received != null) ? String(order.amount_received) : prev);
     setIsDirty(false);
     // Trashed orders are opened specifically to see what happened (who sent it to
     // papelera, when) - that's in the history, so show it expanded right away
@@ -200,20 +221,35 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatData?.messages?.length]);
 
+  // Takes the FINAL items array as its mutate variable rather than reading `items`
+  // state directly - triggerSave (below) commits whatever's still mid-edit in the
+  // Factbox table first and passes the result straight in, since that commit's own
+  // state update wouldn't be visible in this closure until the NEXT render (too late,
+  // this mutation is about to fire in the same tick).
   const saveMut = useMutation({
-    mutationFn: () => api.patch(`/orders/${orderId}`, {
-      customer_name: nombre,
-      address: direccion,
-      payment_method: pago,
-      employee_id: empleadoId || null,
-      items: items.map((i, idx) => ({
-        product_name: i.product_name,
-        quantity_label: i.quantity_label,
-        price: parseFloat(i.price) || 0,
-        sort_order: idx,
-        added_by_client: !!i.added_by_client,
-      })),
-    }),
+    // amount_received: "completo" sends the order's own total (no change owed),
+    // "vuelta" sends whatever staff typed, not-yet-decided (or switched away from
+    // cod) explicitly sends null to clear any stale value from an earlier choice -
+    // see CodPaymentField/orders.ts's validateCodAmount for the matching validation.
+    mutationFn: (finalItems: any[]) => {
+      const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+      return api.patch(`/orders/${orderId}`, {
+        customer_name: nombre,
+        address: direccion,
+        payment_method: pago,
+        employee_id: empleadoId || null,
+        amount_received: pago === 'cod'
+          ? (codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? (parseFloat(codCash) || 0) : null)
+          : null,
+        items: finalItems.map((i, idx) => ({
+          product_name: i.product_name,
+          quantity_label: i.quantity_label,
+          price: parseFloat(i.price) || 0,
+          sort_order: idx,
+          added_by_client: !!i.added_by_client,
+        })),
+      });
+    },
     // No onClose() here on purpose - staff kept having to save, reopen the same
     // order, and keep going for a string of small edits. Saving now just refreshes
     // this modal in place with the saved data; only actually leaving (X, Escape,
@@ -229,6 +265,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     },
     onError: (e: any) => toast(e.message, true),
   });
+
+  // Commits whatever row is still mid-edit in the Factbox table (typed but never
+  // confirmed with Enter/✓) before saving - see ProductSearchHandle's own comment for
+  // why saveMut can't just read `items` state directly for this.
+  function triggerSave(options?: Parameters<typeof saveMut.mutate>[1]) {
+    const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
+    saveMut.mutate(finalItems, options);
+  }
 
   const moveMut = useMutation({
     mutationFn: (status: string) => api.patch(`/orders/${orderId}/status`, { status }),
@@ -438,7 +482,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         // Unlike a plain "Guardar cambios" click, this save came from trying to
         // CLOSE the modal - so unlike saveMut's own onSuccess (which deliberately
         // no longer closes), finishing this one should actually close it.
-        onSave: () => saveMut.mutate(undefined, { onSuccess: () => { setConfirmDlg(null); onClose(); } }),
+        onSave: () => triggerSave({ onSuccess: () => { setConfirmDlg(null); onClose(); } }),
       });
       return;
     }
@@ -484,6 +528,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   if (items.length === 0) cierreMissing.push('productos');
   const unpriced = items.filter((i: any) => !(parseFloat(i.price) > 0));
   if (unpriced.length > 0) cierreMissing.push(`precio de ${unpriced.map((i: any) => i.product_name).join(', ')}`);
+  const codCashNum = parseFloat(codCash) || 0;
+  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
+  if (pago === 'cod' && !codValid) cierreMissing.push('monto de pago en efectivo (completo o con vuelta)');
   const cobroValido = cierreMissing.length === 0 && recibido >= total && recibido > 0 && cobroPass.trim().length > 0;
   const hasChatPanel = !!order.ticket_id;
 
@@ -707,7 +754,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div className="fg2">
                 <label className="fl2">Método de pago</label>
                 <select className="fi2" disabled={readOnly} value={pago}
-                  onChange={(e) => { setPago(e.target.value); markDirty(); }}>
+                  onChange={(e) => {
+                    setPago(e.target.value);
+                    // Same reset as NuevoPedidoModal - switching away from (or back
+                    // to) 'cod' must not resurrect a stale choice/amount.
+                    setCodChoice(null); setCodCash('');
+                    markDirty();
+                  }}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
@@ -725,9 +778,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 </select>
               </div>
             </div>
+            {pago === 'cod' && (
+              <CodPaymentField total={total} choice={codChoice} disabled={readOnly}
+                onChoiceChange={(c) => { setCodChoice(c); markDirty(); }}
+                cash={codCash} onCashChange={(v) => { setCodCash(v); markDirty(); }} />
+            )}
 
             <div className="stit">Productos</div>
             <ProductSearch
+              ref={productSearchRef}
               products={products}
               items={items}
               locked={readOnly}
@@ -767,9 +826,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 <button className="bpri"
                   onClick={() => {
                     if (items.length === 0) { toast('El pedido debe tener al menos un producto', true); return; }
-                    saveMut.mutate();
+                    if (pago === 'cod' && !codValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
+                    triggerSave();
                   }}
-                  disabled={saveMut.isPending || !(isDirty || catalogDirty)}
+                  disabled={saveMut.isPending || !(isDirty || catalogDirty) || (pago === 'cod' && !codValid)}
                   style={{ display: 'flex', alignItems: 'center', gap: 5, opacity: (isDirty || catalogDirty) ? 1 : 0.5 }}>
                   <CheckCircle size={13} /> {saveMut.isPending ? 'Guardando...' : 'Guardar'}
                 </button>

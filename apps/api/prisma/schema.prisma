@@ -95,6 +95,7 @@ model Product {
 
   org Organization @relation(fields: [org_id], references: [id])
 
+  @@index([org_id])
   @@map("products")
 }
 
@@ -110,6 +111,7 @@ model Employee {
   org    Organization @relation(fields: [org_id], references: [id])
   orders Order[]
 
+  @@index([org_id])
   @@map("employees")
 }
 

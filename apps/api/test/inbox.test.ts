@@ -75,3 +75,69 @@ describe('inbox routes', () => {
     expect(unscopedIds.sort()).toEqual([orderToday.id, orderYesterday.id].sort());
   });
 });
+
+describe('inbox routes - Meta WhatsApp delivery tracking', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminToken: string;
+  let originalFetch: typeof fetch;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    // No WPP_TOKEN_ENC_KEY in the test env (.env.test) - crypto.ts's encryptSecret/
+    // decryptSecret treat an unprefixed value as legacy plaintext, so a plain string
+    // round-trips fine here without needing real encryption for this test.
+    await app.prisma.organization.update({
+      where: { id: orgId },
+      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+    });
+    const admin = await createTestUser(app.prisma, orgId, 'admin', 'InboxWppAdmin1!');
+    adminToken = await login(app, admin.email, 'InboxWppAdmin1!');
+    originalFetch = global.fetch;
+  });
+
+  afterAll(async () => {
+    global.fetch = originalFetch;
+    await app.close();
+  });
+
+  it('POST /:ticketId/reply stores the real Meta message id - webhook.ts\'s ingestStatus can only ever match a later delivered/read status to this message by it', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230001', customer_name: 'Cliente WPP OK' } });
+    // Unique per test run, not a fixed literal - wpp_message_id is globally unique,
+    // and a hardcoded value would collide with a leftover row from a previous run
+    // against the same (not wiped between runs) test database.
+    const fakeWamid = `wamid.TESTOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Hola, tu pedido va en camino' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('sent');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+    expect(stored!.failed_reason).toBeNull();
+  });
+
+  it('POST /:ticketId/reply records failed_reason when Meta rejects the send (e.g. no active 24h session and no approved template) - shows the red X instead of looking stuck forever', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230002', customer_name: 'Cliente WPP Fail' } });
+    global.fetch = (async () => new Response(JSON.stringify({ error: { message: 'Re-engagement message' } }), { status: 400 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Hola de nuevo' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('failed');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
+    expect(stored!.wpp_message_id).toBeNull();
+    expect(stored!.failed_reason).toContain('Re-engagement');
+  });
+});

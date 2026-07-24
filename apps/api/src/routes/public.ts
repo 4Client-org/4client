@@ -659,14 +659,28 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { last_message_at: new Date() } });
 
         const provider = MetaCloudProvider.fromOrg(ticket.org);
+        let wppMessageId: string | null = null;
+        let failedReason: string | null = null;
         if (provider) {
           try {
-            await provider.sendText(ticket.phone, msgText);
+            // Saved onto the message below - webhook.ts's ingestStatus matches every
+            // later delivered/read/failed status update by this id. Without it, this
+            // confirmation's check mark stays stuck on "sent" forever, never a real
+            // failure either (see inbox.ts's /reply for the same fix, same reasoning).
+            const sent = await provider.sendText(ticket.phone, msgText);
+            wppMessageId = sent.messageId;
           } catch (err: any) {
+            failedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
             fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando confirmación de items agregados');
           }
         } else {
           fastify.log.warn({ ticketId: ticket.id }, 'WPP: org sin credenciales Meta, confirmación solo guardada en BD');
+        }
+        if (wppMessageId || failedReason) {
+          await fastify.prisma.ticketMessage.update({
+            where: { id: message.id },
+            data: { wpp_message_id: wppMessageId, failed_reason: failedReason },
+          });
         }
 
         // Same as staff editing the order (orders.ts's PATCH /:id) - the client just
@@ -683,8 +697,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           message: {
             id: message.id, ticket_id: ticket.id, direction: 'out' as const, text: message.text,
             media_url: null, media_type: null, media_caption: null,
-            sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: null,
-            sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: null,
+            sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
+            sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: failedReason,
           },
         });
 
@@ -766,14 +780,26 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // wrote the message to the DB and broadcast it to staff views, so staff saw a
     // "recibido" message in the chat but the client's phone never got anything.
     const provider = MetaCloudProvider.fromOrg(ticket.org);
+    let wppMessageId: string | null = null;
+    let failedReason: string | null = null;
     if (provider) {
       try {
-        await provider.sendText(ticket.phone, msgText);
+        // Saved onto the message below - see the merge path's identical fix above
+        // (same file) for why this id has to be captured, not just discarded.
+        const sent = await provider.sendText(ticket.phone, msgText);
+        wppMessageId = sent.messageId;
       } catch (err: any) {
+        failedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
         fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando confirmación de pedido desde formulario');
       }
     } else {
       fastify.log.warn({ ticketId: ticket.id }, 'WPP: org sin credenciales Meta, confirmación de formulario solo guardada en BD');
+    }
+    if (wppMessageId || failedReason) {
+      await fastify.prisma.ticketMessage.update({
+        where: { id: message.id },
+        data: { wpp_message_id: wppMessageId, failed_reason: failedReason },
+      });
     }
 
     // Historial del pedido - una entrada 'create' del pedido, más un
@@ -810,9 +836,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         direction: 'out' as const,
         text: message.text,
         media_url: null, media_type: null, media_caption: null,
-        sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: null,
+        sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
         sent_at: message.sent_at.toISOString(),
-        delivered: false, read_by_client: false, failed_reason: null,
+        delivered: false, read_by_client: false, failed_reason: failedReason,
       },
     });
 

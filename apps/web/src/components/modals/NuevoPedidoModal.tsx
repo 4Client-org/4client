@@ -11,7 +11,8 @@ import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
 import { ConfirmModal } from '../ui/ConfirmModal';
-import ProductSearch from '../orders/ProductSearch';
+import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
+import CodPaymentField from '../orders/CodPaymentField';
 import { todayStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
@@ -47,6 +48,10 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const [canal, setCanal] = useState('whatsapp');
   const [pago, setPago] = useState('sin_asignar');
+  // Neither selected by default - staff must actively pick one once "Cobro en casa"
+  // is chosen, not fall into a silent default (see codChoice usage below).
+  const [codChoice, setCodChoice] = useState<'completo' | 'vuelta' | null>(null);
+  const [codCash, setCodCash] = useState('');
   const [nombre, setNombre] = useState(preNombre ?? '');
   // Display-only, from the ticket's real WhatsApp number - never user-editable
   // (see the disabled input below), so no setter needed.
@@ -54,6 +59,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [direccion, setDireccion] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
+  const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -132,10 +138,27 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     onClose();
   }
 
+  const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+  const codCashNum = parseFloat(codCash) || 0;
+  // Used only to gate the submit button live - handleSubmit recomputes its own
+  // version from the FINAL committed items (see finalCodValid there), since a price
+  // edit still mid-typing when Guardar is clicked isn't reflected in `total` here yet.
+  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
+
   async function handleSubmit() {
     if (!ticketId) { toast('El pedido debe crearse desde un ticket de WhatsApp', true); return; }
     if (!nombre.trim()) { toast('El nombre es obligatorio', true); return; }
-    if (items.length === 0) { toast('Agrega al menos un producto', true); return; }
+    // Commits whatever row is still mid-edit in the Factbox table (typed but never
+    // confirmed with Enter/✓) BEFORE reading items for the payload below - otherwise
+    // clicking straight from typing a price into this button silently dropped that
+    // edit, the exact bug report this fixes. Returns the merged array synchronously;
+    // `items` state itself only catches up on the next render, too late for this call.
+    const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
+    if (finalItems.length === 0) { toast('Agrega al menos un producto', true); return; }
+    const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+    const finalCodAmount = codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? codCashNum : null;
+    const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= finalTotal);
+    if (pago === 'cod' && !finalCodValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
     try {
       await createOrder.mutateAsync({
         fecha,
@@ -148,7 +171,8 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
         // number, never from a typed value (orders.ts's POST /).
         address: direccion.trim() || undefined,
         employee_id: empleadoId || undefined,
-        items: items.map((i: any, idx: number) => ({
+        amount_received: pago === 'cod' ? finalCodAmount : undefined,
+        items: finalItems.map((i: any, idx: number) => ({
           product_name: i.product_name,
           quantity_label: i.quantity_label || '',
           price: parseFloat(i.price) || 0,
@@ -300,7 +324,13 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Método de pago</label>
-                <select className="fi2" value={pago} onChange={(e) => setPago(e.target.value)}>
+                <select className="fi2" value={pago} onChange={(e) => {
+                  setPago(e.target.value);
+                  // Reset the cod choice on any change away from/back to 'cod' -
+                  // otherwise switching payment method and back could resurrect a
+                  // stale choice/amount that no longer matches what's on screen.
+                  setCodChoice(null); setCodCash('');
+                }}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
@@ -317,11 +347,14 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </select>
               </div>
             </div>
+            {pago === 'cod' && (
+              <CodPaymentField total={total} choice={codChoice} onChoiceChange={setCodChoice} cash={codCash} onCashChange={setCodCash} />
+            )}
             <div className="stit">Productos</div>
-            <ProductSearch products={products} items={items} onChange={setItems} />
+            <ProductSearch ref={productSearchRef} products={products} items={items} onChange={setItems} />
             <div className="mactions">
               <button className="bsec" onClick={handleClose}>Cancelar</button>
-              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending}
+              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || (pago === 'cod' && !codValid)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {createOrder.isPending
                   ? 'Registrando...'

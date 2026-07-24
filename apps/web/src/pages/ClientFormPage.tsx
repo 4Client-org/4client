@@ -328,6 +328,13 @@ export default function ClientFormPage() {
   }
 
   function chooseTarget(target: string | 'new') {
+    // Same guard backToChoose/clearOrder already have - `selected` can be non-empty
+    // here even though the client never touched the catalog screen THIS visit: the
+    // mount effect restores an unsent draft straight into this state (see the
+    // localStorage restore above), and it sits invisible while the client is on the
+    // 'choose' screen. Without this, picking an order here silently discarded it -
+    // no confirm, no trace, the exact items the client thought they'd added just gone.
+    if (selected.length > 0 && !window.confirm('Tienes productos sin enviar de una visita anterior. ¿Continuar? Se perderán esos cambios.')) return;
     setLiveWarning('');
     setMergeTarget(target);
     if (target !== 'new') {
