@@ -33,13 +33,19 @@ input,select,textarea{font-family:var(--f);}
 /* BUTTONS */
 .bpri{display:block;width:100%;padding:14px;background:var(--v);color:var(--b);border:none;border-radius:var(--rad);font-size:15px;font-weight:700;cursor:pointer;transition:all .2s;margin-top:4px;}
 .bpri:hover{background:var(--vd);transform:translateY(-1px);box-shadow:0 4px 16px rgba(26,122,74,.3);}
-.bpri:disabled{opacity:.6;cursor:not-allowed;transform:none;}
+.bpri:disabled{opacity:.6;cursor:not-allowed;transform:none;pointer-events:none;}
 .bsec{padding:11px 18px;background:var(--bg);color:var(--n);border:2px solid var(--brd);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;}
 .bsec:hover{border-color:var(--n);}
 .bdel{padding:11px 16px;background:var(--rc);color:var(--r);border:2px solid var(--r);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
 .bdel:hover{background:var(--r);color:#fff;}
 .bverde{padding:11px 16px;background:var(--vc);color:var(--v);border:2px solid var(--v);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
 .bverde:hover{background:var(--v);color:#fff;}
+/* .bpri has its own :disabled rule above (predates this) - these three never had
+   one, so a disabled button using them was functionally inert (React blocks the
+   click) but visually identical to an active one: full color, pointer cursor, still
+   reacting to hover. pointer-events:none also kills the :hover rules above outright,
+   not just the click itself. */
+.bsec:disabled,.bdel:disabled,.bverde:disabled{opacity:.5;cursor:not-allowed;pointer-events:none;}
 .bnew{background:var(--v);color:#fff;border:none;padding:10px 16px;border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
 .bnew:hover{background:var(--vd);transform:translateY(-1px);box-shadow:0 4px 14px rgba(26,122,74,.3);}
 .bout{background:none;border:2px solid var(--brd);color:var(--gt);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;transition:all .2s;font-weight:600;white-space:nowrap;}
