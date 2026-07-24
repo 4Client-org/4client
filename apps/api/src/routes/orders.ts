@@ -69,6 +69,10 @@ const createOrderSchema = z.object({
   // final cobro already writes (amount_received) rather than a separate field - see
   // updateOrderSchema below for the full reasoning and validation.
   amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
+  // Which of the two choices staff picked - stored explicitly (see schema.prisma's
+  // own comment) rather than inferred from amount_received vs the total, which broke
+  // the one case where "vuelta" is typed as exactly the total (zero change owed).
+  cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
 });
 
 const updateOrderSchema = z.object({
@@ -94,13 +98,14 @@ const updateOrderSchema = z.object({
   // valid answer once cobro time actually comes (assuming the total hasn't changed
   // since - the final /cobro re-validates against the total lit AT that time too).
   amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
+  cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
 });
 
 const ORDER_FIELD_LABELS: Record<string, string> = {
   ticket_id: 'ticket', customer_name: 'nombre del cliente', customer_phone: 'teléfono',
   address: 'dirección', channel: 'canal', payment_method: 'método de pago',
   employee_id: 'domiciliario', notes: 'notas', fecha: 'fecha', items: 'productos',
-  amount_received: 'monto de pago',
+  amount_received: 'monto de pago', cod_choice: 'completo o vuelta',
 };
 
 // A blanket "Datos inválidos" doesn't tell anyone which field actually failed - turns
@@ -136,12 +141,36 @@ async function findDayClose(prisma: PrismaClient, orgId: string, fecha: Date) {
 // couldn't survive that same check later would be worse than not recording anything
 // at all - staff would trust a number that's already known-wrong. Returns an error
 // string, or null if the value (or its absence) is fine.
-function validateCodAmount(amountReceived: number | null | undefined, paymentMethod: string, total: number): string | null {
-  if (amountReceived === undefined || amountReceived === null) return null;
+function validateCodAmount(
+  amountReceived: number | null | undefined,
+  codChoice: string | null | undefined,
+  paymentMethod: string,
+  total: number,
+): string | null {
+  if (amountReceived === undefined && codChoice === undefined) return null;
+  const amount = amountReceived ?? null;
+  const choice = codChoice ?? null;
+  if (amount === null && choice === null) return null;
   if (paymentMethod !== 'cod') return 'El monto de pago solo aplica a pedidos con cobro en casa';
-  if (amountReceived <= 0) return 'El monto debe ser mayor que cero';
-  if (amountReceived < total) return `El monto debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`;
+  // Both travel together always - a bare amount with no recorded choice (or vice
+  // versa) can't be hydrated back into "completo" vs "vuelta" later (see
+  // schema.prisma's cod_choice comment for why that distinction can't be inferred
+  // from the number alone).
+  if (amount === null || choice === null) return 'Indica si el cliente paga completo o cuánto paga (con vuelta)';
+  if (amount <= 0) return 'El monto debe ser mayor que cero';
+  if (amount < total) return `El monto debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`;
+  if (choice === 'completo' && amount !== total) return 'El monto de "completo" debe ser igual al total del pedido';
   return null;
+}
+
+// "Completo/vuelta" shown as one combined, readable history value (not two separate
+// field-by-field diffs) - staff picks both together, and "vuelta $2.000" only makes
+// sense read alongside which choice it was for. Shared by POST / (creation) and
+// PATCH /:id (edit diff).
+function codDisplay(choice: string | null | undefined, amount: any, total: number): string {
+  if (!choice) return 'Sin definir';
+  if (choice === 'completo') return `Completo ($${Number(amount ?? total).toLocaleString('es-CO')})`;
+  return `Necesita vuelta - paga con $${Number(amount).toLocaleString('es-CO')} (vuelta $${(Number(amount) - total).toLocaleString('es-CO')})`;
 }
 
 function buildOrderSelect(includeHistory = false) {
@@ -151,7 +180,7 @@ function buildOrderSelect(includeHistory = false) {
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
-    change_amount: true, locked: true, caja_cerrada: true, notes: true,
+    change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
     client_modified: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
@@ -198,7 +227,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const { items, fecha, ...rest } = body.data;
 
-    const codError = validateCodAmount(rest.amount_received, rest.payment_method, items.reduce((s, i) => s + i.price, 0));
+    const codError = validateCodAmount(rest.amount_received, rest.cod_choice, rest.payment_method, items.reduce((s, i) => s + i.price, 0));
     if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // ticket_id/employee_id are just UUIDs from the request body - Prisma's FK check
@@ -269,6 +298,18 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         })),
       });
     }
+    if (order.cod_choice) {
+      const createTotal = order.items.reduce((s, i) => s + Number(i.price), 0);
+      await fastify.prisma.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: order.id, actor_id: req.user.userId,
+          action_type: 'edit', field: 'Pago en efectivo',
+          value_before: 'Sin definir',
+          value_after: codDisplay(order.cod_choice, order.amount_received, createTotal),
+          notes: 'Definido al crear el pedido',
+        },
+      });
+    }
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:created', order as any);
 
@@ -318,7 +359,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const totalForCodCheck = (items ?? await fastify.prisma.orderItem.findMany({ where: { order_id: id }, select: { price: true } }))
       .reduce((s, i) => s + Number(i.price), 0);
-    const codError = validateCodAmount(fields.amount_received, fields.payment_method ?? existing.payment_method, totalForCodCheck);
+    const codError = validateCodAmount(fields.amount_received, fields.cod_choice, fields.payment_method ?? existing.payment_method, totalForCodCheck);
     if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // Same cross-org guard as POST / - employee_id is a bare UUID from the request
@@ -380,6 +421,23 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const prevItems = items !== undefined
       ? await fastify.prisma.orderItem.findMany({ where: { order_id: id } })
       : [];
+
+    if (fields.cod_choice !== undefined || fields.amount_received !== undefined) {
+      const beforeTotal = items !== undefined ? prevItems.reduce((s, i) => s + Number(i.price), 0) : totalForCodCheck;
+      const before = codDisplay(existing.cod_choice, existing.amount_received, beforeTotal);
+      const after = codDisplay(
+        fields.cod_choice !== undefined ? fields.cod_choice : existing.cod_choice,
+        fields.amount_received !== undefined ? fields.amount_received : existing.amount_received,
+        totalForCodCheck,
+      );
+      if (before !== after) {
+        historyEntries.push({
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'edit', field: 'Pago en efectivo',
+          value_before: before, value_after: after,
+        });
+      }
+    }
 
     const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
       if (items !== undefined) {

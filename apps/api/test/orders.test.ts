@@ -374,7 +374,7 @@ describe('orders routes', () => {
   it('cobro-en-casa: POST /orders rejects amount_received below the total', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
-      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 5000 }), // total is 8000
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 5000, cod_choice: 'vuelta' }), // total is 8000
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toContain('mayor o igual al total');
@@ -383,10 +383,33 @@ describe('orders routes', () => {
   it('cobro-en-casa: POST /orders accepts "completo" (amount_received === total), stores it', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
-      payload: sampleOrderPayload({ fecha: '2026-01-19', payment_method: 'cod', amount_received: 8000 }),
+      payload: sampleOrderPayload({ fecha: '2026-01-19', payment_method: 'cod', amount_received: 8000, cod_choice: 'completo' }),
     });
     expect(res.statusCode).toBe(201);
     expect(Number(res.json().data.amount_received)).toBe(8000);
+    expect(res.json().data.cod_choice).toBe('completo');
+  });
+
+  it('cobro-en-casa: amount_received and cod_choice must travel together - one without the other is rejected', async () => {
+    const noChoice = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000 }),
+    });
+    expect(noChoice.statusCode).toBe(400);
+
+    const noAmount = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', cod_choice: 'completo' }),
+    });
+    expect(noAmount.statusCode).toBe(400);
+  });
+
+  it('cobro-en-casa: "completo" must equal the total exactly, not just be >= it', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 9000, cod_choice: 'completo' }), // total is 8000
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('cobro-en-casa: amount_received is rejected on a non-cod order (PATCH and POST)', async () => {
@@ -430,7 +453,7 @@ describe('orders routes', () => {
     // Recording it via a normal PATCH (no password) unblocks the cobro.
     const patch = await app.inject({
       method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
-      payload: { amount_received: 10000 },
+      payload: { amount_received: 10000, cod_choice: 'vuelta' },
     });
     expect(patch.statusCode).toBe(200);
 
@@ -440,6 +463,45 @@ describe('orders routes', () => {
     });
     expect(cobro2.statusCode).toBe(200);
     expect(Number(cobro2.json().data.change_amount)).toBe(2000);
+  });
+
+  it('cobro-en-casa: "vuelta" chosen with an amount that happens to equal the total still round-trips as "vuelta", not silently shown as "completo"', async () => {
+    // Zero change owed - numerically identical to "completo" if the choice were
+    // ever inferred from amount vs total instead of read from cod_choice directly.
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000, cod_choice: 'vuelta' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data.cod_choice).toBe('vuelta');
+
+    const fresh = await app.prisma.order.findUnique({ where: { id: res.json().data.id } });
+    expect(fresh!.cod_choice).toBe('vuelta');
+  });
+
+  it('cobro-en-casa: choosing/changing completo-vuelta is recorded in order history, same as any other field edit', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000, cod_choice: 'completo' }),
+    });
+    const order = create.json().data;
+
+    const createHist = await app.prisma.orderHistory.findFirst({ where: { order_id: order.id, field: 'Pago en efectivo' } });
+    expect(createHist?.value_after).toContain('Completo');
+
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000, cod_choice: 'vuelta' },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const editHist = await app.prisma.orderHistory.findFirst({
+      where: { order_id: order.id, field: 'Pago en efectivo', notes: null },
+      orderBy: { created_at: 'desc' },
+    });
+    expect(editHist?.value_before).toContain('Completo');
+    expect(editHist?.value_after).toContain('vuelta');
+    expect(editHist?.value_after).toContain('10.000');
   });
 
   it('a ticket-less order (channel "call") can have customer_phone set via PATCH - closes the previously-permanent cobro gap', async () => {

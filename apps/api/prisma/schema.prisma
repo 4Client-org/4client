@@ -226,6 +226,12 @@ model Order {
   paid_by         String?   @db.Uuid
   amount_received Decimal?  @db.Decimal(12, 2)
   change_amount   Decimal?  @db.Decimal(12, 2)
+  // Which of the two cobro-en-casa choices staff actually picked ('completo' |
+  // 'vuelta'), stored explicitly rather than inferred by comparing amount_received
+  // to the total - inferring broke the one time "vuelta" happens to be typed as
+  // exactly the total (zero change owed): that's indistinguishable from "completo"
+  // by value alone, so reopening the order silently flipped the shown choice.
+  cod_choice      String?   @db.VarChar(10)
   locked          Boolean   @default(false)
   caja_cerrada    Boolean   @default(false)
   source          String    @default("encargado") @db.VarChar(20)

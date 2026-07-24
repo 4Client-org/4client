@@ -56,6 +56,7 @@ export interface Order {
   paid_by: string | null;
   amount_received: number | null;
   change_amount: number | null;
+  cod_choice: 'completo' | 'vuelta' | null;
   locked: boolean;
   caja_cerrada: boolean;
   notes: string | null;

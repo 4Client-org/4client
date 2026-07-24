@@ -137,17 +137,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       price: String(i.price ?? ''),
       added_by_client: !!i.added_by_client,
     })));
-    // Reconstruct which of the two choices was made from the stored value - equal to
-    // the order's own total means "completo" (that's exactly what NuevoPedidoModal/
-    // this same save sends for that choice), anything else means "vuelta" with that
-    // exact amount typed in.
-    if (order.amount_received != null) {
-      const orderTotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price), 0);
-      if (Number(order.amount_received) === orderTotal) { setCodChoice('completo'); setCodCash(''); }
-      else { setCodChoice('vuelta'); setCodCash(String(order.amount_received)); }
-    } else {
-      setCodChoice(null); setCodCash('');
-    }
+    // Read the choice straight off the order - NOT inferred by comparing
+    // amount_received to the total anymore. That inference broke the one time
+    // "vuelta" is typed as exactly the total (zero change owed): numerically
+    // identical to "completo", so it silently flipped back on reopen. cod_choice is
+    // the actual source of truth now (orders.ts's validateCodAmount requires both
+    // travel together, so cod_choice is always set whenever amount_received is).
+    setCodChoice((order.cod_choice as 'completo' | 'vuelta' | null) ?? null);
+    setCodCash(order.cod_choice === 'vuelta' && order.amount_received != null ? String(order.amount_received) : '');
     // Prefills the FINAL cobro dialog's own amount field with whatever was already
     // decided here - staff just confirms instead of retyping. Only on first load
     // (cobroRec still blank) so it never stomps something already being typed there.
@@ -241,6 +238,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         amount_received: pago === 'cod'
           ? (codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? (parseFloat(codCash) || 0) : null)
           : null,
+        cod_choice: pago === 'cod' ? codChoice : null,
         items: finalItems.map((i, idx) => ({
           product_name: i.product_name,
           quantity_label: i.quantity_label,
@@ -528,6 +526,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   if (items.length === 0) cierreMissing.push('productos');
   const unpriced = items.filter((i: any) => !(parseFloat(i.price) > 0));
   if (unpriced.length > 0) cierreMissing.push(`precio de ${unpriced.map((i: any) => i.product_name).join(', ')}`);
+  // A negative price isn't just "unpriced" (that's the check right above, for a
+  // price that's zero/blank) - it's an actively wrong value that would show up as a
+  // negative line in the PDF/factura and drag the whole total down. Blocks every
+  // action that reads `items` (Guardar, Copiar, PDF, Enviar factura, Papelera), not
+  // just the final cobro - the server already rejects it (orderItemSchema's
+  // price: z.number().min(0)) but that's a save that already failed after the fact,
+  // this stops it from ever being actionable in the first place.
+  const negativePriceItems = items.filter((i: any) => parseFloat(i.price) < 0);
+  const hasNegativePrice = negativePriceItems.length > 0;
   const codCashNum = parseFloat(codCash) || 0;
   const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
   if (pago === 'cod' && !codValid) cierreMissing.push('monto de pago en efectivo (completo o con vuelta)');
@@ -813,11 +820,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
+            {hasNegativePrice && (
+              <div style={{
+                background: 'var(--rc)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 10,
+                fontSize: 13, color: 'var(--r)', fontWeight: 700, display: 'flex', alignItems: 'flex-start', gap: 8,
+              }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Precio negativo en {negativePriceItems.map((i: any) => i.product_name).join(', ')} - corrígelo para poder guardar, copiar, generar el PDF, enviar la factura o mover a papelera.</span>
+              </div>
+            )}
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
               {!readOnly && canManage && order.status !== 'papelera' && (
                 <button className="bdel"
                   onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
-                  disabled={papeleraMut.isPending}
+                  disabled={papeleraMut.isPending || hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <Trash2 size={13} /> Papelera
                 </button>
@@ -826,29 +842,30 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 <button className="bpri"
                   onClick={() => {
                     if (items.length === 0) { toast('El pedido debe tener al menos un producto', true); return; }
+                    if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de guardar', true); return; }
                     if (pago === 'cod' && !codValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
                     triggerSave();
                   }}
-                  disabled={saveMut.isPending || !(isDirty || catalogDirty) || (pago === 'cod' && !codValid)}
+                  disabled={saveMut.isPending || !(isDirty || catalogDirty) || hasNegativePrice || (pago === 'cod' && !codValid)}
                   style={{ display: 'flex', alignItems: 'center', gap: 5, opacity: (isDirty || catalogDirty) ? 1 : 0.5 }}>
                   <CheckCircle size={13} /> {saveMut.isPending ? 'Guardando...' : 'Guardar'}
                 </button>
               )}
               {items.length > 0 && (
-                <button className="bsec" onClick={copyInvoice}
+                <button className="bsec" onClick={copyInvoice} disabled={hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <FileText size={13} /> Copiar
                 </button>
               )}
               {items.length > 0 && (
-                <button className="bsec" onClick={generatePDF}
+                <button className="bsec" onClick={generatePDF} disabled={hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <FileText size={13} /> PDF
                 </button>
               )}
               {items.length > 0 && order.ticket_id && (
                 <button className="bsec" onClick={sendInvoiceToChat}
-                  disabled={invoiceMut.isPending}
+                  disabled={invoiceMut.isPending || hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5, borderColor: 'var(--v)', color: 'var(--v)' }}>
                   <Send size={13} /> {invoiceMut.isPending ? 'Enviando...' : 'Enviar factura'}
                 </button>

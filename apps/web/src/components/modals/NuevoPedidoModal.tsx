@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import { buildFormLinkMessage } from '../../lib/formLinkMessage';
@@ -144,10 +144,14 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   // version from the FINAL committed items (see finalCodValid there), since a price
   // edit still mid-typing when Guardar is clicked isn't reflected in `total` here yet.
   const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
+  // Same guard as DetallePedidoModal - a negative price must block the save, not
+  // just fail quietly server-side (orderItemSchema's price: z.number().min(0)).
+  const hasNegativePrice = items.some((i: any) => parseFloat(i.price) < 0);
 
   async function handleSubmit() {
     if (!ticketId) { toast('El pedido debe crearse desde un ticket de WhatsApp', true); return; }
     if (!nombre.trim()) { toast('El nombre es obligatorio', true); return; }
+    if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
     // Commits whatever row is still mid-edit in the Factbox table (typed but never
     // confirmed with Enter/✓) BEFORE reading items for the payload below - otherwise
     // clicking straight from typing a price into this button silently dropped that
@@ -155,6 +159,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     // `items` state itself only catches up on the next render, too late for this call.
     const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
     if (finalItems.length === 0) { toast('Agrega al menos un producto', true); return; }
+    if (finalItems.some((i: any) => parseFloat(i.price) < 0)) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
     const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
     const finalCodAmount = codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? codCashNum : null;
     const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= finalTotal);
@@ -172,6 +177,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
         address: direccion.trim() || undefined,
         employee_id: empleadoId || undefined,
         amount_received: pago === 'cod' ? finalCodAmount : undefined,
+        cod_choice: pago === 'cod' ? codChoice : undefined,
         items: finalItems.map((i: any, idx: number) => ({
           product_name: i.product_name,
           quantity_label: i.quantity_label || '',
@@ -352,9 +358,18 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             )}
             <div className="stit">Productos</div>
             <ProductSearch ref={productSearchRef} products={products} items={items} onChange={setItems} />
+            {hasNegativePrice && (
+              <div style={{
+                background: 'var(--rc)', borderRadius: 'var(--rad)', padding: '10px 14px', marginTop: 10,
+                fontSize: 13, color: 'var(--r)', fontWeight: 700, display: 'flex', alignItems: 'flex-start', gap: 8,
+              }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Hay un precio negativo - corrígelo para poder registrar el pedido.</span>
+              </div>
+            )}
             <div className="mactions">
               <button className="bsec" onClick={handleClose}>Cancelar</button>
-              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || (pago === 'cod' && !codValid)}
+              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice || (pago === 'cod' && !codValid)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {createOrder.isPending
                   ? 'Registrando...'

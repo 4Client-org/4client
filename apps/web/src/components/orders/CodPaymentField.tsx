@@ -26,16 +26,20 @@ export default function CodPaymentField({ total, choice, onChoiceChange, cash, o
     <div className="fg2">
       <label className="fl2">¿Cómo paga el cliente? <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span></label>
       <div style={{ display: 'flex', gap: 8 }}>
+        {/* .bsec is inline-flex with no justify-content (text sits at flex-start,
+            i.e. left) while .bpri is block and falls back to the button's native
+            center - same text, different alignment depending on which is selected.
+            Forcing flex+justifyContent here keeps it centered either way. */}
         <button type="button" disabled={disabled}
           onClick={() => onChoiceChange('completo')}
           className={choice === 'completo' ? 'bpri' : 'bsec'}
-          style={{ flex: 1, padding: '8px 0', fontSize: 13 }}>
+          style={{ flex: 1, padding: '8px 0', fontSize: 13, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
           Completo
         </button>
         <button type="button" disabled={disabled}
           onClick={() => onChoiceChange('vuelta')}
           className={choice === 'vuelta' ? 'bpri' : 'bsec'}
-          style={{ flex: 1, padding: '8px 0', fontSize: 13 }}>
+          style={{ flex: 1, padding: '8px 0', fontSize: 13, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
           Necesita vuelta
         </button>
       </div>
