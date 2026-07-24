@@ -13,6 +13,7 @@ import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHo
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
+import DeliveryStatus from '../ui/DeliveryStatus';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -210,8 +211,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         qc.invalidateQueries({ queryKey: ['inbox-convo', order.ticket_id] });
       }
     };
+    // Delivery/read/failure updates on a message already shown here - same
+    // invalidate-and-refetch as a new message, just a different trigger. Was
+    // missing entirely - this chat panel only ever caught up via its own 30s poll
+    // (below), same gap TicketModal/InboxPanel already had fixed.
+    const onMsgStatus = (data: { ticketId: string }) => {
+      if (data?.ticketId === order.ticket_id) {
+        qc.invalidateQueries({ queryKey: ['inbox-convo', order.ticket_id] });
+      }
+    };
     sock.on('ticket:message', onMsg);
-    return () => { sock.off('ticket:message', onMsg); };
+    sock.on('ticket:message-status', onMsgStatus);
+    return () => {
+      sock.off('ticket:message', onMsg);
+      sock.off('ticket:message-status', onMsgStatus);
+    };
   }, [accessToken, order?.ticket_id, qc]);
 
   useEffect(() => {
@@ -611,8 +625,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
                       )}
                       <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
-                      <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                        {isOut && msg.wpp_message_id && (
+                          <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
+                        )}
                       </div>
                     </div>
                   </div>

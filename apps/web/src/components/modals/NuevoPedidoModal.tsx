@@ -10,6 +10,7 @@ import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
+import DeliveryStatus from '../ui/DeliveryStatus';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
@@ -74,15 +75,23 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   // This modal never had a socket listener at all, only the interval above - meaning a
   // message arriving while it's open could sit unseen for up to 15-60s. Same pattern as
-  // TicketModal/DetallePedidoModal.
+  // TicketModal/DetallePedidoModal. ticket:message-status (delivery/read/failure
+  // updates on a message already shown) was missing the same way in all three.
   useEffect(() => {
     if (!accessToken || !ticketId) return;
     const sock = getSocket(accessToken);
     const onMsg = (data: { ticketId: string }) => {
       if (data?.ticketId === ticketId) qc.invalidateQueries({ queryKey: ['inbox-convo', ticketId] });
     };
+    const onMsgStatus = (data: { ticketId: string }) => {
+      if (data?.ticketId === ticketId) qc.invalidateQueries({ queryKey: ['inbox-convo', ticketId] });
+    };
     sock.on('ticket:message', onMsg);
-    return () => { sock.off('ticket:message', onMsg); };
+    sock.on('ticket:message-status', onMsgStatus);
+    return () => {
+      sock.off('ticket:message', onMsg);
+      sock.off('ticket:message-status', onMsgStatus);
+    };
   }, [accessToken, ticketId, qc]);
 
   const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
@@ -247,8 +256,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
                   <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>
                   {(m.sent_at || m.created_at) && (
-                    <div className="chat-meta">
+                    <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
                       {new Date(m.sent_at ?? m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                      {m.direction === 'out' && m.wpp_message_id && (
+                        <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
+                      )}
                     </div>
                   )}
                 </div>
