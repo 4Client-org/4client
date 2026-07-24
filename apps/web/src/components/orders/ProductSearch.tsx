@@ -68,12 +68,17 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [manualQty, setManualQty] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualError, setManualError] = useState('');
+  // Filters the Factbox table below (already-selected items), separate from the
+  // catalog search above - lets staff quickly find one line to price on an order
+  // with many items, instead of scrolling the whole committed list.
+  const [factboxSearch, setFactboxSearch] = useState('');
 
   // Clear local inputs when parent signals a save (clearKey increments)
   useEffect(() => {
     if (clearKey == null) return;
     setLocalInputs({});
     onLocalDirty?.(false);
+    setFactboxSearch('');
   }, [clearKey]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
@@ -267,6 +272,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   }, [editingRow]);
 
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
+  const factboxSearchLower = factboxSearch.toLowerCase().trim();
+  const visibleItems = useMemo(
+    () => factboxSearchLower ? items.filter(i => i.product_name.toLowerCase().includes(factboxSearchLower)) : items,
+    [items, factboxSearchLower],
+  );
 
   // Locked mode: read-only table
   if (locked) {
@@ -427,6 +437,20 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       )}
 
       {/* Factbox - committed items table with edit/remove */}
+      {items.length > 0 && (
+        <div className="psearch" style={{ marginBottom: 7 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" strokeWidth="2.5">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input type="text" placeholder="Buscar entre los productos del pedido..." value={factboxSearch} onChange={e => setFactboxSearch(e.target.value)} />
+          {factboxSearch && (
+            <button onClick={() => setFactboxSearch('')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 18, color: 'var(--gt)', lineHeight: 1 }}>
+              ×
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ border: '1px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden', marginBottom: 14 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
@@ -443,7 +467,12 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                 Filtra el catálogo, llena cantidad/precio y presiona Enter para agregar
               </td></tr>
             )}
-            {items.map((i, idx) => {
+            {items.length > 0 && visibleItems.length === 0 && (
+              <tr><td colSpan={4} style={{ padding: '12px', color: 'var(--gt)', textAlign: 'center', fontSize: 12 }}>
+                Sin resultados para "{factboxSearch}"
+              </td></tr>
+            )}
+            {visibleItems.map((i, idx) => {
               const isEditing = editingRow === i.product_name;
               const local = getLocal(i.product_name);
               return (

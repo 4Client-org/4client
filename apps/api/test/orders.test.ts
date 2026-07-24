@@ -323,7 +323,113 @@ describe('orders routes', () => {
     expect(secondCobro.json().code).toBe('ORDER_LOCKED');
   });
 
-  it('POST /orders/:id/cobro blocks closing when any single item has no price, even if the order total is > 0 from the other items', async () => {
+  describe('PATCH /:id on a locked (closed) order - only admin can fully edit, anyone can add an observación', () => {
+    async function createAndCloseOrder(overrides: Record<string, unknown> = {}) {
+      const empleado = await app.prisma.employee.create({
+        data: { org_id: orgAId, name: 'Domiciliario Cerrado' },
+      });
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({
+          fecha: '2026-01-17', customer_phone: '3009991111', employee_id: empleado.id, ...overrides,
+        }),
+      });
+      const order = create.json().data;
+      const total = order.items.reduce((s: number, i: any) => s + Number(i.price), 0);
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: total, password: ENCARGADO_PASS },
+      });
+      expect(cobro.statusCode).toBe(200);
+      return order.id as string;
+    }
+
+    it('encargado (non-admin) trying to change a real field on a locked order -> 409 ORDER_LOCKED', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991112' });
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(encargadoToken),
+        payload: { address: 'Calle Cambiada 999' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('ORDER_LOCKED');
+
+      const fresh = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(fresh.address).not.toBe('Calle Cambiada 999');
+    });
+
+    it('encargado (non-admin) CAN set observacion alone on a locked order -> 200, logged to history with their own actor id', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991113' });
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(encargadoToken),
+        payload: { observacion: 'El cliente llamó a pedir cambio de dirección después de cerrado' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.observacion).toBe('El cliente llamó a pedir cambio de dirección después de cerrado');
+      // Still locked/unchanged otherwise - only observacion moved.
+      expect(res.json().data.locked).toBe(true);
+
+      const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
+      const obsEntry = history.find(h => h.field === 'Observación');
+      expect(obsEntry).toBeDefined();
+      expect(obsEntry!.value_after).toContain('cambio de dirección');
+    });
+
+    it('admin CAN fully edit a locked order (day not closed) - not just observacion', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991114' });
+      const adminEmail = `locked-admin-${Date.now()}@example.com`;
+      const admin = await createTestUser(app.prisma, orgAId, 'admin', 'LockedAdminPass1!', { email: adminEmail });
+      const adminToken = await login(app, adminEmail, 'LockedAdminPass1!');
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(adminToken),
+        payload: { address: 'Calle Corregida Por Admin 1' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.address).toBe('Calle Corregida Por Admin 1');
+      void admin;
+    });
+
+    it('admin CANNOT edit a locked order once the whole day has been cerrado (caja cerrada) - DAY_CLOSED wins even for admin', async () => {
+      // A fecha used nowhere else in this file - the DailyClose row created below
+      // persists for the rest of the suite's run (no per-test DB reset), so reusing
+      // a date any other test also creates orders on would spuriously 409 them too.
+      const orderId = await createAndCloseOrder({ fecha: '2026-01-30', customer_phone: '3009991115' });
+      const adminEmail = `dayclosed-admin-${Date.now()}@example.com`;
+      const admin = await createTestUser(app.prisma, orgAId, 'admin', 'DayClosedAdminPass1!', { email: adminEmail });
+      const adminToken = await login(app, adminEmail, 'DayClosedAdminPass1!');
+
+      await app.prisma.dailyClose.create({
+        data: { org_id: orgAId, fecha: new Date('2026-01-30'), closed_by: admin.id },
+      });
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(adminToken),
+        payload: { address: 'Calle No Debería Cambiar' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('DAY_CLOSED');
+
+      // But observacion alone still works, even with the day closed too - that's the
+      // one exception that survives every freeze, by design.
+      const obsRes = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(adminToken),
+        payload: { observacion: 'Nota agregada después del cierre de caja del día' },
+      });
+      expect(obsRes.statusCode).toBe(200);
+      expect(obsRes.json().data.observacion).toBe('Nota agregada después del cierre de caja del día');
+    });
+  });
+
+  it('POST /orders/:id/cobro closes fine with a $0 item (agotado/out of stock) mixed in - $0 is a real, final price, never treated as "still needs pricing"', async () => {
     const empleado = await app.prisma.employee.create({
       data: { org_id: orgAId, name: 'Domiciliario de Prueba 2' },
     });
@@ -335,7 +441,7 @@ describe('orders routes', () => {
         fecha: '2026-01-16', customer_phone: '3009876543', employee_id: empleado.id,
         items: [
           { product_name: 'Papa Criolla', quantity_label: '2 kg', price: 5000, sort_order: 0 },
-          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 }, // no price set
+          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 }, // agotado
         ],
       }),
     });
@@ -347,9 +453,38 @@ describe('orders routes', () => {
       headers: authHeader(encargadoToken),
       payload: { amount_received: 5000, password: ENCARGADO_PASS },
     });
-    expect(cobro.statusCode).toBe(400);
-    expect(cobro.json().code).toBe('MISSING_FIELDS');
-    expect(cobro.json().error).toContain('Cebolla Roja');
+    expect(cobro.statusCode).toBe(200);
+    expect(cobro.json().data.status).toBe('cerrado');
+    expect(cobro.json().data.paid).toBe(true);
+  });
+
+  it('POST /orders/:id/cobro closes an order where EVERY item is agotado (price $0) - a legitimate $0 total, not a NO_TOTAL error', async () => {
+    const empleado = await app.prisma.employee.create({
+      data: { org_id: orgAId, name: 'Domiciliario de Prueba 3' },
+    });
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({
+        fecha: '2026-01-16', customer_phone: '3009876544', employee_id: empleado.id,
+        items: [
+          { product_name: 'Papa Criolla', quantity_label: '2 kg', price: 0, sort_order: 0 },
+          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 },
+        ],
+      }),
+    });
+    const order = create.json().data;
+
+    const cobro = await app.inject({
+      method: 'POST',
+      url: `/api/v1/orders/${order.id}/cobro`,
+      headers: authHeader(encargadoToken),
+      payload: { amount_received: 0, password: ENCARGADO_PASS },
+    });
+    expect(cobro.statusCode).toBe(200);
+    expect(cobro.json().data.status).toBe('cerrado');
+    expect(cobro.json().data.amount_received).toBe('0');
   });
 
   it('POST /orders/:id/cobro rejects an amount_received below the total - previously unvalidated, could record a negative change_amount', async () => {

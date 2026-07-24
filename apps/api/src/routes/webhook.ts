@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
+import { generateFormLinkUrl, buildFormLinkMessage } from '../lib/formLink.js';
 
 interface MetaWebhookPayload {
   object: string;
@@ -142,7 +143,12 @@ async function ingestMessage(
 
   const newUnread = (ticket.unread_count ?? 0) + 1;
 
-  // Auto-reply welcome message on first message of the day
+  // Auto-reply welcome message on first message of the day, immediately followed by
+  // the form-link message - the two used to be separate actions (welcome automatic,
+  // form link a manual "Formulario" button click) but a customer's very first
+  // contact now gets both without staff having to do anything. Sent as two
+  // independent attempts (not chained) - a failed welcome send must not also skip
+  // the form link, arguably the more useful of the two if the greeting didn't land.
   if (isFirstMessageToday && org.welcome_message) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
@@ -178,6 +184,41 @@ async function ingestMessage(
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
             message: { ...failedAutoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedAutoReply.sent_at.toISOString(), sent_by_name: null },
+          });
+        });
+
+      // No sentByUserId - this is an automated send, not a staff click. public.ts's
+      // /submit already falls back to the first active admin/encargado when
+      // attributing an order to a token with no sentByUserId, so an order placed
+      // through this auto-sent link still gets a real name in "registered_by".
+      generateFormLinkUrl(fastify, ticket.id, org.id)
+        .then(async (url) => {
+          const text = buildFormLinkMessage(url);
+          const sent = await provider.sendText(phone, text);
+          const formLinkMsg = await fastify.prisma.ticketMessage.create({
+            data: { ticket_id: ticket.id, direction: 'out', text, wpp_message_id: sent.messageId, sent_at: new Date() },
+          });
+          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+          fastify.io.to(`org:${org.id}`).emit('ticket:message', {
+            ticketId: ticket.id,
+            message: { ...formLinkMsg, direction: 'out' as const, media_type: null as MediaType | null, sent_at: formLinkMsg.sent_at.toISOString(), sent_by_name: null },
+          });
+        })
+        .catch(async (err) => {
+          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando formulario automático');
+          // url generation itself could theoretically throw (DB write failure) before
+          // there's any text to record - still worth a visible failure marker with
+          // whatever context is available, same red-X pattern as every other send.
+          const failedFormLink = await fastify.prisma.ticketMessage.create({
+            data: {
+              ticket_id: ticket.id, direction: 'out', text: 'Formulario de pedido',
+              sent_at: new Date(), failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255),
+            },
+          });
+          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+          fastify.io.to(`org:${org.id}`).emit('ticket:message', {
+            ticketId: ticket.id,
+            message: { ...failedFormLink, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedFormLink.sent_at.toISOString(), sent_by_name: null },
           });
         });
     }

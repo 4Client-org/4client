@@ -124,3 +124,74 @@ describe('webhook POST - delivery/read/failure status updates', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('webhook POST - incoming message triggers welcome + auto form-link send', () => {
+  let app: FastifyInstance;
+  let originalFetch: typeof fetch;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    originalFetch = global.fetch;
+  });
+
+  afterAll(async () => {
+    global.fetch = originalFetch;
+    await app.close();
+  });
+
+  function messagePayload(phoneNumberId: string, from: string, text: string, waMsgId: string) {
+    return {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-1',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: phoneNumberId, display_phone_number: '' },
+            contacts: [{ profile: { name: 'Cliente Nuevo' }, wa_id: from }],
+            messages: [{ from, id: waMsgId, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }],
+          },
+        }],
+      }],
+    };
+  }
+
+  it('first message of the day sends the welcome text AND, right after, the form-link message - both captured with a real wpp_message_id, not just the welcome alone', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { welcome_message: 'Hola, bienvenido a Fruver San Gabriel', wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: messagePayload(wppPhoneId, phone, 'Hola quiero hacer un pedido', `wamid.in-${randomUUID()}`),
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Fire-and-forget inside the route (responds 200 before processing) - give it
+    // time to finish two sequential provider.sendText calls plus their DB writes.
+    await new Promise((r) => setTimeout(r, 500));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
+
+    expect(outbound).toHaveLength(2);
+    expect(outbound[0].text).toContain('bienvenido');
+    expect(outbound[0].wpp_message_id).toBeTruthy();
+    expect(outbound[1].text).toContain('Link de formulario');
+    expect(outbound[1].wpp_message_id).toBeTruthy();
+    expect(outbound[1].failed_reason).toBeNull();
+
+    // Proves generateFormLinkUrl actually ran (a live, checkable link), not just a
+    // static text blob that happens to contain the right words.
+    const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(updatedTicket.form_token_min_iat).not.toBeNull();
+  });
+});

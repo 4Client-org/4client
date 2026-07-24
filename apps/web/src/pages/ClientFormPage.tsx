@@ -5,7 +5,7 @@ import { resolveApiBase } from '../lib/apiBase';
 const API = resolveApiBase();
 
 interface Product { id: string; name: string; category: string; unit_type?: string | null; }
-interface SelectedItem { product_name: string; quantity_label: string; productId: string; }
+interface SelectedItem { product_name: string; quantity_label: string; productId: string; isManual?: boolean; }
 interface DayOrderItem { id: string; product_name: string; quantity_label: string; price: number; }
 interface DayOrder {
   id: string; num: string; address: string; paymentMethod: string;
@@ -45,39 +45,16 @@ function getOrCreateDeviceToken(token: string): string {
   }
 }
 
-// Once the visitor proves they know the last 4 digits of the number this link was
-// issued for (see the 'verify' screen below), remember it for this specific link so
-// they're not asked again every time they come back to it - same trust model as
-// getOrCreateDeviceToken above (a value scoped to THIS token, not a real session).
-function getSavedPhoneLast4(token: string): string {
-  try {
-    return localStorage.getItem(`4client_phone4_${token}`) ?? '';
-  } catch {
-    return '';
-  }
-}
-function savePhoneLast4(token: string, last4: string): void {
-  try {
-    localStorage.setItem(`4client_phone4_${token}`, last4);
-  } catch { /* localStorage unavailable - just re-asks next visit, not fatal */ }
-}
-
 export default function ClientFormPage() {
   const token = new URLSearchParams(window.location.search).get('t') ?? '';
   const deviceToken = useMemo(() => getOrCreateDeviceToken(token), [token]);
   const draftKey = `4client_form_draft_${token}`;
   const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-  const [state, setState] = useState<'loading' | 'verify' | 'invalid' | 'choose' | 'catalog' | 'done'>('loading');
+  const [state, setState] = useState<'loading' | 'invalid' | 'choose' | 'catalog' | 'done'>('loading');
   const [clientName, setClientName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  // Confirmed (server-accepted) last 4 digits - blank until the 'verify' screen
-  // passes. phoneInput is just the live value of that screen's text field.
-  const [phoneLast4, setPhoneLast4] = useState('');
-  const [phoneInput, setPhoneInput] = useState('');
-  const [verifyError, setVerifyError] = useState('');
-  const [verifying, setVerifying] = useState(false);
   const [dayOrders, setDayOrders] = useState<DayOrder[]>([]);
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   // null = not decided yet (only matters while dayOrders.length > 0); 'new' = a
@@ -90,6 +67,13 @@ export default function ClientFormPage() {
   const [pendingQty, setPendingQty] = useState<Record<string, string>>({});
   // confirmed items list
   const [selected, setSelected] = useState<SelectedItem[]>([]);
+  // "Agregar producto no listado" - lets the client type a product that isn't in
+  // the catalog at all, sent with is_manual so the backend flags it added_by_client
+  // (same red highlight staff sees for any other client edit) - it needs a price/
+  // review they can't get from the catalog lookup.
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualQty, setManualQty] = useState('');
   const [address, setAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -112,27 +96,19 @@ export default function ClientFormPage() {
   // stale `false` value in the same tick. A ref updates immediately, no render lag.
   const submittingRef = useRef(false);
 
-  // Shared by the verify screen, the initial load, AND "volver al menú" from the
-  // done screen - fetches the client's current info/orders and returns the order
-  // list (or null on failure, having already switched to 'invalid' or surfaced a
-  // phone-mismatch itself). Takes `last4` explicitly rather than reading the
-  // `phoneLast4` state so the very first call (right after the visitor types it,
-  // before that setState commits) sends the value that was actually just typed.
-  async function loadFormInfo(last4: string): Promise<DayOrder[] | null> {
-    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}&phone_last4=${encodeURIComponent(last4)}`;
+  // Shared by the initial load AND "volver al menú" from the done screen - fetches
+  // the client's current info/orders and returns the order list (or null on
+  // failure, having already switched to 'invalid').
+  async function loadFormInfo(): Promise<DayOrder[] | null> {
+    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
     try {
       const [info, prods] = await Promise.all([
         fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()),
         fetch(`${API}/api/v1/public/products?${qs}`).then(r => r.json()),
       ]);
       if (!info.data?.clientName) {
-        if (info.code === 'PHONE_MISMATCH') {
-          setState('verify');
-          setVerifyError(info.error ?? 'Número incorrecto. Verifica los últimos 4 dígitos.');
-        } else {
-          setState('invalid');
-          setErrorMsg(info.error ?? 'Link inválido o expirado.');
-        }
+        setState('invalid');
+        setErrorMsg(info.error ?? 'Link inválido o expirado.');
         return null;
       }
       setClientName(info.data.clientName);
@@ -145,31 +121,6 @@ export default function ClientFormPage() {
       setState('invalid');
       setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.');
       return null;
-    }
-  }
-
-  // Verify screen's "Continuar" - on success, remembers the digits for this link
-  // (so returning to it later doesn't ask again) and moves on exactly like the
-  // initial-load effect below would have.
-  async function handleVerifyPhone() {
-    const last4 = phoneInput.trim();
-    if (last4.length !== 4 || !/^\d{4}$/.test(last4)) {
-      setVerifyError('Escribe los 4 dígitos.');
-      return;
-    }
-    setVerifying(true);
-    setVerifyError('');
-    const orders = await loadFormInfo(last4);
-    setVerifying(false);
-    if (orders === null) return; // loadFormInfo already set 'verify' (wrong) or 'invalid' (dead link)
-    setPhoneLast4(last4);
-    savePhoneLast4(token, last4);
-    if (orders.length > 0) {
-      setState('choose');
-    } else {
-      setMergeTarget('new');
-      setState('catalog');
-      setTimeout(() => searchRef.current?.focus(), 100);
     }
   }
 
@@ -191,46 +142,35 @@ export default function ClientFormPage() {
     } catch { /* localStorage unavailable (private mode, etc.) - ignore */ }
     setHydrated(true);
 
-    // A previously-verified visit to THIS link skips straight back in - only a
-    // brand new visitor (or one whose saved digits somehow stop matching, handled
-    // inside loadFormInfo) sees the verify screen.
-    const saved = getSavedPhoneLast4(token);
-    if (!saved) {
-      // Checked BEFORE showing the digit-entry screen, same reasoning as
-      // FacturaPage's own pre-check: a blocked/expired link should show "Link
-      // inválido" immediately, not make a brand new visitor type 4 digits first
-      // only to find out the link was already dead.
-      fetch(`${API}/api/v1/public/link-status?t=${encodeURIComponent(token)}`)
-        .then(r => r.json().then(body => ({ ok: r.ok, body })))
-        .then(({ ok, body }) => {
-          if (!ok) { setState('invalid'); setErrorMsg(body.error ?? 'Link inválido o expirado.'); return; }
-          setState('verify');
-        })
-        .catch(() => { setState('invalid'); setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.'); });
-      return;
-    }
-    setPhoneLast4(saved);
-    loadFormInfo(saved).then(orders => {
-      if (orders === null) return;
-      // First-ever visit today (no orders yet) - straight to the catalog, nothing to
-      // choose between. Any later visit (an order already exists) - the menu, with
-      // that order to resume plus the option to start a separate new one.
-      if (orders.length > 0) {
-        setState('choose');
-      } else {
-        setMergeTarget('new');
-        setState('catalog');
-        setTimeout(() => searchRef.current?.focus(), 100);
-      }
-    });
+    // Checked before loading form-info so a blocked/expired link shows "Link
+    // inválido" with its specific reason, rather than a generic failure.
+    fetch(`${API}/api/v1/public/link-status?t=${encodeURIComponent(token)}`)
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) { setState('invalid'); setErrorMsg(body.error ?? 'Link inválido o expirado.'); return; }
+        return loadFormInfo().then(orders => {
+          if (orders === null) return;
+          // First-ever visit today (no orders yet) - straight to the catalog, nothing
+          // to choose between. Any later visit (an order already exists) - the menu,
+          // with that order to resume plus the option to start a separate new one.
+          if (orders.length > 0) {
+            setState('choose');
+          } else {
+            setMergeTarget('new');
+            setState('catalog');
+            setTimeout(() => searchRef.current?.focus(), 100);
+          }
+        });
+      })
+      .catch(() => { setState('invalid'); setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.'); });
   }, [token]);
 
   // From the "¡Pedido enviado!" screen back to the menu - without this, a client who
   // just finished an order had no way back in except manually refreshing the page.
   async function goToMenu() {
     setState('loading');
-    const orders = await loadFormInfo(phoneLast4);
-    if (orders === null) return; // loadFormInfo already switched to 'invalid'/'verify'
+    const orders = await loadFormInfo();
+    if (orders === null) return; // loadFormInfo already switched to 'invalid'
     setState('choose');
   }
 
@@ -258,7 +198,7 @@ export default function ClientFormPage() {
   // `address`/`paymentMethod` - never stomps whatever the client is mid-typing.
   useEffect(() => {
     if ((state !== 'catalog' && state !== 'choose') || !token) return;
-    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}&phone_last4=${encodeURIComponent(phoneLast4)}`;
+    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
     const poll = () => {
       fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()).then(info => {
         const orders: DayOrder[] = info?.data?.orders ?? [];
@@ -283,7 +223,7 @@ export default function ClientFormPage() {
     };
     const iv = setInterval(poll, 5000);
     return () => clearInterval(iv);
-  }, [state, token, deviceToken, phoneLast4, mergeTarget]);
+  }, [state, token, deviceToken, mergeTarget]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
   const searchLower = search.toLowerCase().trim();
@@ -313,6 +253,17 @@ export default function ClientFormPage() {
     setPendingQty(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setSearch('');
     setTimeout(() => searchRef.current?.focus(), 50);
+  }
+
+  function addManualProduct() {
+    const name = manualName.trim();
+    const qty = manualQty.trim();
+    if (!name || !qty) return;
+    const id = `manual-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    setSelected(prev => [...prev, { product_name: name, quantity_label: qty, productId: id, isManual: true }]);
+    setManualName('');
+    setManualQty('');
+    setManualOpen(false);
   }
 
   function removeSelected(productId: string) {
@@ -407,11 +358,10 @@ export default function ClientFormPage() {
         body: JSON.stringify({
           token,
           device_token: deviceToken,
-          phone_last4: phoneLast4,
           address: address.trim(),
           payment_method: paymentMethod || undefined,
           merge_order_id: mergeTarget && mergeTarget !== 'new' ? mergeTarget : undefined,
-          items: selected.map(i => ({ product_name: i.product_name, quantity_label: i.quantity_label })),
+          items: selected.map(i => ({ product_name: i.product_name, quantity_label: i.quantity_label, ...(i.isManual ? { is_manual: true } : {}) })),
         }),
       });
       if (!res.ok) {
@@ -476,34 +426,6 @@ export default function ClientFormPage() {
   if (state === 'loading') return (
     <div style={page}>
       <div style={{ textAlign: 'center', padding: 60, color: '#888', fontSize: 18 }}>Cargando...</div>
-    </div>
-  );
-
-  if (state === 'verify') return (
-    <div style={page}>
-      <div style={{ background: '#fff', borderRadius: 18, margin: '24px 16px', padding: '32px 20px', boxShadow: '0 2px 12px rgba(0,0,0,.1)' }}>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}><Lock size={48} color={GREEN} strokeWidth={1.5} /></div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: '#111', marginBottom: 8, textAlign: 'center' }}>Confirma que eres tú</div>
-        <div style={{ fontSize: 14, color: '#666', marginBottom: 20, textAlign: 'center', lineHeight: 1.5 }}>
-          Escribe los últimos 4 dígitos del número de WhatsApp donde recibiste este link.
-        </div>
-        <input
-          type="tel" inputMode="numeric" maxLength={4} autoFocus
-          placeholder="0000"
-          value={phoneInput}
-          onChange={(e) => { setPhoneInput(e.target.value.replace(/\D/g, '').slice(0, 4)); if (verifyError) setVerifyError(''); }}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleVerifyPhone(); }}
-          style={{
-            width: '100%', fontSize: 28, fontWeight: 800, letterSpacing: 10, textAlign: 'center',
-            padding: '14px 0', border: `2px solid ${verifyError ? '#DC2626' : '#ddd'}`, borderRadius: 12,
-            outline: 'none', marginBottom: 10, color: '#111',
-          }}
-        />
-        {verifyError && <div style={{ color: '#DC2626', fontSize: 13, fontWeight: 700, marginBottom: 10, textAlign: 'center' }}>{verifyError}</div>}
-        <button onClick={handleVerifyPhone} disabled={verifying} style={{ ...btnPrimary, opacity: verifying ? 0.6 : 1 }}>
-          {verifying ? 'Verificando...' : 'Continuar'}
-        </button>
-      </div>
     </div>
   );
 
@@ -673,7 +595,14 @@ export default function ClientFormPage() {
           {(summaryExpanded ? selected : selected.slice(0, 2)).map(s => (
             <div key={s.productId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #f0f0f0' }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{s.product_name}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {s.product_name}
+                  {s.isManual && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 20, padding: '1px 7px' }}>
+                      No catalogado
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: '#666' }}>{s.quantity_label}</div>
               </div>
               <button onClick={() => removeSelected(s.productId)}
@@ -758,6 +687,53 @@ export default function ClientFormPage() {
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#888', lineHeight: 1, padding: 0 }}>×</button>
           )}
         </div>
+
+        {/* "Agregar producto no listado" - a product missing from the catalog
+            (out of season, a special request, etc). Sent flagged is_manual so
+            staff sees it highlighted and knows to price/review it. */}
+        {!manualOpen ? (
+          <button onClick={() => setManualOpen(true)}
+            style={{
+              width: '100%', marginTop: 8, background: 'none', border: 'none', cursor: 'pointer',
+              color: GREEN, fontSize: 13, fontWeight: 700, textAlign: 'center', padding: '4px 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            }}>
+            <Plus size={13} /> ¿No encuentras tu producto? Agrégalo aquí
+          </button>
+        ) : (
+          <div style={{ background: '#fff', border: '2px solid #ddd', borderRadius: 12, padding: 10, marginTop: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#444', marginBottom: 6 }}>Producto no listado</div>
+            <input
+              type="text"
+              placeholder="Nombre del producto"
+              value={manualName}
+              onChange={e => setManualName(e.target.value)}
+              style={{ width: '100%', fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff', marginBottom: 8 }}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="text"
+                placeholder="Cantidad (ej: 2 kg)"
+                value={manualQty}
+                onChange={e => setManualQty(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addManualProduct(); }}
+                style={{ flex: 1, fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
+              />
+              <button onClick={addManualProduct} disabled={!manualName.trim() || !manualQty.trim()}
+                style={{
+                  padding: '9px 14px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 13,
+                  background: (manualName.trim() && manualQty.trim()) ? GREEN : '#ddd', color: '#fff',
+                  cursor: (manualName.trim() && manualQty.trim()) ? 'pointer' : 'default',
+                }}>
+                Agregar
+              </button>
+              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); }}
+                style={{ padding: '9px 12px', borderRadius: 10, border: '2px solid #ddd', background: '#fff', color: '#666', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Catalog */}

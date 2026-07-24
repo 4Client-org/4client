@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { config } from '../config.js';
+import { generateFormLinkUrl } from '../lib/formLink.js';
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
   // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
@@ -60,11 +60,11 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
 
-    if (ticket.unread_count > 0) {
-      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
-      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
-    }
-
+    // unread_count is deliberately NOT cleared just by opening/viewing the chat
+    // anymore - it only clears when staff actually sends a reply (see POST
+    // /:ticketId/reply below). Opening a chat a thousand times without answering
+    // must not make the "sin leer" dot disappear - that dot means "needs a reply",
+    // not "someone glanced at it".
     return reply.send({ data: ticket });
   });
 
@@ -93,6 +93,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     // Do NOT update last_message_at on outgoing replies - only incoming customer messages should
     // move a ticket up in the queue, so the inbox order stays stable when agents reply.
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+
+    // The "sin leer" dot only clears when staff actually answers - not just from
+    // opening the chat (see GET /:ticketId/messages above). An actual reply IS the
+    // answer, so this is the one place it's safe to clear it.
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
 
     // Enviar via Meta Cloud API
     const provider = MetaCloudProvider.fromOrg(ticket.org);
@@ -146,75 +154,16 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/inbox/:ticketId/form-link - genera link firmado para el formulario del cliente
+  // Token minting + state reset lives in lib/formLink.ts, shared with webhook.ts's
+  // auto-send-right-after-welcome (same reasoning: both must reset the exact same
+  // fields the exact same way, not drift apart as either gets edited later).
   fastify.get('/:ticketId/form-link', { preHandler: [authenticate] }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
 
     const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
 
-    // Expires at the end of the current Colombia calendar day (UTC-5), not a flat N
-    // days from now - a link generated at 11pm and one generated at 8am must both die
-    // at the same midnight, so "the link only works today" actually means today, and
-    // staff sending a fresh one tomorrow is what lets that new order find/merge with
-    // whatever's already open from today (see public.ts's open-orders lookup).
-    // Colombia has no DST, so "Colombia midnight" is always UTC 05:00 of that date.
-    const nowCol = new Date(Date.now() - 5 * 3600000);
-    const tomorrowColMidnightUtcMs = Date.UTC(nowCol.getUTCFullYear(), nowCol.getUTCMonth(), nowCol.getUTCDate() + 1, 5, 0, 0);
-    const expiresInSeconds = Math.max(60, Math.floor((tomorrowColMidnightUtcMs - Date.now()) / 1000));
-
-    // Explicit iat (instead of leaving jsonwebtoken to stamp its own "now") so it
-    // matches exactly what's written to form_token_min_iat below - the two must
-    // agree down to the millisecond-rounded-to-second for THIS token to still pass
-    // its own supersede check (public.ts's assertLinkStillValid: strictly-older
-    // tokens are rejected, this one must not count as older than itself).
-    const issuedAt = new Date();
-    const issuedAtSec = Math.floor(issuedAt.getTime() / 1000);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (fastify.jwt.sign as any)(
-      {
-        type: 'form_link',
-        iat: issuedAtSec,
-        ticketId: ticket.id,
-        orgId: req.user.orgId,
-        sentByUserId: req.user.userId,
-      },
-      { expiresIn: expiresInSeconds },
-    ) as string;
-
-    // A fresh link supersedes any earlier revocation AND every previously-issued
-    // still-unexpired link on this ticket - bumping form_token_min_iat makes
-    // public.ts's assertLinkStillValid reject any older token automatically, so
-    // staff no longer has to separately "Bloquear link" the old one before sending
-    // a new one. Also clears any device lock (public.ts's FormLinkSession) -
-    // sending a new link is a deliberate "start over" action, e.g. to fix a
-    // false-positive lockout from the wrong device claiming an earlier link.
-    // form_link_opened_at resets too - this new link has its own fresh 10-minute
-    // unopened-dies window (public.ts's assertLinkStillValid), independent of
-    // whether the previous link was ever opened.
-    // link_failed_attempts resets too - sending a fresh link is exactly the "give
-    // them another chance" action that clears the ticket-wide soft wrong-guess
-    // block (linkSecurity.ts's clearSoftLinkBlock does the same thing; inlined here
-    // since this update was already happening anyway). Un-blocks the factura link(s)
-    // for this ticket too, not just this form link - the soft block is shared.
-    // link_failed_total (the cumulative count behind the 24h hard block) is NOT
-    // reset here on purpose - that's what makes it actually cumulative instead of
-    // something a new link resets for free.
-    await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_token_min_iat: issuedAt, form_link_opened_at: null, link_failed_attempts: 0 } });
-    await fastify.prisma.revokedFormToken.deleteMany({ where: { ticket_id: ticket.id, org_id: req.user.orgId } });
-    await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticket.id } });
-
-    const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
-    // Percent-encode underscores - base64url tokens routinely contain them, and
-    // WhatsApp's renderer treats a pair of underscores as italic-markdown delimiters.
-    // An odd one anywhere in the URL leaves WhatsApp "waiting for a closing
-    // underscore", which silently truncates how much of the link is actually
-    // tappable (matches the exact issue files.ts's invoice filenames hit before -
-    // this is the same fix, applied to the query string instead of a filename).
-    // %5F round-trips transparently: the browser decodes it back to `_` before the
-    // app ever reads `?t=`, so nothing downstream needs to know this happened.
-    const safeToken = token.replace(/_/g, '%5F');
-    const url = `${frontendUrl}/form?t=${safeToken}`;
+    const url = await generateFormLinkUrl(fastify, ticket.id, req.user.orgId, req.user.userId);
     return reply.send({ data: { url } });
   });
 

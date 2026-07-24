@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import {
   Package, PackageCheck, Clock, Banknote, ArrowLeftRight, Wallet,
   FileText, Trash2, History, ChevronDown, ChevronRight, Lock, Download, Ban,
-  MessageSquare, MessageCircleWarning, MessageCircleCheck,
+  MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { downloadCierreCSV } from '../../lib/csv';
@@ -171,11 +171,21 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
               <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--gt)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 }}>
                 Chats de WhatsApp
               </div>
-              <div className="agrid">
+              <div className="agrid4">
                 <div className="acard">
                   <div className="ai"><MessageSquare size={26} color="var(--gt)" strokeWidth={1.5} /></div>
                   <div className="av">{dashboard.chats?.total ?? 0}</div>
                   <div className="al2">Chats totales</div>
+                </div>
+                {/* Was missing - "activos" + "completos" alone never added up to
+                    "total" for a chat that's written in but never placed a pedido,
+                    which read as the total being wrong instead of a category
+                    missing. Backend already computed sinPedido (dashboard.ts), this
+                    tile was the only thing not surfacing it. */}
+                <div className="acard">
+                  <div className="ai"><MessageCircleDashed size={26} color="var(--gt)" strokeWidth={1.5} /></div>
+                  <div className="av">{dashboard.chats?.sinPedido ?? 0}</div>
+                  <div className="al2">Chat sin pedido</div>
                 </div>
                 <div className="acard r">
                   <div className="ai"><MessageCircleWarning size={26} color="var(--r)" strokeWidth={1.5} /></div>

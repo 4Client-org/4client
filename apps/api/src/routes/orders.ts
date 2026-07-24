@@ -93,12 +93,18 @@ const updateOrderSchema = z.object({
   // current total) or "necesita vuelta" (send what the client will pay with) as soon
   // as cobro-en-casa is selected, on THIS order's regular save, no password needed.
   // null explicitly clears it (e.g. switching away from cod). Validated below against
-  // the order's own total - must be > 0 and >= total, same rule the final /cobro
-  // already enforces, so whatever gets recorded here is guaranteed to still be a
+  // the order's own total - must be >= 0 and >= total (0 is valid: every item
+  // agotado is a real $0 order), same rule the final /cobro already enforces, so
+  // whatever gets recorded here is guaranteed to still be a
   // valid answer once cobro time actually comes (assuming the total hasn't changed
   // since - the final /cobro re-validates against the total lit AT that time too).
   amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
   cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
+  // Free-text note staff can add EVEN on a locked/closed order (see PATCH /:id's
+  // onlyObservacion handling) - distinct from `notes`, which is already overloaded
+  // internally for the "pasado_manana:DATE" deferral marker (cierre.ts) and would
+  // be corrupted by arbitrary staff text sharing that same column.
+  observacion:     z.string().max(1000).nullable().optional(),
 });
 
 const ORDER_FIELD_LABELS: Record<string, string> = {
@@ -183,6 +189,7 @@ function buildOrderSelect(includeHistory = false) {
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
     change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
+    observacion: true,
     client_modified: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
@@ -342,9 +349,29 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    if (existing.locked) return reply.status(409).send({ error: 'Pedido bloqueado', code: 'ORDER_LOCKED' });
-    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
-      return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
+
+    // A locked/closed order is normally frozen for everyone - two exceptions carved
+    // out on top of that, both scoped as narrowly as possible:
+    // (1) `observacion` alone can ALWAYS be changed, by anyone with access to this
+    //     route, regardless of locked/day-closed status - it's an append-style audit
+    //     note, not a financial edit, for exactly the "pedido cerrado, pasó algo"
+    //     case this exists for.
+    // (2) an admin (or dev, which bypasses every requireRole check anyway - see
+    //     middleware/auth.ts) can fully edit even a LOCKED order - but NOT once the
+    //     whole day has been cerrado (DAY_CLOSED below still blocks everyone,
+    //     admin included; that's a stronger, whole-day accounting freeze, a
+    //     separate concern from this one order being individually paid/closed).
+    const isAdminOrDev = req.user.role === 'admin' || req.user.role === 'dev';
+    const sentKeys = Object.entries(body.data).filter(([, v]) => v !== undefined).map(([k]) => k);
+    const onlyObservacion = sentKeys.length > 0 && sentKeys.every(k => k === 'observacion');
+
+    if (!onlyObservacion) {
+      if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
+        return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
+      }
+      if (existing.locked && !isAdminOrDev) {
+        return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
+      }
     }
 
     const { items, ...fields } = body.data;
@@ -383,6 +410,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       customer_name: 'Nombre',
       address: 'Dirección', payment_method: 'Método de pago',
       employee_id: 'Domiciliario', notes: 'Notas',
+      // Reuses the exact same generic diff-and-log loop below - an observación
+      // change (admin post-close, or anyone via the always-open exception above)
+      // gets a real actor + before/after in history for free, same as any other field.
+      observacion: 'Observación',
     };
 
     // Prefetch employee names for readable history
@@ -508,10 +539,14 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // silently stale, with nothing telling the client a newer version exists. Kills
     // every outstanding factura for THIS order (files.ts's POST /invoice does the
     // same on resend); staff just hits "Enviar factura" again to send a fresh one.
-    await fastify.prisma.invoiceLink.updateMany({
-      where: { order_id: id, org_id: req.user.orgId, revoked_at: null },
-      data: { revoked_at: new Date() },
-    });
+    // Skipped for an observación-only save - an internal note changes nothing about
+    // the order the client sees, so the factura they already have is still accurate.
+    if (!onlyObservacion) {
+      await fastify.prisma.invoiceLink.updateMany({
+        where: { order_id: id, org_id: req.user.orgId, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+    }
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
     return reply.send({ data: updatedOrder });
@@ -588,11 +623,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     if (!existing.payment_method || existing.payment_method === 'sin_asignar') missing.push('método de pago');
     if (!existing.employee_id) missing.push('domiciliario');
     if (existing.items.length === 0) missing.push('productos');
-    // Every item needs a real price - a single unpriced product (even just one, even
-    // if the rest of the order totals something > 0) must block closing, not just an
-    // all-zero order.
-    const unpriced = existing.items.filter(i => Number(i.price) <= 0);
-    if (unpriced.length > 0) missing.push(`precio de ${unpriced.map(i => i.product_name).join(', ')}`);
+    // $0 is a legitimate, final price (item is agotado) - never treated as "still
+    // needs pricing". Negative never reaches here at all: the item schema (price:
+    // z.number().min(0)) already rejects it on every write path, so there's nothing
+    // left to validate here beyond the length check above.
     // A cobro-en-casa order must already have its "¿con cuánto paga?" answer recorded
     // (set at creation/edit time, see updateOrderSchema/validateCodAmount above) -
     // staff can't reach the final password-gated confirmation without ever having
@@ -604,17 +638,17 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: `Faltan datos para cerrar el pedido: ${missing.join(', ')}`, code: 'MISSING_FIELDS' });
     }
 
+    // A $0 total is legitimate - every item agotado (priced $0 each) is a real,
+    // closeable order, not an error state. No NO_TOTAL block here anymore; the sum
+    // of non-negative item prices (enforced at the schema level) can never go negative.
     const total = existing.items.reduce((s, i) => s + Number(i.price), 0);
-    if (total <= 0) {
-      return reply.status(400).send({ error: 'No es posible cerrar el pedido porque no tiene un total calculado', code: 'NO_TOTAL' });
-    }
     // Was previously unchecked - a submitted amount below the total silently produced
     // a NEGATIVE change_amount, recorded as-is. Same rule as validateCodAmount above,
     // applied here too since this is the one place that ALWAYS runs regardless of
     // payment method (cash/transfer confirmations go through this exact same field).
-    // total <= 0 is already blocked above (NO_TOTAL) before this line is ever
-    // reached, so amount_received is always being checked against a real total here -
-    // < 0 (not <= 0) purely for consistency with validateCodAmount's own rule.
+    // total is always >= 0 here (see above), so amount_received is always being
+    // checked against a real total - < 0 (not <= 0) for consistency with
+    // validateCodAmount's own rule (amount_received === total === 0 must pass).
     if (body.data.amount_received < 0) {
       return reply.status(400).send({ error: 'El monto recibido no puede ser negativo', code: 'VALIDATION_ERROR' });
     }

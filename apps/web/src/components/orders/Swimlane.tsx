@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell, Bike } from 'lucide-react';
-import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr } from '../../lib/format';
+import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell, Bike, Banknote, ArrowLeftRight, Wallet } from 'lucide-react';
+import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr, PAYMENT_LABEL } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useMoveOrder } from '../../hooks/useOrders';
 import { toast } from '../ui/Toast';
@@ -80,20 +80,44 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
   return Math.floor((Date.now() - firstActiveMs) / 60000);
 }
 
+// Urgent (ZONA ROJA) the moment a real pedido exists and isn't closed yet - not
+// after sitting 20 minutes. A new pedido needing attention IS the alert now, not a
+// pedido that's been neglected for a while; staff wants every open order visible
+// up top right away, not just the stale ones. A ticket with no pedido at all keeps
+// the old 20-minute "been waiting for a response" threshold below (isTicketUrg) -
+// that's a different concern (an unanswered customer, not an unworked order) and
+// wasn't part of this ask.
 function isOrderUrg(order: Order): boolean {
-  if (order.paid || order.status === 'cerrado') return false;
-  return minsSinceDate(order.created_at) > 20;
+  return !order.paid && order.status !== 'cerrado';
 }
 
 function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
-  return ticketElapsedMins(ticket, ticketOrders) > 20;
+  if (ticketOrders.length === 0) return minsSinceDate(ticket.created_at) > 20;
+  return ticketOrders.some(isOrderUrg);
 }
 
 export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, onOpenTicket, onCreateFromTicket }: Props) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [cobroDirectId, setCobroDirectId] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
-  const [collapsedTickets, setCollapsedTickets] = useState<Set<string>>(new Set());
+  // Persisted across reloads/navigation - a ticket collapsed to save scroll space
+  // was silently re-expanding on every refresh, since this was plain component
+  // state with nothing backing it. Not scoped per org/day: tickets are one row per
+  // phone forever (not per day), and this app is one staff member per browser
+  // session, so a flat key is enough - no cross-org bleed risk in practice.
+  const [collapsedTickets, setCollapsedTickets] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('4client_collapsed_tickets');
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('4client_collapsed_tickets', JSON.stringify([...collapsedTickets]));
+    } catch { /* localStorage unavailable - just won't persist, not fatal */ }
+  }, [collapsedTickets]);
   const [, setTick] = useState(0);
   const moveOrder = useMoveOrder();
   const drag = useRef<{ orderId: string; ticketId: string | null } | null>(null);
@@ -142,12 +166,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     if (nextStatus === 'cerrado') {
       // 'cerrado' isn't a plain status move - the backend only allows reaching it
       // through the guarded /cobro flow (amount received + password). Same path the
-      // drag-and-drop-onto-"cerrado" column already uses below.
-      const total = order.items.reduce((s, i) => s + Number(i.price), 0);
-      if (total <= 0) {
-        toast('No es posible cerrar el pedido porque no tiene un total calculado', true);
-        return;
-      }
+      // drag-and-drop-onto-"cerrado" column already uses below. A $0 total (every
+      // item agotado) is legitimate and closeable - no pre-check blocking it here.
       setCobroDirectId(order.id);
       return;
     }
@@ -183,12 +203,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     if (!order || order.status === targetStatus) { drag.current = null; return; }
     if (order.locked) { toast('Pedido bloqueado', true); drag.current = null; return; }
     if (targetStatus === 'cerrado') {
-      const total = order.items.reduce((s, i) => s + Number(i.price), 0);
-      if (total <= 0) {
-        toast('No es posible cerrar el pedido porque no tiene un total calculado', true);
-        drag.current = null;
-        return;
-      }
+      // A $0 total (every item agotado) is legitimate and closeable - no pre-check
+      // blocking it here, same as moveNext above.
       setCobroDirectId(drag.current.orderId);
       drag.current = null;
       return;
@@ -323,6 +339,19 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--gt)', marginBottom: 4, fontWeight: 600 }}>
             <Bike size={11} style={{ flexShrink: 0 }} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ord.employee.name}</span>
+          </div>
+        )}
+        {/* Payment method shown right on the card too, same reasoning as domiciliario
+            above - staff shouldn't have to open the order just to see efectivo vs
+            transferencia vs cobro en casa. */}
+        {ord.payment_method && ord.payment_method !== 'sin_asignar' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--gt)', marginBottom: 4, fontWeight: 600 }}>
+            {ord.payment_method === 'transfer'
+              ? <ArrowLeftRight size={11} style={{ flexShrink: 0 }} />
+              : ord.payment_method === 'cod'
+                ? <Wallet size={11} style={{ flexShrink: 0 }} />
+                : <Banknote size={11} style={{ flexShrink: 0 }} />}
+            <span>{PAYMENT_LABEL[ord.payment_method] ?? ord.payment_method}</span>
           </div>
         )}
         <div className="dc-tot">{fmtCOP(total)}</div>

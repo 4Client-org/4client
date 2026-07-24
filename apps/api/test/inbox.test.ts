@@ -74,6 +74,34 @@ describe('inbox routes', () => {
     const unscopedIds = unscoped.json().data.orders.map((o: any) => o.id);
     expect(unscopedIds.sort()).toEqual([orderToday.id, orderYesterday.id].sort());
   });
+
+  it('the "sin leer" dot survives opening the chat any number of times - it only clears once staff actually replies', async () => {
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: '573009990002', customer_name: 'Cliente Sin Leer', unread_count: 3 },
+    });
+
+    for (let i = 0; i < 3; i++) {
+      const opened = await app.inject({
+        method: 'GET',
+        url: `/api/v1/inbox/${ticket.id}/messages`,
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(opened.statusCode).toBe(200);
+      const stillUnread = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(stillUnread.unread_count).toBe(3);
+    }
+
+    const reply = await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Ya te atiendo' },
+    });
+    expect(reply.statusCode).toBe(201);
+
+    const afterReply = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(afterReply.unread_count).toBe(0);
+  });
 });
 
 describe('inbox routes - Meta WhatsApp delivery tracking', () => {

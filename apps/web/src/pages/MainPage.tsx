@@ -59,8 +59,8 @@ export default function MainPage() {
   });
 
   // Same queryKey InboxPanel uses for its ticket list - sharing the cache means the
-  // floating badge always reflects real per-ticket unread_count (server resets it to 0
-  // the moment a conversation is actually opened, not just when this tab is clicked),
+  // floating badge always reflects real per-ticket unread_count (server only resets it
+  // to 0 once staff actually sends a reply, not just from opening the conversation),
   // and stays live since both onTicketMessage/onTicketUnread below already invalidate it.
   const { data: inboxTickets = [] } = useQuery({
     queryKey: ['inbox'],

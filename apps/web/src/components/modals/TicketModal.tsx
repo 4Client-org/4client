@@ -9,7 +9,6 @@ import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { fmtCOP, STATUS_LABEL, todayStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 import { toast } from '../ui/Toast';
 import { ConfirmModal } from '../ui/ConfirmModal';
 
@@ -129,16 +128,15 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
   const activeOrders = (ticket?.orders ?? []).filter((o: any) => o.status !== 'papelera');
   const hasOrders = activeOrders.length > 0;
-  // The link itself already expires (end of the Colombia calendar day it was sent, or
-  // sooner - see inbox.ts's /form-link route) - viewing a past day's chat here means
-  // whatever link was ever sent for it is already dead, so sending/blocking one from
-  // this stale view can only confuse ("bloqueado" a link that already expired, or a
-  // fresh link that's really meant for TODAY's conversation, not the day being read).
-  // Also true the moment TODAY's caja gets closed early (cierre.ts only allows
-  // closing today), same as a past day for this purpose.
+  // The link itself already expires (24h from issuance, or 4h if never opened - see
+  // formLink.ts) - viewing a past day's chat here means whatever link was ever sent
+  // for it is very likely already dead, so sending/blocking one from this stale view
+  // can only confuse ("bloqueado" a link that already expired, or a fresh link
+  // that's really meant for TODAY's conversation, not the day being read). Also true
+  // the moment TODAY's caja gets closed early (cierre.ts only allows closing today),
+  // same as a past day for this purpose.
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
-  const withinFormHours = useWithinFormHours();
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -169,18 +167,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
               <button
                 className="hdr-ic-btn"
-                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Enviar formulario de pedido al cliente'}
+                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                 onClick={sendFormLink}
-                disabled={formLinkMut.isPending || isPastDay || !withinFormHours}
+                disabled={formLinkMut.isPending || isPastDay}
               >
                 <ClipboardList size={13} />
                 Formulario
               </button>
               <button
                 className="hdr-ic-btn"
-                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Bloquear el link de formulario enviado a este cliente'}
+                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
                 onClick={() => setShowBlockConfirm(true)}
-                disabled={blockLinkMut.isPending || isPastDay || !withinFormHours}
+                disabled={blockLinkMut.isPending || isPastDay}
               >
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>

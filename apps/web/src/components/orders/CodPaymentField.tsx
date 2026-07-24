@@ -14,13 +14,14 @@ interface Props {
 // DetallePedidoModal) - staff must actively pick "Completo" or "Necesita vuelta",
 // neither is a default. Picking "vuelta" reveals the cash-amount input; "completo"
 // hides it entirely (the client pays exactly the total, nothing to type). The
-// backend enforces the exact same rule (>0, >= total) before a cod order can be
+// backend enforces the exact same rule (>=0, >= total) before a cod order can be
 // cerrado - see orders.ts's validateCodAmount - this is just the same check shown
-// live instead of only failing after a round trip.
+// live instead of only failing after a round trip. $0 is valid (order fully
+// agotado, total $0 too) - only negative is actually wrong.
 export default function CodPaymentField({ total, choice, onChoiceChange, cash, onCashChange, disabled }: Props) {
   const cashNum = parseFloat(cash) || 0;
   const change = cashNum - total;
-  const cashValid = cashNum > 0 && cashNum >= total;
+  const cashValid = cashNum >= 0 && cashNum >= total;
 
   return (
     <div className="fg2">

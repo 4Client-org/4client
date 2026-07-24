@@ -9,7 +9,6 @@ import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
@@ -97,7 +96,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const orderFecha: string | undefined = order?.fecha ? new Date(order.fecha).toISOString().split('T')[0] : undefined;
   const { data: cierreStatus } = useDiaCerrado(orderFecha);
   const diaCerrado = cierreStatus?.cerrado ?? false;
-  const withinFormHours = useWithinFormHours();
 
   const [nombre, setNombre] = useState('');
   const [telefono, setTelefono] = useState('');
@@ -112,6 +110,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [catalogDirty, setCatalogDirty] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  // Independent of the rest of the form's isDirty/Guardar flow on purpose - this is
+  // the one field that must stay saveable even when everything else is locked (see
+  // `readOnly` below), so it has its own dirty flag and its own save action.
+  const [observacion, setObservacion] = useState('');
+  const [obsDirty, setObsDirty] = useState(false);
   const [catalogClearKey, setCatalogClearKey] = useState(0);
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
@@ -156,6 +159,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     // instead of making the person hunt for the toggle.
     if (order.status === 'papelera') setShowHist(true);
   }, [order]);
+
+  // Separate from the effect above on purpose - observacion has its own dirty flag
+  // and its own save action (see observacionMut below), independent of the rest of
+  // the form, so it must not be gated by isDirty/catalogDirty (that would block a
+  // live update from ever refreshing it just because, say, the address field has
+  // unsaved local changes).
+  useEffect(() => {
+    if (!order || obsDirty) return;
+    setObservacion(order.observacion ?? '');
+  }, [order, obsDirty]);
 
   // Live-update this open order when it changes elsewhere - most importantly, a
   // client adding items to it via the form (merge flow) while a staff member already
@@ -285,6 +298,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
     saveMut.mutate(finalItems, options);
   }
+
+  // Sends ONLY observacion, never the rest of the form state - the backend (orders.ts
+  // PATCH /:id) specifically allows a body containing just this one field even on a
+  // locked/closed order or a day already cerrado; sending anything else alongside it
+  // would trip that same-request exception and get rejected as a full edit attempt.
+  const observacionMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}`, { observacion }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      setObsDirty(false);
+      toast('Observación guardada');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
 
   const moveMut = useMutation({
     mutationFn: (status: string) => api.patch(`/orders/${orderId}/status`, { status }),
@@ -508,6 +536,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   );
 
   const locked = order.locked;
+  // 'dev' bypasses every requireRole check on the backend (middleware/auth.ts) - has
+  // to count the same way here, or a dev user would see fields as editable that the
+  // backend then rejects. Deliberately NOT the same as the narrower `isAdmin` above
+  // (which excludes dev, only for the papelera-button distinction elsewhere in this
+  // modal) - this one specifically mirrors the backend's own admin-or-dev check.
+  const canEditLocked = user?.role === 'admin' || user?.role === 'dev';
   // Frozen because its day was closed (regardless of this specific order's own
   // `locked` flag - even an order left "dejar_activo" at cierre time stops being
   // editable once that day is history) vs. frozen because it was individually paid
@@ -518,7 +552,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // move it. It isn't necessarily `locked` (papelera never sets that flag) or on a
   // closed day, so without this it'd otherwise still show live "Mover pedido"/
   // "Guardar" controls on something that's already been thrown out.
-  const readOnly = locked || diaCerrado || order.status === 'papelera';
+  // `locked` alone no longer means read-only - admin/dev can still fully edit a
+  // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
+  // is cerrado (diaCerrado still freezes everyone, admin included).
+  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera';
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -538,10 +575,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   if (!pago || pago === 'sin_asignar') cierreMissing.push('método de pago');
   if (!empleadoId) cierreMissing.push('domiciliario');
   if (items.length === 0) cierreMissing.push('productos');
-  const unpriced = items.filter((i: any) => !(parseFloat(i.price) > 0));
-  if (unpriced.length > 0) cierreMissing.push(`precio de ${unpriced.map((i: any) => i.product_name).join(', ')}`);
-  // A negative price isn't just "unpriced" (that's the check right above, for a
-  // price that's zero/blank) - it's an actively wrong value that would show up as a
+  // $0 is a legitimate, final price (item agotado) - never treated as "still needs
+  // pricing". Negative is a different, actively-wrong case, handled separately below.
+  // A negative price is an actively wrong value that would show up as a
   // negative line in the PDF/factura and drag the whole total down. Blocks every
   // action that reads `items` (Guardar, Copiar, PDF, Enviar factura, Papelera), not
   // just the final cobro - the server already rejects it (orderItemSchema's
@@ -550,9 +586,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const negativePriceItems = items.filter((i: any) => parseFloat(i.price) < 0);
   const hasNegativePrice = negativePriceItems.length > 0;
   const codCashNum = parseFloat(codCash) || 0;
-  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
+  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= total);
   if (pago === 'cod' && !codValid) cierreMissing.push('monto de pago en efectivo (completo o con vuelta)');
-  const cobroValido = cierreMissing.length === 0 && recibido >= total && recibido > 0 && cobroPass.trim().length > 0;
+  const cobroValido = cierreMissing.length === 0 && recibido >= total && recibido >= 0 && cobroPass.trim().length > 0;
   const hasChatPanel = !!order.ticket_id;
 
   return (
@@ -583,22 +619,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Enviar formulario de pedido al cliente'}
+                  title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                   onClick={sendFormLink}
-                  disabled={formLinkMut.isPending || isPastDay || !withinFormHours}
+                  disabled={formLinkMut.isPending || isPastDay}
                 >
                   <ClipboardList size={13} />
                   Formulario
                 </button>
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Bloquear el link de formulario enviado a este cliente'}
+                  title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
                   onClick={() => setConfirmDlg({
                     msg: 'Vas a bloquear el link del formulario - el cliente no podrá usarlo y tendrás que enviarle uno nuevo. ¿Deseas bloquearlo?',
                     onOk: () => blockLinkMut.mutate(),
                     danger: true,
                   })}
-                  disabled={blockLinkMut.isPending || isPastDay || !withinFormHours}
+                  disabled={blockLinkMut.isPending || isPastDay}
                 >
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
@@ -737,7 +773,38 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {!readOnly && (
+            {locked && !canEditLocked && (
+              <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Lock size={15} /> Solo el administrador puede modificar este pedido cerrado. Puedes agregar una observación abajo.
+              </div>
+            )}
+
+            {/* Observación - the ONE field always editable, even locked/closed/día
+                cerrado, by any role (orders.ts's PATCH /:id carves out this exact
+                exception) - a note for "pedido cerrado, pasó algo", not a real edit. */}
+            <div className="stit">Observación</div>
+            <textarea className="fi2" style={{ minHeight: 60, resize: 'vertical', width: '100%' }}
+              placeholder="Nota interna - se puede agregar incluso después de cerrado el pedido"
+              value={observacion}
+              maxLength={1000}
+              onChange={(e) => { setObservacion(e.target.value); setObsDirty(true); }}
+            />
+            <div className="mactions" style={{ marginBottom: 14 }}>
+              <button className="bsec"
+                onClick={() => observacionMut.mutate()}
+                disabled={observacionMut.isPending || !obsDirty}
+                style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <CheckCircle size={13} /> {observacionMut.isPending ? 'Guardando...' : 'Guardar observación'}
+              </button>
+            </div>
+
+            {/* Also gated on !locked explicitly, not just !readOnly - admin/dev can now
+                have readOnly=false on a locked order (full content edit via PATCH
+                /:id), but PATCH /:id/status (what this section and Papelera below
+                both call) was NOT given that same exception and still unconditionally
+                rejects a locked order for every role. Showing these here would just
+                be a button that always errors. */}
+            {!readOnly && !locked && (
               <>
                 <div className="stit">Mover pedido</div>
                 <div className="movbtns">
@@ -847,7 +914,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
-              {!readOnly && canManage && order.status !== 'papelera' && (
+              {!readOnly && !locked && canManage && order.status !== 'papelera' && (
                 <button className="bdel"
                   onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
                   disabled={papeleraMut.isPending || hasNegativePrice}

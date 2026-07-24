@@ -236,6 +236,11 @@ model Order {
   caja_cerrada    Boolean   @default(false)
   source          String    @default("encargado") @db.VarChar(20)
   notes           String?
+  // Free-text note, always editable (even on a locked/closed order, by any role -
+  // see orders.ts's PATCH /:id) - separate from `notes` above, which is already
+  // overloaded for the "pasado_manana:DATE" deferral marker and can't safely share
+  // a column with arbitrary staff-typed text.
+  observacion     String?   @db.VarChar(1000)
   // Set whenever the CLIENT (not staff) adds/edits/removes items on this order via
   // the public form's merge flow - cleared when staff saves the order (routes/orders.ts
   // PATCH /:id), which is treated as "staff reviewed the change". Independent of any

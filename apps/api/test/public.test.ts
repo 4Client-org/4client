@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
-import { isWithinFormHours } from '../src/routes/public.js';
 
 const ADMIN_PASS = 'PublicFormAdmin1!';
 const DEVICE = 'device-token-001';
@@ -12,32 +11,11 @@ async function login(app: FastifyInstance, email: string, password: string): Pro
   return res.json().data.accessToken as string;
 }
 
-// Pure function of an explicit `now`, not the real clock - the route wiring itself
-// (`if (shouldBlockForHours()) return sendFormClosed(reply)`, public.ts) is disabled
-// under NODE_ENV=test specifically so the rest of this file's app.inject calls don't
-// pass or fail depending on what hour it happens to be when the suite runs. This is
-// what actually verifies the 8pm Colombia boundary is correct.
-describe('isWithinFormHours - form links only work between 4am and 8pm Colombia time', () => {
-  it('7:59pm Colombia -> still within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T19:59:00-05:00').getTime())).toBe(true);
-  });
-  it('exactly 8:00pm Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T20:00:00-05:00').getTime())).toBe(false);
-  });
-  it('11:59pm Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T23:59:00-05:00').getTime())).toBe(false);
-  });
-  it('midnight / pre-4am Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T00:00:00-05:00').getTime())).toBe(false);
-    expect(isWithinFormHours(new Date('2026-01-15T03:59:00-05:00').getTime())).toBe(false);
-  });
-  it('exactly 4:00am Colombia -> within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T04:00:00-05:00').getTime())).toBe(true);
-  });
-  it('mid-morning Colombia -> within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T07:00:00-05:00').getTime())).toBe(true);
-  });
-});
+// The 4am-8pm form-hours restriction (isWithinFormHours/shouldBlockForHours) was
+// removed - customers writing late at night to get first-in-line tomorrow need the
+// form to work right then, not be told to come back in the morning. The link's own
+// TTL (4h unopened, 24h once opened - see formLink.ts) is the only time boundary
+// left; there's nothing to unit-test here anymore.
 
 describe('public form routes', () => {
   let app: FastifyInstance;
@@ -118,6 +96,32 @@ describe('public form routes', () => {
     expect(order.items.every(i => i.added_by_client === false)).toBe(true);
   });
 
+  it('a manually-typed product (not picked from the catalog) is flagged added_by_client on the very first submission - the one exception to the rule above', async () => {
+    const manualTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001117788', customer_name: 'Cliente Manual' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manualToken = (app.jwt.sign as any)({ type: 'form_link', ticketId: manualTicket.id, orgId }, { expiresIn: '7d' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/public/submit',
+      payload: {
+        token: manualToken, device_token: 'device-manual', address: 'Calle Manual 1',
+        items: [
+          { product_name: 'Mango', quantity_label: '2 kg' },
+          { product_name: 'Producto raro que no está en el catálogo', quantity_label: '1 unidad', is_manual: true },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId }, include: { items: true } });
+    const catalogItem = order.items.find(i => i.product_name === 'Mango')!;
+    const manualItem = order.items.find(i => i.product_name === 'Producto raro que no está en el catálogo')!;
+    expect(catalogItem.added_by_client).toBe(false);
+    expect(manualItem.added_by_client).toBe(true);
+    expect(Number(manualItem.price)).toBe(0); // unknown to the catalog - staff prices it afterward
+  });
+
   it('GET /form-info now lists that order, editable (status nuevo), with its item', async () => {
     const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=${PHONE4}` });
     const orders = res.json().data.orders;
@@ -153,13 +157,9 @@ describe('public form routes', () => {
     expect(stillOk.statusCode).toBe(200);
   });
 
-  it('wrong phone_last4 is rejected with its own distinct error, not the generic "link inválido" - the right digits still work', async () => {
+  it('phone_last4 is no longer checked at all - a wrong value in the querystring is silently ignored, not rejected', async () => {
     const wrong = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=9999` });
-    expect(wrong.statusCode).toBe(401);
-    expect(wrong.json().code).toBe('PHONE_MISMATCH');
-
-    const right = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=${PHONE4}` });
-    expect(right.statusCode).toBe(200);
+    expect(wrong.statusCode).toBe(200);
   });
 
   it('GET /link-status answers "is this link alive" with no phone_last4 at all - a revoked link is caught here before the visitor ever sees the digit-entry screen', async () => {
@@ -184,10 +184,10 @@ describe('public form routes', () => {
     expect(dead.json().code).toBe('INVALID_TOKEN');
   });
 
-  it('a link nobody opens within 10 minutes of being issued dies on its own - one opened in time keeps working past that mark', async () => {
+  it('a link nobody opens within 4 hours of being issued dies on its own - one opened in time keeps working past that mark', async () => {
     const staleTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112233', customer_name: 'Cliente Nunca Abrio' } });
     const openedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112234', customer_name: 'Cliente Si Abrio' } });
-    const oldIat = Math.floor(Date.now() / 1000) - 700; // 11m40s ago
+    const oldIat = Math.floor(Date.now() / 1000) - 14500; // 4h1m40s ago
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sign = (tId: string) => (app.jwt.sign as any)(
       { type: 'form_link', ticketId: tId, orgId, iat: oldIat },
@@ -197,9 +197,9 @@ describe('public form routes', () => {
     const openedToken = sign(openedTicket.id);
 
     // Simulates openedTicket's link having been opened (a real form-info call) well
-    // within its first 10 minutes, before this old `iat` would otherwise matter -
-    // once form_link_opened_at is set, assertLinkStillValid never re-checks the
-    // 10-minute window for this link again, no matter how stale `iat` gets from here.
+    // within its first 4 hours, before this old `iat` would otherwise matter -
+    // once form_link_opened_at is set, assertLinkNotDead never re-checks the
+    // 4-hour window for this link again, no matter how stale `iat` gets from here.
     await app.prisma.ticket.update({ where: { id: openedTicket.id }, data: { form_link_opened_at: new Date(oldIat * 1000 + 60_000) } });
 
     const staleRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=stale-device&phone_last4=2233` });
@@ -459,7 +459,7 @@ describe('public form routes', () => {
     expect(found.status).toBe('camino');
   });
 
-  it('GET /inbox/:ticketId/form-link embeds who sent it and expires by end of the current Colombia day, not 7 days out', async () => {
+  it('GET /inbox/:ticketId/form-link embeds who sent it and expires a flat 24h out, not 7 days out', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/v1/inbox/${ticketId}/form-link`,
@@ -476,9 +476,10 @@ describe('public form routes', () => {
     // route that needs them reads the current value off the ticket/org instead.
     expect(decoded.clientName).toBeUndefined();
     expect(decoded.sentByName).toBeUndefined();
-    // Bounded well under the old 7-day expiry, and never more than ~24h out.
+    // Bounded well under the old 7-day expiry - always a flat 24h now (used to be
+    // "end of the current Colombia day", which varied with time of day issued).
     const secondsUntilExpiry = decoded.exp - Math.floor(Date.now() / 1000);
-    expect(secondsUntilExpiry).toBeGreaterThan(0);
+    expect(secondsUntilExpiry).toBeGreaterThan(24 * 3600 - 10);
     expect(secondsUntilExpiry).toBeLessThanOrEqual(24 * 3600);
   });
 
@@ -766,135 +767,11 @@ describe('public form routes', () => {
   });
 });
 
-describe('link abuse lockout - repeated wrong PIN guesses', () => {
-  let app: FastifyInstance;
-  let orgId: string;
-  let adminId: string;
-  let adminToken: string;
-
-  beforeAll(async () => {
-    app = await buildTestServer();
-    const org = await createTestOrg(app.prisma);
-    orgId = org.id;
-    const admin = await createTestUser(app.prisma, orgId, 'admin', 'LockoutAdmin1!');
-    adminId = admin.id;
-    adminToken = await login(app, admin.email, 'LockoutAdmin1!');
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  function sign(ticketId: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (app.jwt.sign as any)({ type: 'form_link', ticketId, orgId }, { expiresIn: '7d' });
-  }
-
-  it('10 wrong phone_last4 guesses against the same link kill it - even the correct digits stop working afterward', async () => {
-    const phone = '573001119900';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Link' } });
-    const token = sign(ticket.id);
-
-    for (let i = 0; i < 10; i++) {
-      const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=lockout-link&phone_last4=0000` });
-      expect(res.statusCode).toBe(401);
-      expect(res.json().code).toBe('PHONE_MISMATCH');
-    }
-
-    // 11th try, this time with the RIGHT digits - the link itself is already dead.
-    const afterLimit = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=lockout-link&phone_last4=9900` });
-    expect(afterLimit.statusCode).toBe(403);
-    expect(afterLimit.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-
-    // GET /link-status - checked BEFORE the digit-entry screen even shows - must
-    // surface this SAME specific reason, not the generic "Link inválido o expirado"
-    // (that was the bug: the PDF's equivalent /status route already showed the
-    // specific reason, this one didn't).
-    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${token}` });
-    expect(status.statusCode).toBe(403);
-    expect(status.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-  });
-
-  it('a freshly-issued link resets the per-link count, so it works again even after the old one got exhausted', async () => {
-    const phone = '573001119901';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Reset' } });
-    const staleToken = sign(ticket.id);
-
-    for (let i = 0; i < 10; i++) {
-      await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=lockout-reset&phone_last4=0000` });
-    }
-    const dead = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=lockout-reset&phone_last4=9901` });
-    expect(dead.statusCode).toBe(403);
-    expect(dead.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-
-    const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-    const freshToken = new URL(linkRes.json().data.url).searchParams.get('t')!;
-    const works = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=lockout-reset&phone_last4=9901` });
-    expect(works.statusCode).toBe(200);
-  });
-
-  it('30 cumulative wrong guesses across re-issued links blocks the WHOLE ticket for 24h, even a link issued after the block started', async () => {
-    const phone = '573001119902';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Ticket' } });
-
-    // Burn through 3 links' worth of wrong guesses (10 each = 30 total) - each
-    // fresh link resets ITS OWN per-link count, but the ticket-wide cumulative
-    // count (what actually matters here) is never reset by issuing a new link.
-    for (let link = 0; link < 3; link++) {
-      const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-      const t = new URL(linkRes.json().data.url).searchParams.get('t')!;
-      for (let i = 0; i < 10; i++) {
-        await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${t}&device_token=lockout-ticket-${link}&phone_last4=0000` });
-      }
-    }
-
-    // A brand-new link, issued AFTER the block was triggered, is still blocked -
-    // it's the ticket that's locked out, not any one token.
-    const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-    const freshToken = new URL(linkRes.json().data.url).searchParams.get('t')!;
-    const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=lockout-ticket-final&phone_last4=9902` });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().code).toBe('TICKET_BLOCKED');
-
-    // Same check via /link-status, the pre-digit-entry precheck a fresh page load
-    // actually hits first - must show TICKET_BLOCKED there too, not a generic error.
-    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${freshToken}` });
-    expect(status.statusCode).toBe(403);
-    expect(status.json().code).toBe('TICKET_BLOCKED');
-  });
-
-  it('10 wrong guesses on the FORM link also block that ticket\'s already-outstanding factura link, not just the form link - the soft block is shared, not per-token', async () => {
-    const phone = '573001119903';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Cross Lockout Form' } });
-
-    // Factura sent BEFORE the wrong guesses below - sending a NEW one afterward
-    // would itself clear the soft block (it's the "give another chance" action),
-    // which would hide the exact bug this test guards against.
-    const order = await app.prisma.order.create({
-      data: {
-        org_id: orgId, ticket_id: ticket.id, num: '920', customer_name: 'Cliente Cross Lockout Form',
-        customer_phone: phone, address: 'Calle Cross Form 1',
-        payment_method: 'cash', registered_by: adminId, fecha: new Date(),
-      },
-    });
-    const tinyPdfBase64 = Buffer.from('%PDF-1.4 fake content for test').toString('base64');
-    const upload = await app.inject({
-      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
-      payload: { data: tinyPdfBase64, num: '920', order_id: order.id },
-    });
-    const filename = new URL(upload.json().url).searchParams.get('f')!;
-
-    const token = sign(ticket.id);
-    for (let i = 0; i < 10; i++) {
-      await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=cross-lockout-form&phone_last4=0000` });
-    }
-
-    // The factura, never touched by any of the wrong guesses above, is dead too.
-    const res = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=9903` });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-  });
-});
+// The wrong-PIN lockout ladder itself (registerFailedLinkAttempt / MAX_ATTEMPTS_SOFT
+// / MAX_ATTEMPTS_HARD in lib/linkSecurity.ts) is left in place as dormant infra, but
+// nothing calls it anymore now that phone_last4 isn't checked - so there is no
+// remaining code path to exercise here. Covered instead by the TTL/revocation/
+// supersession tests above, which are the security boundary now.
 
 describe('public /submit - Meta WhatsApp delivery tracking on the order confirmation message', () => {
   let app: FastifyInstance;

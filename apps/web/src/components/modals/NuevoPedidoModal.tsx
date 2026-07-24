@@ -16,7 +16,6 @@ import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { todayStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
 function renderText(text: string) {
@@ -152,7 +151,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   // Used only to gate the submit button live - handleSubmit recomputes its own
   // version from the FINAL committed items (see finalCodValid there), since a price
   // edit still mid-typing when Guardar is clicked isn't reflected in `total` here yet.
-  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= total);
+  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= total);
   // Same guard as DetallePedidoModal - a negative price must block the save, not
   // just fail quietly server-side (orderItemSchema's price: z.number().min(0)).
   const hasNegativePrice = items.some((i: any) => parseFloat(i.price) < 0);
@@ -171,7 +170,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     if (finalItems.some((i: any) => parseFloat(i.price) < 0)) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
     const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
     const finalCodAmount = codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? codCashNum : null;
-    const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum > 0 && codCashNum >= finalTotal);
+    const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= finalTotal);
     if (pago === 'cod' && !finalCodValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
     try {
       await createOrder.mutateAsync({
@@ -203,11 +202,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const hasChat = !!ticketId;
   // Same reasoning as TicketModal/DetallePedidoModal - the link itself already
-  // expires by end of the Colombia day it was sent, so a past day's ticket has
-  // nothing live to send/block. Also true the moment TODAY's caja gets closed early.
+  // expires (24h from issuance, or 4h if never opened), so a past day's ticket
+  // very likely has nothing live to send/block. Also true the moment TODAY's caja
+  // gets closed early.
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
-  const withinFormHours = useWithinFormHours();
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
@@ -226,8 +225,8 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               {ticketId && (
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Enviar formulario de pedido al cliente'}
-                  disabled={isPastDay || !withinFormHours}
+                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
+                  disabled={isPastDay}
                   onClick={async () => {
                     try {
                       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
@@ -242,9 +241,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               {ticketId && (
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Bloquear el link de formulario enviado a este cliente'}
+                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
                   onClick={() => setShowBlockConfirm(true)}
-                  disabled={blockLinkMut.isPending || isPastDay || !withinFormHours}
+                  disabled={blockLinkMut.isPending || isPastDay}
                 >
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>

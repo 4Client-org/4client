@@ -6,17 +6,15 @@ import { config } from '../config.js';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { registerFailedLinkAttempt, clearSoftLinkBlock, MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
+import { clearSoftLinkBlock, MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
-// 10 minutes - same reasoning and same value as the form link's UNOPENED_LINK_TTL_SECONDS
+// 4 hours - same reasoning and same value as the form link's UNOPENED_LINK_TTL_SECONDS
 // (public.ts): a factura URL nobody opens promptly dies on its own, shrinking how long a
-// misdirected one (wrong number, forwarded by mistake) stays usable.
-const UNOPENED_INVOICE_TTL_SECONDS = 10 * 60;
-
-// Exactly 4 digits, nothing else - same schema as public.ts's phoneLast4Schema.
-const phoneLast4Schema = z.string().regex(/^\d{4}$/, 'phone_last4 debe ser 4 dígitos');
+// misdirected one (wrong number, forwarded by mistake) stays usable. Was 10 minutes then
+// 2h, raised for the same reason as the form link - too short for real WhatsApp usage.
+const UNOPENED_INVOICE_TTL_SECONDS = 4 * 60 * 60;
 
 export default async function fileRoutes(fastify: FastifyInstance) {
   const MAX_BASE64_BYTES = 28_000_000; // ~20 MB decoded
@@ -30,9 +28,9 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos' });
 
-    // The factura is shared over WhatsApp exactly like a form link, so it gets the
-    // same phone_last4 gate (below) - needs the customer's real number, which only
-    // the order itself (never the client) can supply.
+    // phone_last4 is stored on the row (schema requires a value) but no longer
+    // enforced as a gate at download time - see GET /:filename below. Still sourced
+    // from the order itself (never the client) purely so the column stays populated.
     const order = await fastify.prisma.order.findFirst({
       where: { id: body.data.order_id, org_id: req.user.orgId },
       select: { customer_phone: true, ticket_id: true },
@@ -40,7 +38,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
     const phoneLast4 = (order.customer_phone ?? '').replace(/\D/g, '').slice(-4);
     if (phoneLast4.length !== 4) {
-      return reply.status(400).send({ error: 'El pedido no tiene un teléfono válido para proteger la factura', code: 'NO_PHONE' });
+      return reply.status(400).send({ error: 'El pedido no tiene un teléfono válido registrado', code: 'NO_PHONE' });
     }
 
     const decoded = Buffer.from(body.data.data, 'base64');
@@ -82,10 +80,8 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     // (linkSecurity.ts) - un-blocking the form link too, not just this factura.
     if (order.ticket_id) await clearSoftLinkBlock(fastify.prisma, order.ticket_id);
 
-    // Points at the FRONTEND app now, not directly at this API - GET /:filename below
-    // requires phone_last4 on every request, which only a page that can prompt for it
-    // (ClientFormPage-style verify screen) can supply. A bare API link opened straight
-    // from WhatsApp would have nowhere to collect those digits.
+    // Points at the FRONTEND app now, not directly at this API - FacturaPage.tsx is
+    // what actually redirects the browser to the real PDF (GET /:filename below).
     const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
     const publicUrl = `${frontendUrl}/factura?f=${encodeURIComponent(filename)}`;
 
@@ -198,31 +194,21 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/files/:filename?phone_last4=XXXX - public (no staff auth - this is the
-  // client's own download), but gated the same way a form link is: the caller must
-  // prove they know the customer's phone, and a factura nobody opens within 10 minutes
-  // of being generated dies on its own. Still capped at 24h total even once opened -
-  // if someone needs it again after that, staff just hits "Enviar factura" again (it
-  // regenerates fresh from the order's current items every time, nothing is cached).
+  // GET /api/v1/files/:filename - public (no staff auth - this is the client's own
+  // download). The link itself (an unguessable filename tied to a DB row with its
+  // own TTL/revocation, same security model as the form link) is the whole gate now -
+  // a factura nobody opens within 4 hours of being generated still dies on its
+  // own, and it's still capped at 24h total even once opened. Used to also require
+  // typing the customer's phone_last4; dropped because customers kept getting
+  // confused by it (see public.ts's assertLinkNotDead for the equivalent history).
   fastify.get('/:filename', async (req, reply) => {
     const { filename } = req.params as { filename: string };
-    const q = z.object({ phone_last4: phoneLast4Schema }).safeParse(req.query);
-    if (!q.success) return reply.status(400).send({ error: 'Verificación requerida', code: 'VALIDATION_ERROR' });
 
     let link: Awaited<ReturnType<typeof loadLiveInvoiceLink>>;
     try {
       link = await loadLiveInvoiceLink(filename);
     } catch (err: any) {
       return reply.status(err.status ?? 500).send({ error: err.error ?? 'Error', code: err.code });
-    }
-    if (q.data.phone_last4 !== link.phone_last4) {
-      // Recorded before failing - if this factura belongs to a ticket, this bumps
-      // the SAME ticket-wide counters a wrong form-link guess would (linkSecurity.ts),
-      // so this one wrong guess also counts against the form link and every other
-      // factura in the same chat. Invoices with no ticket_id have nothing to share
-      // the count with (see loadLiveInvoiceLink) - not tracked beyond the global rate limit.
-      if (link.ticket_id) await registerFailedLinkAttempt(fastify.prisma, link.ticket_id);
-      return reply.status(401).send({ error: 'Número incorrecto. Verifica los últimos 4 dígitos.', code: 'PHONE_MISMATCH' });
     }
     if (!link.opened_at) {
       await fastify.prisma.invoiceLink.update({ where: { filename }, data: { opened_at: new Date() } });
