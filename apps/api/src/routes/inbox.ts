@@ -109,6 +109,15 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         // failure either, indistinguishable from "still sending".
         const { messageId } = await provider.sendText(ticket.phone, body.data.text);
         await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+        // Without this, the chat already open on someone's screen (the 'ticket:message'
+        // emit above fired BEFORE this id existed) never learns wpp_message_id is now
+        // set - DeliveryStatus.tsx is gated on that being truthy, so the check mark
+        // stayed invisible until something else happened to trigger a refetch (the
+        // next poll, or - only for THIS message - its own first real delivered/read
+        // webhook, which is exactly the delay that made this look broken).
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+        });
         wpp_status = 'sent';
       } catch (err: any) {
         wpp_status = 'failed';

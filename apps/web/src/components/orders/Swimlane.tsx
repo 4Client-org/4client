@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell } from 'lucide-react';
+import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell, Bike } from 'lucide-react';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useMoveOrder } from '../../hooks/useOrders';
@@ -314,6 +314,17 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             </span>
           )}
         </div>
+        {/* Domiciliario shown right on the card - staff shouldn't have to open the
+            order just to see who's carrying it. Nothing new needed for orders
+            created before this - GET /orders already returns `employee` for every
+            order that has one assigned (orders.ts's buildOrderSelect), this is a
+            display-only addition that applies to old and new orders alike. */}
+        {ord.employee?.name && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--gt)', marginBottom: 4, fontWeight: 600 }}>
+            <Bike size={11} style={{ flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ord.employee.name}</span>
+          </div>
+        )}
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"

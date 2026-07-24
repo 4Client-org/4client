@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
 
@@ -122,6 +122,28 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
     expect(stored!.wpp_message_id).toBe(fakeWamid);
     expect(stored!.failed_reason).toBeNull();
+  });
+
+  it('POST /:ticketId/reply broadcasts ticket:message-status on a SUCCESSFUL send too, not just on failure - otherwise a chat already open on someone\'s screen never learns wpp_message_id is set and DeliveryStatus.tsx (gated on that) stays invisible until an unrelated refetch happens to catch up', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230003', customer_name: 'Cliente WPP Socket' } });
+    const fakeWamid = `wamid.SOCKETOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const emitSpy = vi.fn();
+    const toSpy = vi.spyOn(app.io, 'to').mockReturnValue({ emit: emitSpy } as any);
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Confirmando tu pedido' },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const statusEmitCall = emitSpy.mock.calls.find(call => call[0] === 'ticket:message-status');
+    expect(statusEmitCall).toBeDefined();
+    expect(statusEmitCall![1]).toMatchObject({ ticketId: ticket.id, messageId: res.json().data.id, delivered: false, read_by_client: false, failed_reason: null });
+
+    toSpy.mockRestore();
   });
 
   it('POST /:ticketId/reply records failed_reason when Meta rejects the send (e.g. no active 24h session and no approved template) - shows the red X instead of looking stuck forever', async () => {

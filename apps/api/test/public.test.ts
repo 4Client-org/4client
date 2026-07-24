@@ -941,3 +941,59 @@ describe('public /submit - Meta WhatsApp delivery tracking on the order confirma
     expect(message!.wpp_message_id).toBe(fakeWamid);
   });
 });
+
+describe('public /submit - cobro en casa chosen by the client on the form', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminToken: string;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    const admin = await createTestUser(app.prisma, orgId, 'admin', 'CodFormAdmin1!');
+    const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { email: admin.email, password: 'CodFormAdmin1!' } });
+    adminToken = login.json().data.accessToken;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('a client picking "Cobro en casa" on the public form never decides completo/vuelta themselves - the order lands with it unset, and staff can set it afterward from the app', async () => {
+    const phone = '573001119930';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Cod Form' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const token = (app.jwt.sign as any)({ type: 'form_link', ticketId: ticket.id, orgId }, { expiresIn: '7d' });
+
+    const submit = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: {
+        token, device_token: 'device-cod-form', phone_last4: '9930', address: 'Calle Cod Form 1',
+        payment_method: 'cod', items: [{ product_name: 'Mango', quantity_label: '1 kg' }],
+      },
+    });
+    expect(submit.statusCode).toBe(201);
+    const orderId = submit.json().data.orderId;
+
+    // Nothing about completo/vuelta was ever asked of the client - the public
+    // /submit schema has no cod_choice/amount_received field at all, so the order
+    // lands exactly the same way an encargado-created cod order does before anyone
+    // has decided: both null.
+    const created = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(created.payment_method).toBe('cod');
+    expect(created.cod_choice).toBeNull();
+    expect(created.amount_received).toBeNull();
+
+    // Staff opens the order in the app and sets it - same PATCH any encargado-made
+    // cod order goes through, no special-casing needed for a form-created one.
+    await app.prisma.orderItem.updateMany({ where: { order_id: orderId }, data: { price: 3000 } });
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { amount_received: 3000, cod_choice: 'completo' },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().data.cod_choice).toBe('completo');
+  });
+});
