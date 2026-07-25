@@ -180,21 +180,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       // (when not mid-edit itself) actually showing the new address/payment/items.
       if (data?.id && data?.items) {
         qc.setQueryData(['order', orderId], data);
+      } else if (typeof data?.newStatus === 'string') {
+        // order:moved (drag on the board, Avanzar/Retroceder) only carries
+        // {orderId, newStatus} - patch just that field into the cache directly
+        // instead of invalidating and waiting on a background refetch. Enviar
+        // factura's re-enable reads order.status on every render, so this alone
+        // is enough to flip it back the instant a revert-to-listo lands, with no
+        // network round trip in between to lag behind.
+        qc.setQueryData(['order', orderId], (old: any) => old ? { ...old, status: data.newStatus } : old);
       } else {
         qc.invalidateQueries({ queryKey: ['order', orderId] });
       }
     };
     sock.on('order:updated', onOrderChange);
     sock.on('order:paid', onOrderChange);
-    // Status moves (drag on the board, the Avanzar/Retroceder buttons) go through
-    // PATCH /:id/status, which emits 'order:moved' instead - a separate, minimal
-    // event ({orderId, newStatus}, no full order/items) this modal was never
-    // listening for. That's why the board's own title/column updated live but
-    // this modal's cached order.status (and anything derived from it, like the
-    // Enviar factura re-enable) sat stale until it was reopened. onOrderChange
-    // already handles a payload with no `items` by invalidating instead of
-    // setQueryData, and already reads `data.orderId` as the fallback id - no
-    // separate handler needed, just another event to route through it.
     sock.on('order:moved', onOrderChange);
     return () => {
       sock.off('order:updated', onOrderChange);
