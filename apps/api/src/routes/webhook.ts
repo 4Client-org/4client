@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { generateFormLinkUrl, buildFormLinkMessage } from '../lib/formLink.js';
+import { generateFormLinkUrl, buildFormLinkWarningMessage } from '../lib/formLink.js';
+import { storeMedia } from '../lib/media.js';
 
 interface MetaWebhookPayload {
   object: string;
@@ -19,6 +20,7 @@ interface MetaWebhookPayload {
           timestamp: string;
           type: string;
           text?: { body: string };
+          image?: { id: string; mime_type?: string; caption?: string; sha256?: string };
         }>;
         // Delivery/read receipts for OUTBOUND messages we sent, keyed by the same
         // `id` Meta gave that message when we sent it (stored as wpp_message_id).
@@ -50,9 +52,14 @@ async function ingestMessage(
   phoneNumberId: string,
   phone: string,
   name: string,
-  text: string,
+  text: string | null,
   waMsgId: string,
   sentAt: Date,
+  // Set only for an inbound photo - `media.url` is OUR OWN opaque storage token
+  // (see lib/media.ts), never Meta's own short-lived media URL, so it stays
+  // resolvable whenever staff actually open the chat, not just for the ~5 minutes
+  // Meta's URL would have lived.
+  media?: { url: string; type: 'image' },
 ) {
   // Find org by phone_number_id
   const org = await fastify.prisma.organization.findFirst({
@@ -135,6 +142,8 @@ async function ingestMessage(
       ticket_id: ticket.id,
       direction: 'in',
       text,
+      media_url: media?.url ?? null,
+      media_type: media?.type ?? null,
       wpp_message_id: waMsgId,
       sent_at: sentAt,
     },
@@ -193,16 +202,24 @@ async function ingestMessage(
       // through this auto-sent link still gets a real name in "registered_by".
       generateFormLinkUrl(fastify, ticket.id, org.id)
         .then(async (url) => {
-          const text = buildFormLinkMessage(url);
-          const sent = await provider.sendText(phone, text);
-          const formLinkMsg = await fastify.prisma.ticketMessage.create({
-            data: { ticket_id: ticket.id, direction: 'out', text, wpp_message_id: sent.messageId, sent_at: new Date() },
-          });
+          // Two separate WhatsApp messages, sent in order, not one combined block -
+          // the notice+bank-account text alone is already long, and appending the
+          // link to it produced a single message long enough to risk mangling on
+          // some phones/keyboards; splitting also lets the client forward/copy just
+          // the link without dragging the notice along.
           type MediaType = 'pdf' | 'image' | 'audio' | 'video';
-          fastify.io.to(`org:${org.id}`).emit('ticket:message', {
-            ticketId: ticket.id,
-            message: { ...formLinkMsg, direction: 'out' as const, media_type: null as MediaType | null, sent_at: formLinkMsg.sent_at.toISOString(), sent_by_name: null },
-          });
+          const sendAndRecord = async (text: string) => {
+            const sent = await provider.sendText(phone, text);
+            const msg = await fastify.prisma.ticketMessage.create({
+              data: { ticket_id: ticket.id, direction: 'out', text, wpp_message_id: sent.messageId, sent_at: new Date() },
+            });
+            fastify.io.to(`org:${org.id}`).emit('ticket:message', {
+              ticketId: ticket.id,
+              message: { ...msg, direction: 'out' as const, media_type: null as MediaType | null, sent_at: msg.sent_at.toISOString(), sent_by_name: null },
+            });
+          };
+          await sendAndRecord(buildFormLinkWarningMessage());
+          await sendAndRecord(url);
         })
         .catch(async (err) => {
           fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando formulario automático');
@@ -234,6 +251,59 @@ async function ingestMessage(
   fastify.io.to(`org:${org.id}`).emit('ticket:message', { ticketId: ticket.id, message: socketMsg });
   fastify.io.to(`org:${org.id}`).emit('ticket:unread', { ticketId: ticket.id, count: newUnread });
   fastify.log.info({ phone, ticketId: ticket.id }, 'WPP: mensaje entrante ingresado');
+}
+
+// A photo the customer sent - Meta's webhook only gives us a media id (no
+// downloadable URL), so this does the two-step resolve-then-download against the
+// Graph API (see MetaCloudProvider.getMediaUrl/downloadMedia) before handing off to
+// ingestMessage with the resulting bytes already stored in OUR OWN storage (never
+// a public URL, and not tied to the ~5min Meta media URL's own lifetime).
+async function ingestImageMessage(
+  fastify: FastifyInstance,
+  phoneNumberId: string,
+  phone: string,
+  name: string,
+  image: { id: string; caption?: string },
+  waMsgId: string,
+  sentAt: Date,
+) {
+  const org = await fastify.prisma.organization.findFirst({
+    where: { wpp_meta_phone_id: phoneNumberId, active: true },
+  });
+  if (!org) {
+    fastify.log.warn({ phoneNumberId }, 'WPP: no org for phone_number_id (imagen)');
+    return;
+  }
+  const provider = MetaCloudProvider.fromOrg(org);
+  if (!provider) {
+    fastify.log.warn({ orgId: org.id }, 'WPP: imagen entrante descartada - org sin credenciales Meta');
+    return;
+  }
+
+  try {
+    const { url, mimeType } = await provider.getMediaUrl(image.id);
+    const buffer = await provider.downloadMedia(url);
+    const token = await storeMedia(buffer, mimeType);
+    await ingestMessage(
+      fastify, phoneNumberId, phone, name,
+      image.caption ? String(image.caption).slice(0, 4096) : null,
+      waMsgId, sentAt, { url: token, type: 'image' },
+    );
+  } catch (err) {
+    fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
+    // Still record SOMETHING - without this, a download failure (Meta API hiccup,
+    // the ~5min media URL expiring before we got to it, etc.) meant the customer's
+    // photo vanished with nothing but a server log line: no message in the chat at
+    // all, no way for staff to even know one was sent. Every OUTBOUND failure
+    // already leaves a visible red-X via failed_reason - this is the inbound
+    // equivalent, using the same wpp_message_id so a Meta webhook retry for this
+    // same photo still only ever produces one row (ingestMessage's own dedup).
+    await ingestMessage(
+      fastify, phoneNumberId, phone, name,
+      'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
+      waMsgId, sentAt,
+    ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
+  }
 }
 
 // Updates delivered/read_by_client/failed_reason on an OUTBOUND message we already
@@ -354,16 +424,23 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
         const { metadata, contacts, messages, statuses } = change.value;
 
         for (const msg of messages ?? []) {
-          if (msg.type !== 'text' || !msg.text?.body) continue;
+          if (msg.type !== 'text' && msg.type !== 'image') continue;
 
           const sentAt = new Date(parseInt(msg.timestamp) * 1000);
           // Reject replayed messages older than 10 minutes
           if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
 
-          const phone  = String(msg.from ?? '').slice(0, 20);
-          const name   = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
-          const text   = String(msg.text.body).slice(0, 4096);
+          const phone = String(msg.from ?? '').slice(0, 20);
+          const name  = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
 
+          if (msg.type === 'image' && msg.image?.id) {
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
+            continue;
+          }
+
+          if (!msg.text?.body) continue;
+          const text = String(msg.text.body).slice(0, 4096);
           ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt)
             .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }

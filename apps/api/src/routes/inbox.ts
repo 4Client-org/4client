@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
+import { storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime } from '../lib/media.js';
+
+// 5MB - Meta's own limit for an outbound WhatsApp image message; enforced here too
+// so an oversized upload fails fast with a clear message instead of getting
+// rejected only after already being stored in R2 and sent to Meta's media endpoint.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
   // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
@@ -151,6 +157,123 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     }
 
     return reply.status(201).send({ data: message, wpp_status, wpp_error });
+  });
+
+  // POST /api/v1/inbox/:ticketId/send-image - staff sends a photo, todos los roles
+  // (same access as /reply). Base64 in the JSON body, same shape as files.ts's
+  // POST /invoice, rather than multipart - no new upload-parsing dependency needed
+  // for what's still a small, staff-only image (5MB cap below).
+  fastify.post('/:ticketId/send-image', {
+    preHandler: [authenticate],
+    bodyLimit: Math.ceil(MAX_IMAGE_BYTES * 1.4) + 100_000, // base64 overhead + JSON framing
+  }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({
+      data: z.string().min(1),
+      mime_type: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+      caption: z.string().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+    if (!isSupportedImageMime(body.data.mime_type)) {
+      return reply.status(400).send({ error: 'Tipo de imagen no soportado', code: 'VALIDATION_ERROR' });
+    }
+
+    const ticket = await fastify.prisma.ticket.findFirst({
+      where: { id: ticketId, org_id: req.user.orgId },
+      include: { org: true },
+    });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const buffer = Buffer.from(body.data.data, 'base64');
+    if (buffer.length === 0) return reply.status(400).send({ error: 'Imagen vacía', code: 'VALIDATION_ERROR' });
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      return reply.status(400).send({ error: 'Imagen demasiado grande (máx 5 MB)', code: 'VALIDATION_ERROR' });
+    }
+
+    const token = await storeMedia(buffer, body.data.mime_type);
+    const caption = body.data.caption?.trim() || null;
+
+    const message = await fastify.prisma.ticketMessage.create({
+      data: {
+        ticket_id: ticketId,
+        direction: 'out',
+        text: caption,
+        media_url: token,
+        media_type: 'image',
+        media_caption: caption,
+        sent_by: req.user.userId,
+      },
+      include: { sender: { select: { id: true, name: true } } },
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    let wpp_status: 'sent' | 'no_credentials' | 'failed' = 'no_credentials';
+    let wpp_error: string | undefined;
+
+    if (provider) {
+      try {
+        // Bytes uploaded straight to Meta (never a public URL of ours) - see
+        // meta-cloud.ts's uploadMedia/sendImage for why that's the point.
+        const mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+        const { messageId } = await provider.sendImage(ticket.phone, mediaId, caption ?? undefined);
+        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+        });
+        wpp_status = 'sent';
+      } catch (err: any) {
+        wpp_status = 'failed';
+        wpp_error = err?.message ?? 'Error desconocido Meta API';
+        fastify.log.error({ err, ticketId }, 'WPP: error enviando imagen via Meta API');
+        const failed = await fastify.prisma.ticketMessage.update({
+          where: { id: message.id },
+          data: { failed_reason: String(wpp_error).slice(0, 255) },
+          select: { delivered: true, read_by_client: true, failed_reason: true },
+        });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, ...failed,
+        });
+      }
+    } else {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, imagen solo guardada en BD');
+    }
+
+    return reply.status(201).send({ data: message, wpp_status, wpp_error });
+  });
+
+  // GET /api/v1/inbox/media/:token - serves a chat photo (inbound or outbound).
+  // Staff-auth only (bearer JWT) - unlike the client-facing invoice/form links,
+  // nobody outside the org's own staff session is ever meant to open this, so the
+  // opaque token doesn't need its own TTL/revocation layer on top of that.
+  fastify.get('/media/:token', { preHandler: [authenticate] }, async (req, reply) => {
+    const { token } = req.params as { token: string };
+    if (!isValidMediaToken(token)) return reply.status(400).send({ error: 'Token inválido' });
+
+    // Confirms this token actually belongs to a message in THIS user's org before
+    // serving it - the token's entropy alone already makes it unguessable, this is
+    // just the org-isolation check every other org-scoped lookup in this file has.
+    const msg = await fastify.prisma.ticketMessage.findFirst({
+      where: { media_url: token, ticket: { org_id: req.user.orgId } },
+      select: { id: true },
+    });
+    if (!msg) return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+
+    try {
+      const buffer = await loadMedia(token);
+      reply.header('Content-Type', mimeTypeForToken(token));
+      reply.header('Cache-Control', 'private, max-age=86400');
+      return reply.send(buffer);
+    } catch (err) {
+      req.log.error({ err, token }, 'No se pudo leer la imagen del almacenamiento');
+      return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+    }
   });
 
   // GET /api/v1/inbox/:ticketId/form-link - genera link firmado para el formulario del cliente

@@ -362,16 +362,16 @@ describe('orders routes', () => {
       expect(fresh.address).not.toBe('Calle Cambiada 999');
     });
 
-    it('encargado (non-admin) CAN set observacion alone on a locked order -> 200, logged to history with their own actor id', async () => {
+    it('encargado (non-admin) CAN add an observation on a locked order -> 201, logged to history with their own actor id', async () => {
       const orderId = await createAndCloseOrder({ customer_phone: '3009991113' });
       const res = await app.inject({
-        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
         headers: authHeader(encargadoToken),
-        payload: { observacion: 'El cliente llamó a pedir cambio de dirección después de cerrado' },
+        payload: { text: 'El cliente llamó a pedir cambio de dirección después de cerrado' },
       });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data.observacion).toBe('El cliente llamó a pedir cambio de dirección después de cerrado');
-      // Still locked/unchanged otherwise - only observacion moved.
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.observations.at(-1).text).toBe('El cliente llamó a pedir cambio de dirección después de cerrado');
+      // Still locked/unchanged otherwise - only the observation was added.
       expect(res.json().data.locked).toBe(true);
 
       const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
@@ -417,15 +417,93 @@ describe('orders routes', () => {
       expect(res.statusCode).toBe(409);
       expect(res.json().code).toBe('DAY_CLOSED');
 
-      // But observacion alone still works, even with the day closed too - that's the
-      // one exception that survives every freeze, by design.
+      // But adding an observation still works, even with the day closed too - that's
+      // the one exception that survives every freeze, by design.
       const obsRes = await app.inject({
-        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
         headers: authHeader(adminToken),
-        payload: { observacion: 'Nota agregada después del cierre de caja del día' },
+        payload: { text: 'Nota agregada después del cierre de caja del día' },
       });
-      expect(obsRes.statusCode).toBe(200);
-      expect(obsRes.json().data.observacion).toBe('Nota agregada después del cierre de caja del día');
+      expect(obsRes.statusCode).toBe(201);
+      expect(obsRes.json().data.observations.at(-1).text).toBe('Nota agregada después del cierre de caja del día');
+    });
+  });
+
+  describe('observaciones - multiple entries, edit restricted to the author', () => {
+    async function createOpenOrder(overrides: Record<string, unknown> = {}) {
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ fecha: '2026-01-18', customer_phone: '3009991120', ...overrides }),
+      });
+      return create.json().data.id as string;
+    }
+
+    it('appends observations in order instead of overwriting, each with its own author', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991121' });
+
+      const first = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Primera nota' },
+      });
+      expect(first.statusCode).toBe(201);
+      expect(first.json().data.observations).toHaveLength(1);
+
+      const second = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Segunda nota' },
+      });
+      expect(second.statusCode).toBe(201);
+      const obs = second.json().data.observations;
+      expect(obs).toHaveLength(2);
+      expect(obs[0].text).toBe('Primera nota');
+      expect(obs[1].text).toBe('Segunda nota');
+      expect(obs[0].author.id).toBeDefined();
+    });
+
+    it('the author can edit their own observation -> 200, logged to history', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991122' });
+      const created = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Texto original' },
+      });
+      const obsId = created.json().data.observations[0].id;
+
+      const edited = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}/observations/${obsId}`,
+        headers: authHeader(encargadoToken), payload: { text: 'Texto corregido' },
+      });
+      expect(edited.statusCode).toBe(200);
+      expect(edited.json().data.observations[0].text).toBe('Texto corregido');
+
+      const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
+      const editEntry = history.find(h => h.action_type === 'observacion_editada');
+      expect(editEntry).toBeDefined();
+      expect(editEntry!.value_before).toBe('Texto original');
+      expect(editEntry!.value_after).toBe('Texto corregido');
+    });
+
+    it('a DIFFERENT staff member cannot edit someone else\'s observation -> 403 NOT_AUTHOR, text unchanged', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991123' });
+      const otherEmail = `other-encargado-${Date.now()}@example.com`;
+      await createTestUser(app.prisma, orgAId, 'encargado', 'OtherEncargadoPass1!', { email: otherEmail });
+      const otherToken = await login(app, otherEmail, 'OtherEncargadoPass1!');
+
+      const created = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Nota de encargado original' },
+      });
+      const obsId = created.json().data.observations[0].id;
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}/observations/${obsId}`,
+        headers: authHeader(otherToken), payload: { text: 'Intento de edición ajena' },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('NOT_AUTHOR');
+
+      const fresh = await app.prisma.orderObservation.findUniqueOrThrow({ where: { id: obsId } });
+      expect(fresh.text).toBe('Nota de encargado original');
     });
   });
 

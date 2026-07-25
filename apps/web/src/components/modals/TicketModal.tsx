@@ -1,9 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRef, useEffect, useState, KeyboardEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban } from 'lucide-react';
+import { useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
+import ChatImage from '../ui/ChatImage';
+import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
 import { api } from '../../lib/api';
-import { buildFormLinkMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -101,22 +103,58 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     onError: (e: any) => toast(e.message, true),
   });
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendImageMut = useMutation({
+    mutationFn: (payload: { data: string; mime_type: string }) =>
+      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/send-image`, payload),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['ticket', ticketId, fecha] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      if (res?.wpp_status === 'failed') {
+        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
+      } else if (res?.wpp_status === 'no_credentials') {
+        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
+      }
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  async function handlePickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
+    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
+    const data = await fileToBase64(file);
+    sendImageMut.mutate({ data, mime_type: file.type });
+  }
+
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ticket', ticketId] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
-      toast('Formulario enviado');
     },
     onError: (e: any) => toast(e.message, true),
   });
 
   async function sendFormLink() {
+    let url: string;
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-      formLinkMut.mutate(buildFormLinkMessage(res.data.url));
+      url = res.data.url;
     } catch {
       toast('No se pudo generar el link', true);
+      return;
+    }
+    try {
+      // Two separate messages, in order (awaited, not fire-and-forget - the whole
+      // point is the notice arrives before the link, see formLinkMessage.ts).
+      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      await formLinkMut.mutateAsync(url);
+      toast('Formulario enviado');
+    } catch {
+      // formLinkMut's own onError already toasted the specific reason.
     }
   }
 
@@ -204,7 +242,9 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                     {isOut && msg.sender?.name && (
                       <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
                     )}
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
+                    {msg.media_type === 'image'
+                      ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
+                      : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                       {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                       {isOut && msg.wpp_message_id && (
@@ -226,6 +266,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             display: 'flex', gap: 6, alignItems: 'flex-end',
             borderTop: '1px solid #D0D8D0', flexShrink: 0,
           }}>
+            <input ref={fileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handlePickImage} style={{ display: 'none' }} />
+            <button
+              title="Adjuntar foto"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sendImageMut.isPending}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)',
+                padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0,
+              }}
+            >
+              <Paperclip size={17} />
+            </button>
             <textarea
               rows={2}
               placeholder="Escribe un mensaje... (Enter para enviar)"

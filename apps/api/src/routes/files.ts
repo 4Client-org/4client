@@ -200,7 +200,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
   // a factura nobody opens within 4 hours of being generated still dies on its
   // own, and it's still capped at 24h total even once opened. Used to also require
   // typing the customer's phone_last4; dropped because customers kept getting
-  // confused by it (see public.ts's assertLinkNotDead for the equivalent history).
+  // confused by it (see public.ts's loadTicketByFormToken for the equivalent history).
   fastify.get('/:filename', async (req, reply) => {
     const { filename } = req.params as { filename: string };
 

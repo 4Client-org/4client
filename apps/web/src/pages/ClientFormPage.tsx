@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { ShoppingCart, CheckCircle, XCircle, Check, Plus, Trash2, ChevronDown, ChevronUp, ArrowLeft, Lock } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
 
@@ -16,6 +16,9 @@ const STATUS_LABEL_CLIENT: Record<string, string> = {
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo para entrega',
   camino: 'En camino', cerrado: 'Entregado',
 };
+
+const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja'];
+const DEFAULT_UNIT = 'Kilo';
 
 function groupByCategory(products: Product[]) {
   const order: string[] = [];
@@ -65,6 +68,9 @@ export default function ClientFormPage() {
   const [search, setSearch] = useState('');
   // pending input per product (not confirmed yet)
   const [pendingQty, setPendingQty] = useState<Record<string, string>>({});
+  // unit chosen per product, independent of pendingQty so switching rows (arrow
+  // nav, focus loss) never wipes what's already typed/chosen in another row.
+  const [pendingUnit, setPendingUnit] = useState<Record<string, string>>({});
   // confirmed items list
   const [selected, setSelected] = useState<SelectedItem[]>([]);
   // "Agregar producto no listado" - lets the client type a product that isn't in
@@ -74,6 +80,7 @@ export default function ClientFormPage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualName, setManualName] = useState('');
   const [manualQty, setManualQty] = useState('');
+  const [manualUnit, setManualUnit] = useState(DEFAULT_UNIT);
   const [address, setAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -90,6 +97,14 @@ export default function ClientFormPage() {
 
   const searchRef = useRef<HTMLInputElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
+  // Refs for arrow-key navigation: catalog rows keyed by product id (qty input +
+  // unit select), plus the flat visible order so Up/Down know which row is
+  // "next"/"previous" across category boundaries. Selected-items rows keyed by
+  // productId too, for Up/Down inside that list and to jump back into the
+  // matching catalog row's editable fields.
+  const qtyInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const unitSelectRefs = useRef<Record<string, HTMLSelectElement | null>>({});
+  const selectedRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   // Synchronous guard against a double-click/tap firing two submits before React's
   // next render commits the `submitting` state update - a plain state check at the
   // top of handleSubmit can't catch that, since both click handlers can read the
@@ -241,8 +256,10 @@ export default function ClientFormPage() {
   }, [grouped, searchLower]);
 
   function addProduct(p: Product) {
-    const qty = (pendingQty[p.id] ?? '').trim();
-    if (!qty) return;
+    const num = (pendingQty[p.id] ?? '').trim();
+    if (!num) return;
+    const unit = pendingUnit[p.id] ?? DEFAULT_UNIT;
+    const qty = `${num} ${unit}`;
     setSelected(prev => {
       const exists = prev.findIndex(i => i.productId === p.id);
       if (exists >= 0) {
@@ -251,19 +268,72 @@ export default function ClientFormPage() {
       return [...prev, { product_name: p.name, quantity_label: qty, productId: p.id }];
     });
     setPendingQty(prev => { const c = { ...prev }; delete c[p.id]; return c; });
+    setPendingUnit(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setSearch('');
     setTimeout(() => searchRef.current?.focus(), 50);
   }
 
   function addManualProduct() {
     const name = manualName.trim();
-    const qty = manualQty.trim();
-    if (!name || !qty) return;
+    const num = manualQty.trim();
+    if (!name || !num) return;
+    const qty = `${num} ${manualUnit}`;
     const id = `manual-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
     setSelected(prev => [...prev, { product_name: name, quantity_label: qty, productId: id, isManual: true }]);
     setManualName('');
     setManualQty('');
+    setManualUnit(DEFAULT_UNIT);
     setManualOpen(false);
+  }
+
+  // Flat, visible-order list of catalog products - drives Up/Down navigation
+  // across category boundaries (visibleGroups is grouped, this flattens it).
+  const flatVisibleProducts = useMemo(
+    () => visibleGroups.flatMap(g => g.products),
+    [visibleGroups],
+  );
+
+  function focusCatalogQty(productId: string) {
+    const el = qtyInputRefs.current[productId];
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
+  }
+
+  // Shared Up/Down/Left/Right handler for a catalog row's qty input or unit
+  // select. Never touches pendingQty/pendingUnit - those live per-product-id, so
+  // moving focus away from a row can't ever erase what's already there.
+  function handleCatalogKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, p: Product, field: 'qty' | 'unit') {
+    if (e.key === 'Enter' && field === 'qty') { e.preventDefault(); addProduct(p); return; }
+    if (e.key === 'ArrowLeft' && field === 'unit') { e.preventDefault(); qtyInputRefs.current[p.id]?.focus(); return; }
+    if (e.key === 'ArrowRight' && field === 'qty') { e.preventDefault(); unitSelectRefs.current[p.id]?.focus(); return; }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const idx = flatVisibleProducts.findIndex(fp => fp.id === p.id);
+      if (idx < 0) return;
+      const nextIdx = e.key === 'ArrowUp' ? idx - 1 : idx + 1;
+      const next = flatVisibleProducts[nextIdx];
+      if (!next) return;
+      const refs = field === 'qty' ? qtyInputRefs : unitSelectRefs;
+      const el = refs.current[next.id];
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
+    }
+  }
+
+  // Selected-items summary row: Up/Down moves between rows; Right/Enter jumps to
+  // that product's editable qty field back in the catalog (the "editable" field
+  // the client would use to change it), per the client's own request.
+  function handleSelectedRowKeyDown(e: KeyboardEvent<HTMLDivElement>, item: SelectedItem, index: number) {
+    if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      e.preventDefault();
+      focusCatalogQty(item.productId);
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const list = summaryExpanded ? selected : selected.slice(0, 2);
+      const nextIdx = e.key === 'ArrowUp' ? index - 1 : index + 1;
+      const next = list[nextIdx];
+      if (next) selectedRowRefs.current[next.productId]?.focus();
+    }
   }
 
   function removeSelected(productId: string) {
@@ -592,8 +662,12 @@ export default function ClientFormPage() {
           <div style={{ fontWeight: 800, fontSize: 13, color: GREEN, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.5px' }}>
             Productos {mergeTarget !== 'new' ? 'del pedido' : 'agregados'} ({selectedCount})
           </div>
-          {(summaryExpanded ? selected : selected.slice(0, 2)).map(s => (
-            <div key={s.productId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #f0f0f0' }}>
+          {(summaryExpanded ? selected : selected.slice(0, 2)).map((s, idx) => (
+            <div key={s.productId}
+              ref={el => { selectedRowRefs.current[s.productId] = el; }}
+              tabIndex={0}
+              onKeyDown={e => handleSelectedRowKeyDown(e, s, idx)}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #f0f0f0', outline: 'none' }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
                   {s.product_name}
@@ -712,13 +786,22 @@ export default function ClientFormPage() {
             />
             <div style={{ display: 'flex', gap: 8 }}>
               <input
-                type="text"
-                placeholder="Cantidad (ej: 2 kg)"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Cantidad"
                 value={manualQty}
                 onChange={e => setManualQty(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addManualProduct(); }}
-                style={{ flex: 1, fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
+                style={{ flex: 1, minWidth: 0, fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
               />
+              <select
+                value={manualUnit}
+                onChange={e => setManualUnit(e.target.value)}
+                style={{ fontSize: 14, padding: '9px 6px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
+              >
+                {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
               <button onClick={addManualProduct} disabled={!manualName.trim() || !manualQty.trim()}
                 style={{
                   padding: '9px 14px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 13,
@@ -727,7 +810,7 @@ export default function ClientFormPage() {
                 }}>
                 Agregar
               </button>
-              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); }}
+              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); setManualUnit(DEFAULT_UNIT); }}
                 style={{ padding: '9px 12px', borderRadius: 10, border: '2px solid #ddd', background: '#fff', color: '#666', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 Cancelar
               </button>
@@ -775,18 +858,35 @@ export default function ClientFormPage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                     <input
-                      type="text"
-                      placeholder={p.unit_type ? `Ej: 2 ${p.unit_type}` : 'Cantidad'}
+                      ref={el => { qtyInputRefs.current[p.id] = el; }}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Cant."
                       value={qty}
                       onChange={e => setPendingQty(prev => ({ ...prev, [p.id]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addProduct(p); } }}
+                      onKeyDown={e => handleCatalogKeyDown(e, p, 'qty')}
                       style={{
-                        width: 110, fontSize: 15, padding: '9px 10px',
+                        width: 64, fontSize: 15, padding: '9px 6px',
                         border: `2px solid ${qty.trim() ? GREEN : '#ddd'}`,
                         borderRadius: 10, outline: 'none', textAlign: 'center',
                         fontFamily: 'inherit', color: '#111', background: '#fff',
                       }}
                     />
+                    <select
+                      ref={el => { unitSelectRefs.current[p.id] = el; }}
+                      value={pendingUnit[p.id] ?? DEFAULT_UNIT}
+                      onChange={e => setPendingUnit(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      onKeyDown={e => handleCatalogKeyDown(e, p, 'unit')}
+                      style={{
+                        fontSize: 13, padding: '9px 4px',
+                        border: `2px solid ${qty.trim() ? GREEN : '#ddd'}`,
+                        borderRadius: 10, outline: 'none',
+                        fontFamily: 'inherit', color: '#111', background: '#fff',
+                      }}
+                    >
+                      {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
                     <button
                       onClick={() => addProduct(p)}
                       disabled={!qty.trim()}

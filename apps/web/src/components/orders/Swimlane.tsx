@@ -3,6 +3,7 @@ import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr, PAYMENT_LABEL } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useMoveOrder } from '../../hooks/useOrders';
+import { useAuthStore } from '../../store/auth';
 import { toast } from '../ui/Toast';
 import DetallePedidoModal from '../modals/DetallePedidoModal';
 
@@ -97,17 +98,20 @@ function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
 }
 
 export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, onOpenTicket, onCreateFromTicket }: Props) {
+  const user = useAuthStore((s) => s.user);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [cobroDirectId, setCobroDirectId] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   // Persisted across reloads/navigation - a ticket collapsed to save scroll space
   // was silently re-expanding on every refresh, since this was plain component
-  // state with nothing backing it. Not scoped per org/day: tickets are one row per
-  // phone forever (not per day), and this app is one staff member per browser
-  // session, so a flat key is enough - no cross-org bleed risk in practice.
+  // state with nothing backing it. Scoped per logged-in user (not a flat key) - a
+  // shared browser/device between staff (or an admin checking in) was otherwise
+  // inheriting whatever a DIFFERENT person had collapsed, which made no sense for
+  // someone seeing the board for the first time that session.
+  const collapsedKey = `4client_collapsed_tickets_${user?.userId ?? 'anon'}`;
   const [collapsedTickets, setCollapsedTickets] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem('4client_collapsed_tickets');
+      const raw = localStorage.getItem(collapsedKey);
       return raw ? new Set(JSON.parse(raw)) : new Set();
     } catch {
       return new Set();
@@ -115,12 +119,26 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
   });
   useEffect(() => {
     try {
-      localStorage.setItem('4client_collapsed_tickets', JSON.stringify([...collapsedTickets]));
+      localStorage.setItem(collapsedKey, JSON.stringify([...collapsedTickets]));
     } catch { /* localStorage unavailable - just won't persist, not fatal */ }
-  }, [collapsedTickets]);
+  }, [collapsedKey, collapsedTickets]);
   const [, setTick] = useState(0);
   const moveOrder = useMoveOrder();
   const drag = useRef<{ orderId: string; ticketId: string | null } | null>(null);
+  // Height of the zona roja block (0 when there isn't one) - the status header row
+  // sticks directly below it, and that block's own height varies (wraps to more
+  // lines depending on how many urgent tickets there are and the viewport width),
+  // so it's measured rather than guessed.
+  const [redZoneHeight, setRedZoneHeight] = useState(0);
+  const redZoneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = redZoneRef.current;
+    if (!el) { setRedZoneHeight(0); return; }
+    const ro = new ResizeObserver(() => setRedZoneHeight(el.offsetHeight));
+    ro.observe(el);
+    setRedZoneHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  });
   // Red-zone only means something for what's happening right now - looking at a past
   // day shouldn't paint everything on it as urgent forever.
   const isToday = fecha === todayStr();
@@ -377,9 +395,10 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
   return (
     <>
       {urgTickets.length > 0 && (
-        <div style={{
+        <div ref={redZoneRef} style={{
           background: '#FEE2E2', border: '2px solid #F87171', borderRadius: 'var(--rad)',
           padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          position: 'sticky', top: 0, zIndex: 160,
         }}>
           <Siren size={18} color="#991B1B" />
           <span style={{ fontSize: 13, fontWeight: 800, color: '#991B1B' }}>
@@ -393,7 +412,11 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                   style={{
                     background: '#DC2626', color: '#fff', border: 'none',
                     padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700,
-                    cursor: 'pointer', animation: 'pulse 1.5s infinite',
+                    cursor: 'pointer',
+                    // Once caja is cerrada these are no longer "still happening right
+                    // now" alerts - they're a static record that a chat went unanswered
+                    // that day. Selecting one still works exactly the same either way.
+                    animation: diaCerrado ? undefined : 'pulse 1.5s infinite',
                     display: 'inline-flex', alignItems: 'center', gap: 5,
                   }}>
                   <AlertTriangle size={11} />
@@ -419,11 +442,11 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
 
       <div className="slane-wrap">
         <div className="slane">
-          <div className="slane-hcell wpp-col">
+          <div className="slane-hcell wpp-col" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
           </div>
           {STATUS_ORDER.map((s) => (
-            <div key={s} className="slane-hcell" style={{ background: COL_BG[s] }}>
+            <div key={s} className="slane-hcell" style={{ background: COL_BG[s], position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: COL_COLORS[s], display: 'inline-block', flexShrink: 0 }} />
               {STATUS_LABEL[s]}
               <span style={{ marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
@@ -488,18 +511,25 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                 <div className={`slane-tcell${urg ? ' urg' : ''}`} onClick={() => onOpenTicket(ticket.id)}
                   style={{ opacity: isTicketGhost ? 0.72 : 1 }}>
                   {ticket.unread_count > 0 && <div className="tk-new-dot">{ticket.unread_count}</div>}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                  {/* Button sits right next to tk-num on the LEFT, not the top-right
+                      corner - that corner is where tk-new-dot (absolute, top:5
+                      right:5) lands, and used to cover this button whenever a new
+                      message arrived. Kept out of that corner regardless of
+                      whether the urgency badge (still right-aligned via its own
+                      marginLeft:auto) is present or not. */}
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
                     <span className="tk-num">{tNum}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {urg && <span className="tk-urg"><AlertTriangle size={10} />{formatElapsed(ticketElapsedMins(ticket, ticketOrders))}</span>}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gt)', display: 'flex', alignItems: 'center' }}
-                        title="Contraer fila"
-                      >
-                        <ChevronUp size={14} />
-                      </button>
-                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 2, marginLeft: 4,
+                        color: 'var(--gt)', display: 'flex', alignItems: 'center', flexShrink: 0,
+                      }}
+                      title="Contraer fila"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    {urg && <span className="tk-urg" style={{ marginLeft: 'auto' }}><AlertTriangle size={10} />{formatElapsed(ticketElapsedMins(ticket, ticketOrders))}</span>}
                   </div>
                   {(isTicketGhost || isTicketArrived) && (
                     <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--az)', background: 'var(--azc)', padding: '2px 7px', borderRadius: 20, marginBottom: 4, display: 'inline-block' }}>

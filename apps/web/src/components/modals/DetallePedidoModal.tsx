@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
-import { buildFormLinkMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -13,6 +13,8 @@ import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
+import ChatImage from '../ui/ChatImage';
+import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -110,16 +112,18 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [catalogDirty, setCatalogDirty] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-  // Independent of the rest of the form's isDirty/Guardar flow on purpose - this is
-  // the one field that must stay saveable even when everything else is locked (see
-  // `readOnly` below), so it has its own dirty flag and its own save action.
-  const [observacion, setObservacion] = useState('');
-  const [obsDirty, setObsDirty] = useState(false);
+  // Observaciones - independent of the rest of the form's isDirty/Guardar flow on
+  // purpose, same reasoning the old single-field observación had: must stay usable
+  // even when everything else is locked (see `readOnly` below). Now a growing list
+  // (one row per staff member's note) instead of one shared field.
+  const [newObsText, setNewObsText] = useState('');
+  const [obsExpanded, setObsExpanded] = useState(false);
+  const [editingObsId, setEditingObsId] = useState<string | null>(null);
+  const [editObsText, setEditObsText] = useState('');
   const [catalogClearKey, setCatalogClearKey] = useState(0);
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
   const [replyText, setReplyText] = useState('');
-  const [cobroRec, setCobroRec] = useState('');
   const [cobroPass, setCobroPass] = useState('');
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
 
@@ -149,10 +153,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     // travel together, so cod_choice is always set whenever amount_received is).
     setCodChoice((order.cod_choice as 'completo' | 'vuelta' | null) ?? null);
     setCodCash(order.cod_choice === 'vuelta' && order.amount_received != null ? String(order.amount_received) : '');
-    // Prefills the FINAL cobro dialog's own amount field with whatever was already
-    // decided here - staff just confirms instead of retyping. Only on first load
-    // (cobroRec still blank) so it never stomps something already being typed there.
-    setCobroRec(prev => (prev === '' && order.amount_received != null) ? String(order.amount_received) : prev);
     setIsDirty(false);
     // Trashed orders are opened specifically to see what happened (who sent it to
     // papelera, when) - that's in the history, so show it expanded right away
@@ -160,15 +160,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     if (order.status === 'papelera') setShowHist(true);
   }, [order]);
 
-  // Separate from the effect above on purpose - observacion has its own dirty flag
-  // and its own save action (see observacionMut below), independent of the rest of
-  // the form, so it must not be gated by isDirty/catalogDirty (that would block a
-  // live update from ever refreshing it just because, say, the address field has
-  // unsaved local changes).
-  useEffect(() => {
-    if (!order || obsDirty) return;
-    setObservacion(order.observacion ?? '');
-  }, [order, obsDirty]);
 
   // Live-update this open order when it changes elsewhere - most importantly, a
   // client adding items to it via the form (merge flow) while a staff member already
@@ -299,17 +290,28 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     saveMut.mutate(finalItems, options);
   }
 
-  // Sends ONLY observacion, never the rest of the form state - the backend (orders.ts
-  // PATCH /:id) specifically allows a body containing just this one field even on a
-  // locked/closed order or a day already cerrado; sending anything else alongside it
-  // would trip that same-request exception and get rejected as a full edit attempt.
-  const observacionMut = useMutation({
-    mutationFn: () => api.patch(`/orders/${orderId}`, { observacion }),
+  // These two routes (not PATCH /:id) stay open even on a locked/closed order or a
+  // day already cerrado - same "pedido cerrado, pasó algo" exception the old
+  // single-field observación had, see orders.ts.
+  const addObsMut = useMutation({
+    mutationFn: (text: string) => api.post(`/orders/${orderId}/observations`, { text }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
-      setObsDirty(false);
+      setNewObsText('');
       toast('Observación guardada');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  const editObsMut = useMutation({
+    mutationFn: ({ obsId, text }: { obsId: string; text: string }) =>
+      api.patch(`/orders/${orderId}/observations/${obsId}`, { text }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      setEditingObsId(null);
+      toast('Observación actualizada');
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -356,22 +358,57 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const sendImageMut = useMutation({
+    mutationFn: (payload: { data: string; mime_type: string }) =>
+      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${order?.ticket_id}/send-image`, payload),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['inbox-convo', order?.ticket_id] });
+      if (res?.wpp_status === 'failed') {
+        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
+      } else if (res?.wpp_status === 'no_credentials') {
+        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
+      }
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  async function handleChatPickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
+    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
+    const data = await fileToBase64(file);
+    sendImageMut.mutate({ data, mime_type: file.type });
+  }
+
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inbox-convo', order?.ticket_id] });
-      toast('Formulario enviado');
     },
     onError: (e: any) => toast(e.message, true),
   });
 
   async function sendFormLink() {
     if (!order?.ticket_id) return;
+    let url: string;
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${order.ticket_id}/form-link`);
-      formLinkMut.mutate(buildFormLinkMessage(res.data.url));
+      url = res.data.url;
     } catch {
       toast('No se pudo generar el link', true);
+      return;
+    }
+    try {
+      // Two separate messages, in order (awaited, not fire-and-forget - the whole
+      // point is the notice arrives before the link, see formLinkMessage.ts).
+      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      await formLinkMut.mutateAsync(url);
+      toast('Formulario enviado');
+    } catch {
+      // formLinkMut's own onError already toasted the specific reason.
     }
   }
 
@@ -383,12 +420,49 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
   function markDirty() { setIsDirty(true); }
 
+  // Fixed page WIDTH (thermal-receipt-style, 80mm), but the page HEIGHT below is
+  // just the size of the first sheet - newPage() below adds more identically-sized
+  // pages as needed, so a long order is never silently clipped past this number.
+  const PDF_PAGE_W = 80;
+  const PDF_PAGE_H = 200;
+  const PDF_BOTTOM_MARGIN = 12;
+  const PDF_NAME_X = 3;
+  const PDF_NAME_W = 30;
+  const PDF_QTY_X = 48;
+  const PDF_QTY_W = 16;
+  const PDF_PRICE_X = 77;
+
   function buildPDFDoc(): jsPDF | null {
     if (!order) return null;
     const invoiceTotal = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
-    const doc = new jsPDF({ unit: 'mm', format: [80, 200] });
+    const doc = new jsPDF({ unit: 'mm', format: [PDF_PAGE_W, PDF_PAGE_H] });
     doc.setFont('helvetica');
     let y = 10;
+
+    // Starts a fresh page of the same size and redraws the column header, so a
+    // continuation page still reads like a table instead of a bare list. Returns
+    // the y position right below that header, ready to keep drawing rows.
+    function newItemsPage(): number {
+      doc.addPage([PDF_PAGE_W, PDF_PAGE_H]);
+      let ny = 10;
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+      doc.text('Producto (cont.)', PDF_NAME_X, ny);
+      doc.text('Cant.', PDF_QTY_X, ny, { align: 'center' });
+      doc.text('Precio', PDF_PRICE_X, ny, { align: 'right' });
+      ny += 4;
+      doc.line(3, ny, 77, ny); ny += 4;
+      doc.setFont('helvetica', 'normal');
+      return ny;
+    }
+
+    // Ensures `needed` mm of vertical space is available below `atY` before the
+    // caller draws into it - starts a new page first (via `onNewPage`) if it isn't,
+    // instead of letting jsPDF silently draw past the bottom edge of the sheet
+    // (invisible, never rendered) the way a fixed single page used to.
+    function ensureSpace(atY: number, needed: number, onNewPage: () => number): number {
+      if (atY + needed <= PDF_PAGE_H - PDF_BOTTOM_MARGIN) return atY;
+      return onNewPage();
+    }
 
     doc.setFontSize(13); doc.setFont('helvetica', 'bold');
     doc.text(user?.orgName ?? '4Client', 40, y, { align: 'center' }); y += 7;
@@ -418,9 +492,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     // header instead of one concatenated line, so a printed copy reads like a real
     // invoice/receipt rather than a run-on list.
     doc.setFont('helvetica', 'bold');
-    doc.text('Producto', 3, y);
-    doc.text('Cant.', 48, y, { align: 'center' });
-    doc.text('Precio', 77, y, { align: 'right' });
+    doc.text('Producto', PDF_NAME_X, y);
+    doc.text('Cant.', PDF_QTY_X, y, { align: 'center' });
+    doc.text('Precio', PDF_PRICE_X, y, { align: 'right' });
     y += 4;
     doc.line(3, y, 77, y); y += 4;
     doc.setFont('helvetica', 'normal');
@@ -428,13 +502,26 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     items.forEach((i) => {
       const price = parseFloat(i.price) || 0;
       const priceStr = `$${price.toLocaleString('es-CO')}`;
-      const nameLines = doc.splitTextToSize(i.product_name, 34);
-      doc.text(nameLines, 3, y);
-      doc.text(i.quantity_label || '-', 48, y, { align: 'center' });
-      doc.text(priceStr, 77, y, { align: 'right' });
-      y += nameLines.length * 4 + 1.5;
+      const nameLines = doc.splitTextToSize(i.product_name, PDF_NAME_W);
+      // Quantity now wraps too (a long typed value, e.g. "1 bien amduro" instead of
+      // a short "2 kg", used to be drawn unclamped and could visually run into the
+      // product name or price columns) - row height is whichever column ends up
+      // tallest, not just the name's.
+      const qtyLines = doc.splitTextToSize(i.quantity_label || '-', PDF_QTY_W);
+      const rowLines = Math.max(nameLines.length, qtyLines.length);
+      const rowHeight = rowLines * 4 + 1.5;
+      y = ensureSpace(y, rowHeight, newItemsPage);
+      doc.text(nameLines, PDF_NAME_X, y);
+      doc.text(qtyLines, PDF_QTY_X, y, { align: 'center' });
+      doc.text(priceStr, PDF_PRICE_X, y, { align: 'right' });
+      y += rowHeight;
     });
 
+    // Total/pago/footer block always kept together on one page - estimated at a
+    // fixed ~23mm (2 dividing lines + 3 text lines' worth of spacing, see the
+    // increments below), so it never gets split with the total on one page and the
+    // "gracias" footer alone on the next.
+    y = ensureSpace(y, 23, newItemsPage);
     y += 2; doc.line(3, y, 77, y); y += 5;
     doc.setFontSize(11); doc.setFont('helvetica', 'bold');
     doc.text('Total:', 3, y);
@@ -492,8 +579,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   }
 
   const cobroMut = useMutation({
-    mutationFn: () => api.post(`/orders/${orderId}/cobro`, {
-      amount_received: parseFloat(cobroRec) || 0,
+    mutationFn: (amountReceived: number) => api.post(`/orders/${orderId}/cobro`, {
+      amount_received: amountReceived,
       password: cobroPass,
     }),
     onSuccess: () => {
@@ -563,9 +650,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
-  const recibido = parseFloat(cobroRec) || 0;
-  const devolucion = recibido - total;
-  const faltaOSobra = recibido > 0 ? (devolucion >= 0 ? `Vuelto: ${fmtCOP(devolucion)}` : `Falta: ${fmtCOP(-devolucion)}`) : null;
   // A pedido can't be closed with any of these missing - mirrors the same check enforced
   // server-side in POST /orders/:id/cobro, so the UI blocks it before the request even goes out.
   const cierreMissing: string[] = [];
@@ -588,7 +672,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const codCashNum = parseFloat(codCash) || 0;
   const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= total);
   if (pago === 'cod' && !codValid) cierreMissing.push('monto de pago en efectivo (completo o con vuelta)');
-  const cobroValido = cierreMissing.length === 0 && recibido >= total && recibido >= 0 && cobroPass.trim().length > 0;
+  // The COBRO dialog no longer asks "¿cuánto se recibió?" as a separate typed
+  // field - that duplicated what cod_choice/codCash (or, for any non-cod method,
+  // simply the total - there's no "change" concept on a transfer) already decided.
+  // Derived here instead of re-entered, so it's always correct by construction.
+  const recibido = pago === 'cod'
+    ? (codChoice === 'completo' ? total : codCashNum)
+    : total;
+  const vuelto = recibido - total;
+  const cobroValido = cierreMissing.length === 0 && cobroPass.trim().length > 0;
   const hasChatPanel = !!order.ticket_id;
 
   return (
@@ -660,7 +752,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       {isOut && msg.sender?.name && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
                       )}
-                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
+                      {msg.media_type === 'image'
+                        ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
+                        : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                         {isOut && msg.wpp_message_id && (
@@ -682,6 +776,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               display: 'flex', gap: 6, padding: '8px 8px',
               borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
             }}>
+              <input ref={chatFileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handleChatPickImage} style={{ display: 'none' }} />
+              <button
+                title="Adjuntar foto"
+                onClick={() => chatFileInputRef.current?.click()}
+                disabled={sendImageMut.isPending}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+              >
+                <Paperclip size={16} />
+              </button>
               <textarea
                 placeholder="Responder... (Enter envía)"
                 value={replyText}
@@ -779,24 +882,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {/* Observación - the ONE field always editable, even locked/closed/día
-                cerrado, by any role (orders.ts's PATCH /:id carves out this exact
-                exception) - a note for "pedido cerrado, pasó algo", not a real edit. */}
-            <div className="stit">Observación</div>
-            <textarea className="fi2" style={{ minHeight: 60, resize: 'vertical', width: '100%' }}
-              placeholder="Nota interna - se puede agregar incluso después de cerrado el pedido"
-              value={observacion}
-              maxLength={1000}
-              onChange={(e) => { setObservacion(e.target.value); setObsDirty(true); }}
-            />
-            <div className="mactions" style={{ marginBottom: 14 }}>
-              <button className="bsec"
-                onClick={() => observacionMut.mutate()}
-                disabled={observacionMut.isPending || !obsDirty}
-                style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <CheckCircle size={13} /> {observacionMut.isPending ? 'Guardando...' : 'Guardar observación'}
-              </button>
-            </div>
 
             {/* Also gated on !locked explicitly, not just !readOnly - admin/dev can now
                 have readOnly=false on a locked order (full content edit via PATCH
@@ -885,6 +970,75 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               onLocalDirty={setCatalogDirty}
               clearKey={catalogClearKey}
             />
+
+            {/* Observaciones - a growing list of notes, always addable/editable
+                regardless of locked/día cerrado (orders.ts's observation routes
+                carve out the same exception the old single-field observación used
+                to have). Only the author of a given note can edit it; anyone with
+                access to this modal can add a new one below whatever's already
+                there. Collapses to just the most recent once there are 2+. */}
+            <div className="stit">Observaciones</div>
+            {order.observations && order.observations.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                {(order.observations.length > 1 && !obsExpanded
+                  ? order.observations.slice(-1)
+                  : order.observations
+                ).map((obs: any) => {
+                  const isAuthor = obs.author_id === user?.userId;
+                  const isEditingThis = editingObsId === obs.id;
+                  return (
+                    <div key={obs.id} style={{ background: 'var(--gm)', borderRadius: 'var(--rad)', padding: '10px 12px', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--gt)' }}>{obs.author?.name ?? 'Desconocido'}</span>
+                        {isAuthor && !isEditingThis && (
+                          <button onClick={() => { setEditingObsId(obs.id); setEditObsText(obs.text); }}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', fontSize: 12, fontWeight: 700 }}>
+                            Editar
+                          </button>
+                        )}
+                      </div>
+                      {isEditingThis ? (
+                        <>
+                          <textarea className="fi2" style={{ minHeight: 50, resize: 'vertical', width: '100%' }}
+                            value={editObsText} maxLength={1000}
+                            onChange={(e) => setEditObsText(e.target.value)} />
+                          <div className="mactions" style={{ marginTop: 6 }}>
+                            <button className="bpri"
+                              disabled={editObsMut.isPending || !editObsText.trim() || editObsText.trim() === obs.text}
+                              onClick={() => editObsMut.mutate({ obsId: obs.id, text: editObsText.trim() })}>
+                              {editObsMut.isPending ? 'Guardando...' : 'Guardar'}
+                            </button>
+                            <button className="bsec" onClick={() => setEditingObsId(null)}>Cancelar</button>
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{obs.text}</div>
+                      )}
+                    </div>
+                  );
+                })}
+                {order.observations.length > 1 && (
+                  <div className={`hist-toggle${obsExpanded ? ' open' : ''}`} onClick={() => setObsExpanded(!obsExpanded)}>
+                    <ChevronDown size={16} style={{ transition: 'transform .2s', transform: obsExpanded ? 'rotate(180deg)' : 'none' }} />
+                    {obsExpanded ? 'Mostrar solo la más reciente' : `Ver las ${order.observations.length} observaciones`}
+                  </div>
+                )}
+              </div>
+            )}
+            <textarea className="fi2" style={{ minHeight: 50, resize: 'vertical', width: '100%' }}
+              placeholder={order.observations && order.observations.length > 0 ? 'Agregar otra observación...' : 'Nota interna - se puede agregar incluso después de cerrado el pedido'}
+              value={newObsText}
+              maxLength={1000}
+              onChange={(e) => setNewObsText(e.target.value)}
+            />
+            <div className="mactions" style={{ marginBottom: 14 }}>
+              <button className="bsec"
+                onClick={() => addObsMut.mutate(newObsText.trim())}
+                disabled={addObsMut.isPending || !newObsText.trim()}
+                style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <CheckCircle size={13} /> {addObsMut.isPending ? 'Guardando...' : 'Guardar observación'}
+              </button>
+            </div>
 
             {/* History - visible to whoever can manage this order */}
             {canManage && order.history && order.history.length > 0 && (
@@ -999,20 +1153,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             </div>
             <div className="fg2">
-              <label className="fl2">¿Cuánto se recibió? <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span></label>
-              <input className="fi2 no-spin" type="number" placeholder={`Mínimo: $${total.toLocaleString('es-CO')}`}
-                value={cobroRec} onChange={(e) => setCobroRec(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(); } }}
-                style={{ borderColor: cobroRec && !cobroValido ? 'var(--r)' : undefined }} />
-              {faltaOSobra && (
+              <label className="fl2">Monto recibido</label>
+              {/* Read-only - derived from "completo/con vuelta" (cod) or simply the
+                  total (any other payment method, where there's no change concept).
+                  Used to be a field staff retyped by hand here, duplicating what was
+                  already decided above. */}
+              <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
+                {fmtCOP(recibido)}
+              </div>
+              {vuelto > 0 && (
                 <div style={{
                   fontSize: 13, marginTop: 6, fontWeight: 700,
-                  color: devolucion >= 0 ? 'var(--v)' : 'var(--r)',
-                  background: devolucion >= 0 ? 'var(--vc)' : 'var(--rc)',
+                  color: 'var(--v)', background: 'var(--vc)',
                   borderRadius: 8, padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 6,
                 }}>
-                  {devolucion >= 0 ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
-                  {faltaOSobra}
+                  <CheckCircle size={13} /> Vuelta: {fmtCOP(vuelto)}
                 </div>
               )}
             </div>
@@ -1022,7 +1177,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </label>
               <PasswordInput className="fi2" placeholder="Contraseña de tu sesión"
                 value={cobroPass} onChange={(e) => setCobroPass(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); } }}
                 autoComplete="current-password" />
               <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 4 }}>
                 Requerida para evitar cobros no autorizados
@@ -1030,7 +1185,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
             <div style={{ display: 'flex', gap: 9, marginTop: 20 }}>
               <button className="bsec" onClick={onClose}>Cancelar</button>
-              <button className="bpri" onClick={() => cobroMut.mutate()}
+              <button className="bpri" onClick={() => cobroMut.mutate(recibido)}
                 disabled={cobroMut.isPending || !cobroValido}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: cobroValido ? 1 : 0.5 }}>
                 {cobroMut.isPending ? 'Confirmando...' : <><CheckCircle size={15} /> Confirmar pago</>}

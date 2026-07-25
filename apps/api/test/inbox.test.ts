@@ -190,4 +190,85 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(stored!.wpp_message_id).toBeNull();
     expect(stored!.failed_reason).toContain('Re-engagement');
   });
+
+  it('POST /:ticketId/send-image stores the photo (media_type/media_url set) and sends it via Meta\'s two-step upload-then-send, never a public URL', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230004', customer_name: 'Cliente Foto' } });
+    const fakeMediaId = `media-id-${Date.now()}`;
+    const fakeWamid = `wamid.IMG${Date.now()}`;
+
+    // Two distinct Meta endpoints get hit in sequence - branch on the URL so each
+    // returns the shape that specific call expects.
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith('/media')) {
+        return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+    }) as any;
+
+    // Smallest valid PNG (1x1, base64) - real bytes, not a placeholder string, so
+    // storeMedia/loadMedia round-trip something genuine.
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-image`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPng, mime_type: 'image/png', caption: 'Así llegó el pedido' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('sent');
+    const msg = res.json().data;
+    expect(msg.media_type).toBe('image');
+    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.png$/);
+    expect(msg.media_caption).toBe('Así llegó el pedido');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+    expect(stored!.failed_reason).toBeNull();
+
+    // The token never carries a real R2/public URL - just an opaque key, served
+    // exclusively through our own staff-authenticated route.
+    expect(msg.media_url).not.toContain('http');
+
+    const fetched = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${msg.media_url}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.headers['content-type']).toBe('image/png');
+  });
+
+  it('GET /media/:token rejects a malformed token and a well-formed but never-issued one', async () => {
+    const malformed = await app.inject({
+      method: 'GET', url: '/api/v1/inbox/media/not-a-real-token',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const neverIssued = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${'a'.repeat(40)}.jpg`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(neverIssued.statusCode).toBe(404);
+  });
+
+  it('GET /media/:token refuses a real token that belongs to a DIFFERENT org, even though the token itself is well-formed and does exist', async () => {
+    const otherOrg = await createTestOrg(app.prisma);
+    const otherAdmin = await createTestUser(app.prisma, otherOrg.id, 'admin', 'OtherOrgAdmin1!');
+    const otherTicket = await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573001230005', customer_name: 'Cliente Otra Org' } });
+    const otherMsg = await app.prisma.ticketMessage.create({
+      data: {
+        ticket_id: otherTicket.id, direction: 'in', media_type: 'image',
+        media_url: `${'b'.repeat(40)}.jpg`,
+      },
+    });
+    void otherAdmin;
+
+    // This test's adminToken is for `orgId`, not `otherOrg` - the token exists and
+    // is well-formed, but doesn't belong to this admin's org.
+    const res = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${otherMsg.media_url}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
 });

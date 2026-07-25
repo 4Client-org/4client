@@ -100,11 +100,10 @@ const updateOrderSchema = z.object({
   // since - the final /cobro re-validates against the total lit AT that time too).
   amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
   cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
-  // Free-text note staff can add EVEN on a locked/closed order (see PATCH /:id's
-  // onlyObservacion handling) - distinct from `notes`, which is already overloaded
-  // internally for the "pasado_manana:DATE" deferral marker (cierre.ts) and would
-  // be corrupted by arbitrary staff text sharing that same column.
-  observacion:     z.string().max(1000).nullable().optional(),
+});
+
+const observationSchema = z.object({
+  text: z.string().min(1).max(1000),
 });
 
 const ORDER_FIELD_LABELS: Record<string, string> = {
@@ -189,13 +188,16 @@ function buildOrderSelect(includeHistory = false) {
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
     change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
-    observacion: true,
     client_modified: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
     registeredBy: { select: { id: true, name: true } },
     paidBy: { select: { id: true, name: true } },
     items: { orderBy: { sort_order: 'asc' as const } },
+    observations: {
+      orderBy: { created_at: 'asc' as const },
+      include: { author: { select: { id: true, name: true } } },
+    },
     ...(includeHistory ? {
       history: {
         orderBy: { created_at: 'asc' as const },
@@ -350,28 +352,22 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
 
-    // A locked/closed order is normally frozen for everyone - two exceptions carved
-    // out on top of that, both scoped as narrowly as possible:
-    // (1) `observacion` alone can ALWAYS be changed, by anyone with access to this
-    //     route, regardless of locked/day-closed status - it's an append-style audit
-    //     note, not a financial edit, for exactly the "pedido cerrado, pasó algo"
-    //     case this exists for.
-    // (2) an admin (or dev, which bypasses every requireRole check anyway - see
-    //     middleware/auth.ts) can fully edit even a LOCKED order - but NOT once the
-    //     whole day has been cerrado (DAY_CLOSED below still blocks everyone,
-    //     admin included; that's a stronger, whole-day accounting freeze, a
-    //     separate concern from this one order being individually paid/closed).
+    // A locked/closed order is normally frozen for everyone - one exception: an
+    // admin (or dev, which bypasses every requireRole check anyway - see
+    // middleware/auth.ts) can fully edit even a LOCKED order - but NOT once the
+    // whole day has been cerrado (DAY_CLOSED below still blocks everyone, admin
+    // included; that's a stronger, whole-day accounting freeze, a separate concern
+    // from this one order being individually paid/closed). Adding/editing an
+    // observación is no longer part of this route at all (see POST/PATCH
+    // /:id/observations below) - those stay open on a locked/closed order without
+    // needing a carve-out here.
     const isAdminOrDev = req.user.role === 'admin' || req.user.role === 'dev';
-    const sentKeys = Object.entries(body.data).filter(([, v]) => v !== undefined).map(([k]) => k);
-    const onlyObservacion = sentKeys.length > 0 && sentKeys.every(k => k === 'observacion');
 
-    if (!onlyObservacion) {
-      if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
-        return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
-      }
-      if (existing.locked && !isAdminOrDev) {
-        return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
-      }
+    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
+      return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
+    }
+    if (existing.locked && !isAdminOrDev) {
+      return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
     }
 
     const { items, ...fields } = body.data;
@@ -410,10 +406,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       customer_name: 'Nombre',
       address: 'Dirección', payment_method: 'Método de pago',
       employee_id: 'Domiciliario', notes: 'Notas',
-      // Reuses the exact same generic diff-and-log loop below - an observación
-      // change (admin post-close, or anyone via the always-open exception above)
-      // gets a real actor + before/after in history for free, same as any other field.
-      observacion: 'Observación',
     };
 
     // Prefetch employee names for readable history
@@ -539,14 +531,77 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // silently stale, with nothing telling the client a newer version exists. Kills
     // every outstanding factura for THIS order (files.ts's POST /invoice does the
     // same on resend); staff just hits "Enviar factura" again to send a fresh one.
-    // Skipped for an observación-only save - an internal note changes nothing about
-    // the order the client sees, so the factura they already have is still accurate.
-    if (!onlyObservacion) {
-      await fastify.prisma.invoiceLink.updateMany({
-        where: { order_id: id, org_id: req.user.orgId, revoked_at: null },
-        data: { revoked_at: new Date() },
+    await fastify.prisma.invoiceLink.updateMany({
+      where: { order_id: id, org_id: req.user.orgId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
+    return reply.send({ data: updatedOrder });
+  });
+
+  // POST /api/v1/orders/:id/observations - adds a new note, stacked below any
+  // existing ones. Always allowed, even on a locked/closed order or a day already
+  // cerrado (same "pedido cerrado, pasó algo" exception the old single-field
+  // `observacion` had) - deliberately does NOT run the DAY_CLOSED/ORDER_LOCKED
+  // checks that guard PATCH /:id.
+  fastify.post('/:id/observations', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = observationSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'La observación no puede estar vacía', code: 'VALIDATION_ERROR' });
+
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+
+    const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
+      await tx.orderObservation.create({
+        data: { org_id: req.user.orgId, order_id: id, author_id: req.user.userId, text: body.data.text },
       });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'observacion', field: 'Observación',
+          value_before: '', value_after: body.data.text,
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
+    return reply.status(201).send({ data: updatedOrder });
+  });
+
+  // PATCH /api/v1/orders/:id/observations/:obsId - only the staff member who wrote
+  // the note can edit it (checked against author_id, no admin override - a
+  // deliberately narrower rule than PATCH /:id's admin-can-edit-locked exception).
+  // Same "always allowed regardless of locked/day-closed" as POST above.
+  fastify.patch('/:id/observations/:obsId', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id, obsId } = req.params as { id: string; obsId: string };
+    const body = observationSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'La observación no puede estar vacía', code: 'VALIDATION_ERROR' });
+
+    const existing = await fastify.prisma.orderObservation.findFirst({
+      where: { id: obsId, order_id: id, org_id: req.user.orgId },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Observación no encontrada', code: 'NOT_FOUND' });
+    if (existing.author_id !== req.user.userId) {
+      return reply.status(403).send({ error: 'Solo quien escribió la observación puede editarla', code: 'NOT_AUTHOR' });
     }
+    if (body.data.text === existing.text) {
+      return reply.status(400).send({ error: 'No hay cambios que guardar', code: 'VALIDATION_ERROR' });
+    }
+
+    const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
+      await tx.orderObservation.update({ where: { id: obsId }, data: { text: body.data.text } });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'observacion_editada', field: 'Observación',
+          value_before: existing.text, value_after: body.data.text,
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
+    });
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
     return reply.send({ data: updatedOrder });

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
-import { buildFormLinkMessage } from '../../lib/formLinkMessage';
+import ChatImage from '../ui/ChatImage';
+import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -46,7 +47,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const { data: employees = [] } = useEmployees();
   const createOrder = useCreateOrder();
 
-  const [canal, setCanal] = useState('whatsapp');
   const [pago, setPago] = useState('sin_asignar');
   // Neither selected by default - staff must actively pick one once "Cobro en casa"
   // is chosen, not fall into a silent default (see codChoice usage below).
@@ -176,7 +176,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
       await createOrder.mutateAsync({
         fecha,
         ticket_id: ticketId,
-        channel: canal,
         payment_method: pago,
         customer_name: nombre.trim(),
         // No customer_phone - this modal always requires a ticketId (checked above),
@@ -228,10 +227,19 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                   disabled={isPastDay}
                   onClick={async () => {
+                    let url: string;
                     try {
                       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-                      replyMut.mutate(buildFormLinkMessage(res.data.url));
-                    } catch { toast('No se pudo generar el link', true); }
+                      url = res.data.url;
+                    } catch { toast('No se pudo generar el link', true); return; }
+                    try {
+                      // Two separate messages, in order (awaited, not fire-and-
+                      // forget - the notice must arrive before the link).
+                      await replyMut.mutateAsync(buildFormLinkWarningMessage());
+                      await replyMut.mutateAsync(url);
+                    } catch {
+                      // replyMut's own onError already toasted the specific reason.
+                    }
                   }}
                 >
                   <ClipboardList size={13} />
@@ -253,7 +261,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number) => (
                 <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
-                  <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>
+                  {m.media_type === 'image'
+                    ? <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>
+                    : <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
                   {(m.sent_at || m.created_at) && (
                     <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
                       {new Date(m.sent_at ?? m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
@@ -312,13 +322,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 <Smartphone size={14} /> Pedido vinculado al ticket de WhatsApp
               </div>
             )}
-            <div className="fg2">
-              <label className="fl2">Canal</label>
-              <select className="fi2" value={canal} onChange={(e) => setCanal(e.target.value)}>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="call">Llamada</option>
-              </select>
-            </div>
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente *</label>
