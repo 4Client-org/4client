@@ -186,9 +186,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     };
     sock.on('order:updated', onOrderChange);
     sock.on('order:paid', onOrderChange);
+    // Status moves (drag on the board, the Avanzar/Retroceder buttons) go through
+    // PATCH /:id/status, which emits 'order:moved' instead - a separate, minimal
+    // event ({orderId, newStatus}, no full order/items) this modal was never
+    // listening for. That's why the board's own title/column updated live but
+    // this modal's cached order.status (and anything derived from it, like the
+    // Enviar factura re-enable) sat stale until it was reopened. onOrderChange
+    // already handles a payload with no `items` by invalidating instead of
+    // setQueryData, and already reads `data.orderId` as the fallback id - no
+    // separate handler needed, just another event to route through it.
+    sock.on('order:moved', onOrderChange);
     return () => {
       sock.off('order:updated', onOrderChange);
       sock.off('order:paid', onOrderChange);
+      sock.off('order:moved', onOrderChange);
     };
   }, [accessToken, orderId, qc, isDirty, catalogDirty]);
 
