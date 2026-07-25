@@ -3,6 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 
 // Computes the next sequential order number for org+fecha and creates the order,
 // retrying on a unique-constraint collision (@@unique([org_id, num, fecha])).
@@ -333,21 +334,19 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   // GET /api/v1/orders/:id
   fastify.get('/:id', { preHandler: [authenticate] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    // Matches the frontend's own `canManage` gate (DetallePedidoModal.tsx) exactly -
-    // that gate already shows the "Historial de cambios" toggle to encargado too,
-    // not just admin/dev, so the data itself needs to actually reach them. Was
-    // admin/dev-only before, which meant an encargado saw the toggle but it always
-    // rendered empty - no real reason found for that split, just missed when the
-    // history panel was built.
-    const canSeeHistory = ['admin', 'dev', 'encargado'].includes(req.user.role);
+    // The full audit trail (who changed what, when, old/new values for every
+    // field including prices) is admin/dev only - encargado does NOT get this,
+    // full stop. address_changed_by_client/payment_changed_by_client below are a
+    // separate, deliberately narrow signal that's safe for everyone to see.
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'dev';
 
     const order = await fastify.prisma.order.findFirst({
       where: { id, org_id: req.user.orgId },
-      select: buildOrderSelect(canSeeHistory),
+      select: buildOrderSelect(isAdmin),
     });
 
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    return reply.send({ data: order });
+    return reply.send({ data: { ...order, ...(await clientChangedFlags(fastify.prisma, id)) } });
   });
 
   // PATCH /api/v1/orders/:id
@@ -545,8 +544,13 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       data: { revoked_at: new Date() },
     });
 
-    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
-    return reply.send({ data: updatedOrder });
+    // Recomputed AFTER the transaction - if THIS save is what just changed address
+    // or payment method, historyEntries above already logged it with the staff's
+    // own actor_id (no 'formulario' in its notes), so this correctly flips the
+    // flag back off the moment staff overwrites what the client set.
+    const updatedWithFlags = { ...updatedOrder, ...(await clientChangedFlags(fastify.prisma, id)) };
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedWithFlags as any);
+    return reply.send({ data: updatedWithFlags });
   });
 
   // POST /api/v1/orders/:id/observations - adds a new note, stacked below any
@@ -576,8 +580,13 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
     });
 
-    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
-    return reply.status(201).send({ data: updatedOrder });
+    // Every order:updated payload needs these two fields present, even when this
+    // particular save didn't touch address/payment_method - the frontend replaces
+    // its whole cached order with whatever this emits, so omitting them here would
+    // silently clear an unrelated "cambió el cliente" tag that was already showing.
+    const updatedWithFlags = { ...updatedOrder, ...(await clientChangedFlags(fastify.prisma, id)) };
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedWithFlags as any);
+    return reply.status(201).send({ data: updatedWithFlags });
   });
 
   // PATCH /api/v1/orders/:id/observations/:obsId - only the staff member who wrote
@@ -612,8 +621,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
     });
 
-    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
-    return reply.send({ data: updatedOrder });
+    const updatedWithFlags = { ...updatedOrder, ...(await clientChangedFlags(fastify.prisma, id)) };
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedWithFlags as any);
+    return reply.send({ data: updatedWithFlags });
   });
 
   // PATCH /api/v1/orders/:id/status
