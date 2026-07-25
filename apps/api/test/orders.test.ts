@@ -252,8 +252,9 @@ describe('orders routes', () => {
     expect(agregado).toBeDefined();
 
     // The response from GET /:id (what the modal actually renders) must carry these
-    // through too - available to admin/dev/encargado (buildOrderSelect gates
-    // `history` on canSeeHistory).
+    // through too - admin/dev only (buildOrderSelect gates `history` on isAdmin).
+    // encargado gets address_changed_by_client/payment_changed_by_client instead
+    // (a narrower signal, not the full audit trail) - see clientChangedFlags.
     const adminEmail = `hist-admin-${Date.now()}@example.com`;
     const admin = await createTestUser(app.prisma, orgAId, 'admin', 'HistAdminPass1!', { email: adminEmail });
     const adminToken = await login(app, adminEmail, 'HistAdminPass1!');
@@ -264,6 +265,16 @@ describe('orders routes', () => {
     const returnedTypes = (getRes.json().data.history ?? []).map((h: any) => h.action_type);
     expect(returnedTypes).toEqual(expect.arrayContaining(['producto_modificado', 'producto_eliminado', 'producto_agregado']));
     void admin;
+
+    // encargado must NOT get the audit trail - full price/status change history,
+    // by whom, is admin/dev only. It should still get the two narrow booleans.
+    const encargadoRes = await app.inject({
+      method: 'GET', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+    });
+    expect(encargadoRes.statusCode).toBe(200);
+    expect(encargadoRes.json().data.history).toBeUndefined();
+    expect(typeof encargadoRes.json().data.address_changed_by_client).toBe('boolean');
+    expect(typeof encargadoRes.json().data.payment_changed_by_client).toBe('boolean');
   });
 
   it('POST /orders/:id/cobro with wrong password -> 403 INVALID_PASSWORD, order not marked paid', async () => {

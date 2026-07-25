@@ -120,6 +120,19 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [editingObsId, setEditingObsId] = useState<string | null>(null);
   const [editObsText, setEditObsText] = useState('');
   const [catalogClearKey, setCatalogClearKey] = useState(0);
+  // Which scalar fields have a local edit pending, tracked individually - a plain
+  // ref (not state) since it's only ever consulted inside the hydration effect
+  // below, never rendered. Fixes a real bug: the effect used to skip hydrating
+  // EVERY field the instant isDirty was true for ANY reason, so a client changing
+  // the payment method while staff had merely started editing the address (or vice
+  // versa) left the untouched field showing stale data - "cambió el cliente"
+  // showed correctly (that badge reads straight off the order, not local state)
+  // right next to a dropdown that still said "Sin asignar".
+  const touchedFieldsRef = useRef<Set<string>>(new Set());
+  function touchField(name: string) {
+    touchedFieldsRef.current.add(name);
+    markDirty();
+  }
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
   const [replyText, setReplyText] = useState('');
@@ -128,31 +141,40 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
 
   useEffect(() => {
     if (!order) return;
-    // Don't stomp an in-progress edit - if the person has unsaved local changes when
-    // a live update lands (e.g. the client added items to this order from the form),
-    // the fresh data is still in the cache for whenever they save/close, but pulling
-    // it into the form fields right now would silently discard what they were typing.
-    if (isDirty || catalogDirty) return;
-    setNombre(order.customer_name ?? '');
-    setTelefono(order.customer_phone ?? '');
-    setDireccion(order.address ?? '');
-    setPago(order.payment_method ?? 'transfer');
-    setEmpleadoId(order.employee_id ?? '');
-    setItems((order.items ?? []).map((i: any) => ({
-      product_name: i.product_name ?? '',
-      quantity_label: i.quantity_label ?? '',
-      price: String(i.price ?? ''),
-      added_by_client: !!i.added_by_client,
-    })));
+    const touched = touchedFieldsRef.current;
+    // Don't stomp an in-progress edit - if the person has an unsaved local change
+    // on a SPECIFIC field when a live update lands (e.g. the client added items to
+    // this order from the form), the fresh data is still in the cache for whenever
+    // they save/close, but pulling it into that one field right now would silently
+    // discard what they were typing. Every OTHER field still hydrates normally -
+    // touching one field must not freeze the rest of the form too.
+    if (!touched.has('nombre')) setNombre(order.customer_name ?? '');
+    setTelefono(order.customer_phone ?? ''); // never staff-editable, always safe to sync
+    if (!touched.has('direccion')) setDireccion(order.address ?? '');
+    if (!touched.has('pago')) setPago(order.payment_method ?? 'transfer');
+    if (!touched.has('empleado')) setEmpleadoId(order.employee_id ?? '');
+    if (!catalogDirty) {
+      setItems((order.items ?? []).map((i: any) => ({
+        product_name: i.product_name ?? '',
+        quantity_label: i.quantity_label ?? '',
+        price: String(i.price ?? ''),
+        added_by_client: !!i.added_by_client,
+      })));
+    }
     // Read the choice straight off the order - NOT inferred by comparing
     // amount_received to the total anymore. That inference broke the one time
     // "vuelta" is typed as exactly the total (zero change owed): numerically
     // identical to "completo", so it silently flipped back on reopen. cod_choice is
     // the actual source of truth now (orders.ts's validateCodAmount requires both
     // travel together, so cod_choice is always set whenever amount_received is).
-    setCodChoice((order.cod_choice as 'completo' | 'vuelta' | null) ?? null);
-    setCodCash(order.cod_choice === 'vuelta' && order.amount_received != null ? String(order.amount_received) : '');
-    setIsDirty(false);
+    // Tied to the 'pago' touch, not its own - they're one unit (switching payment
+    // method resets both together, see the select's onChange below).
+    if (!touched.has('pago')) {
+      setCodChoice((order.cod_choice as 'completo' | 'vuelta' | null) ?? null);
+      setCodCash(order.cod_choice === 'vuelta' && order.amount_received != null ? String(order.amount_received) : '');
+    }
+    // Only truly "clean" (nothing at all pending) once every field actually hydrated.
+    if (touched.size === 0 && !catalogDirty) setIsDirty(false);
     // Trashed orders are opened specifically to see what happened (who sent it to
     // papelera, when) - that's in the history, so show it expanded right away
     // instead of making the person hunt for the toggle.
@@ -296,6 +318,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      touchedFieldsRef.current.clear();
       setIsDirty(false);
       setCatalogDirty(false);
       setCatalogClearKey(k => k + 1);
@@ -701,21 +724,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
-  // Red text on the CURRENT value, same signal items already give per-row via
-  // added_by_client - the client_modified bell says "something changed" but not
-  // WHERE, so staff had to go dig through the history table just to find out it was
-  // the address. Derived from the field's own most recent history entry rather than
-  // a stored flag (address/payment_method don't have one, unlike items): once staff
-  // saves their own edit, orders.ts logs a NEW entry for that field with no
-  // "formulario" in its notes, which naturally clears this without any reset logic.
-  function lastFieldChangeFromClient(fieldLabel: string): boolean {
-    const entries = (order?.history ?? []).filter((h: any) => h.field === fieldLabel);
-    if (entries.length === 0) return false;
-    const last = entries[entries.length - 1];
-    return typeof last.notes === 'string' && last.notes.includes('formulario');
-  }
-  const direccionFromClient = lastFieldChangeFromClient('Dirección');
-  const pagoFromClient = lastFieldChangeFromClient('Método de pago');
+  // Same signal items already give per-row via added_by_client - the
+  // client_modified bell says "something changed" but not WHERE. Comes straight
+  // off the order (orders.ts's clientChangedFlags) rather than being derived from
+  // `order.history` here - that full audit trail is admin/dev only, but encargado
+  // (who actually runs day-to-day fulfillment) still needs this specific signal.
+  const direccionFromClient = !!order?.address_changed_by_client;
+  const pagoFromClient = !!order?.payment_changed_by_client;
   // A pedido can't be closed with any of these missing - mirrors the same check enforced
   // server-side in POST /orders/:id/cobro, so the UI blocks it before the request even goes out.
   const cierreMissing: string[] = [];
@@ -976,7 +991,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div className="fg2">
                 <label className="fl2">Nombre del cliente</label>
                 <input className="fi2" disabled={readOnly} value={nombre}
-                  onChange={(e) => { setNombre(e.target.value); markDirty(); }} />
+                  onChange={(e) => { setNombre(e.target.value); touchField('nombre'); }} />
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
@@ -993,7 +1008,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 {direccionFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
               </label>
               <input className="fi2" disabled={readOnly} value={direccion}
-                onChange={(e) => { setDireccion(e.target.value); markDirty(); }} />
+                onChange={(e) => { setDireccion(e.target.value); touchField('direccion'); }} />
             </div>
             <div className="frow">
               <div className="fg2">
@@ -1007,7 +1022,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                     // Same reset as NuevoPedidoModal - switching away from (or back
                     // to) 'cod' must not resurrect a stale choice/amount.
                     setCodChoice(null); setCodCash('');
-                    markDirty();
+                    touchField('pago');
                   }}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
@@ -1018,7 +1033,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div className="fg2">
                 <label className="fl2">Domiciliario</label>
                 <select className="fi2" disabled={readOnly} value={empleadoId}
-                  onChange={(e) => { setEmpleadoId(e.target.value); markDirty(); }}>
+                  onChange={(e) => { setEmpleadoId(e.target.value); touchField('empleado'); }}>
                   <option value="">Sin asignar</option>
                   {employees.map((emp: any) => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
@@ -1028,8 +1043,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
             {pago === 'cod' && (
               <CodPaymentField total={total} choice={codChoice} disabled={readOnly}
-                onChoiceChange={(c) => { setCodChoice(c); markDirty(); }}
-                cash={codCash} onCashChange={(v) => { setCodCash(v); markDirty(); }} />
+                onChoiceChange={(c) => { setCodChoice(c); touchField('pago'); }}
+                cash={codCash} onCashChange={(v) => { setCodCash(v); touchField('pago'); }} />
             )}
 
             <div className="stit">Productos</div>

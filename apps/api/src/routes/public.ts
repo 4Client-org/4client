@@ -5,6 +5,7 @@ import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { sanitizeForWhatsApp } from '../lib/sanitize.js';
 import { sortByCategoryOrder } from '../lib/categoryOrder.js';
 import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
+import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 
 // Max orders a single form link (ticket) may generate - a link can stay valid up to
 // 24h, so this caps spam from a leaked/shared link.
@@ -584,7 +585,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           data: { revoked_at: new Date() },
         });
 
-        fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updated as any);
+        const updatedWithFlags = { ...updated, ...(await clientChangedFlags(fastify.prisma, updated.id)) };
+        fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updatedWithFlags as any);
         fastify.io.to(`org:${ticket.org_id}`).emit('ticket:message', {
           ticketId: ticket.id,
           message: {
