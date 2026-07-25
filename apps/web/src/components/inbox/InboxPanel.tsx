@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send } from 'lucide-react';
+import { MessageSquare, Send, Paperclip } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -8,6 +8,8 @@ import { toast } from '../ui/Toast';
 import { colombiaDateStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
+import ChatImage from '../ui/ChatImage';
+import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
 
 // Safe URL regex - no backtracking ambiguity, no ReDoS risk
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
@@ -31,7 +33,6 @@ export default function InboxPanel() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -106,9 +107,56 @@ export default function InboxPanel() {
     onError: (e: any) => toast(e.message, true),
   });
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendImageMut = useMutation({
+    mutationFn: (payload: { data: string; mime_type: string }) =>
+      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${selectedId}/send-image`, payload),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['inbox-convo', selectedId] });
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      if (res?.wpp_status === 'failed') {
+        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
+      } else if (res?.wpp_status === 'no_credentials') {
+        toast('Foto guardada. WPP sin configurar - revisa DevTools - WPP', true);
+      }
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  async function handlePickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) {
+      toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true);
+      return;
+    }
+    if (file.size > CHAT_IMAGE_MAX_BYTES) {
+      toast('La foto pesa más de 5 MB', true);
+      return;
+    }
+    const data = await fileToBase64(file);
+    sendImageMut.mutate({ data, mime_type: file.type });
+  }
+
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - a plain "scroll on message count change" fired too early
+  // for images, leaving the bottom of the photo cut off until the person manually
+  // scrolled. ResizeObserver on the inner wrapper (not the outer scroll container,
+  // whose own size is fixed by its flex parent) catches both cases the same way.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInnerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation?.messages?.length, selectedId]);
+    const outer = chatScrollRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -185,7 +233,8 @@ export default function InboxPanel() {
               <div className="inbox-item-phone">{formatPhoneDisplay(t.phone)}</div>
               {lastMsg && (
                 <div className="inbox-item-preview">
-                  {lastMsg.direction === 'out' ? '› ' : ''}{lastMsg.text}
+                  {lastMsg.direction === 'out' ? '› ' : ''}
+                  {lastMsg.media_type === 'image' ? 'Foto' : lastMsg.text}
                 </div>
               )}
             </div>
@@ -214,7 +263,8 @@ export default function InboxPanel() {
           </div>
 
           {/* Messages */}
-          <div className="inbox-messages">
+          <div className="inbox-messages" ref={chatScrollRef}>
+           <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {loadingConvo && (
               <div style={{ textAlign: 'center', color: '#667781', padding: 20, fontSize: 13 }}>
                 Cargando mensajes...
@@ -238,7 +288,9 @@ export default function InboxPanel() {
                     {isOut && msg.sender?.name && (
                       <div className="chat-bub-who">{msg.sender.name}</div>
                     )}
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
+                    {msg.media_type === 'image'
+                      ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
+                      : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div className="chat-bub-time" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                       {formatMsgTime(msg.sent_at)}
                       {isOut && msg.wpp_message_id && (
@@ -249,11 +301,20 @@ export default function InboxPanel() {
                 </div>
               );
             })}
-            <div ref={messagesEndRef} />
+           </div>
           </div>
 
           {/* Reply bar */}
           <div className="inbox-reply">
+            <input ref={fileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handlePickImage} style={{ display: 'none' }} />
+            <button
+              title="Adjuntar foto"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sendImageMut.isPending}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 6px', display: 'flex', alignItems: 'center' }}
+            >
+              <Paperclip size={19} />
+            </button>
             <textarea
               placeholder="Escribe un mensaje... (Enter para enviar, Shift+Enter para salto)"
               value={replyText}

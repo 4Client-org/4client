@@ -59,8 +59,8 @@ export default function MainPage() {
   });
 
   // Same queryKey InboxPanel uses for its ticket list - sharing the cache means the
-  // floating badge always reflects real per-ticket unread_count (server resets it to 0
-  // the moment a conversation is actually opened, not just when this tab is clicked),
+  // floating badge always reflects real per-ticket unread_count (server only resets it
+  // to 0 once staff actually sends a reply, not just from opening the conversation),
   // and stays live since both onTicketMessage/onTicketUnread below already invalidate it.
   const { data: inboxTickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -245,7 +245,7 @@ export default function MainPage() {
       <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ' wm'}`}>
         {tab === 'swimlane' && (
           <>
-            <div className="khead">
+            <div className="khead" style={{ paddingTop: 'var(--ac-pad)' }}>
               <div>
                 <div className="ktit">Tickets & Pedidos de despacho</div>
                 <div className="kmeta">
@@ -277,7 +277,7 @@ export default function MainPage() {
 
         {tab === 'inbox' && isAdmin && (
           <>
-            <div className="khead" style={{ marginBottom: 0, flexShrink: 0 }}>
+            <div className="khead" style={{ marginBottom: 0, flexShrink: 0, paddingTop: 'var(--ac-pad)' }}>
               <div>
                 <div className="ktit">Chats WhatsApp</div>
                 <div className="kmeta">Bandeja de entrada - todas las conversaciones</div>
@@ -288,19 +288,21 @@ export default function MainPage() {
         )}
 
         {tab === 'resumen' && isAdmin && (
-          <ResumenTab
-            fecha={fecha}
-            setFecha={setFecha}
-            dashboard={dashboard}
-            papeleraOrders={papeleraOrders}
-            history={history}
-            orders={orders}
-            onCierreCaja={() => setShowCierre(true)}
-            onOpenOrder={(orderId) => setOpenOrderId(orderId)}
-          />
+          <div style={{ paddingTop: 'var(--ac-pad)' }}>
+            <ResumenTab
+              fecha={fecha}
+              setFecha={setFecha}
+              dashboard={dashboard}
+              papeleraOrders={papeleraOrders}
+              history={history}
+              orders={orders}
+              onCierreCaja={() => setShowCierre(true)}
+              onOpenOrder={(orderId) => setOpenOrderId(orderId)}
+            />
+          </div>
         )}
 
-        {tab === 'config' && isAdmin && <ConfigTab />}
+        {tab === 'config' && isAdmin && <div style={{ paddingTop: 'var(--ac-pad)' }}><ConfigTab /></div>}
       </div>
 
       {fromTicket && (

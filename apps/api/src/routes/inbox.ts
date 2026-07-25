@@ -2,7 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { config } from '../config.js';
+import { generateFormLinkUrl } from '../lib/formLink.js';
+import { storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime } from '../lib/media.js';
+
+// 5MB - Meta's own limit for an outbound WhatsApp image message; enforced here too
+// so an oversized upload fails fast with a clear message instead of getting
+// rejected only after already being stored in R2 and sent to Meta's media endpoint.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
   // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
@@ -60,11 +66,11 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
 
-    if (ticket.unread_count > 0) {
-      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
-      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
-    }
-
+    // unread_count is deliberately NOT cleared just by opening/viewing the chat
+    // anymore - it only clears when staff actually sends a reply (see POST
+    // /:ticketId/reply below). Opening a chat a thousand times without answering
+    // must not make the "sin leer" dot disappear - that dot means "needs a reply",
+    // not "someone glanced at it".
     return reply.send({ data: ticket });
   });
 
@@ -94,6 +100,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     // move a ticket up in the queue, so the inbox order stays stable when agents reply.
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
 
+    // The "sin leer" dot only clears when staff actually answers - not just from
+    // opening the chat (see GET /:ticketId/messages above). An actual reply IS the
+    // answer, so this is the one place it's safe to clear it.
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
     // Enviar via Meta Cloud API
     const provider = MetaCloudProvider.fromOrg(ticket.org);
     let wpp_status: 'sent' | 'no_credentials' | 'failed' = 'no_credentials';
@@ -101,12 +115,42 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     if (provider) {
       try {
-        await provider.sendText(ticket.phone, body.data.text);
+        // Capturing and storing this is the whole point - webhook.ts's ingestStatus
+        // matches every later delivered/read/failed status update by THIS id
+        // (wpp_message_id). Without saving it here, every status Meta ever sends for
+        // this message has nothing to match against and is silently dropped -
+        // DeliveryStatus.tsx stays stuck on a single gray check forever, never a
+        // failure either, indistinguishable from "still sending".
+        const { messageId } = await provider.sendText(ticket.phone, body.data.text);
+        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+        // Without this, the chat already open on someone's screen (the 'ticket:message'
+        // emit above fired BEFORE this id existed) never learns wpp_message_id is now
+        // set - DeliveryStatus.tsx is gated on that being truthy, so the check mark
+        // stayed invisible until something else happened to trigger a refetch (the
+        // next poll, or - only for THIS message - its own first real delivered/read
+        // webhook, which is exactly the delay that made this look broken).
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+        });
         wpp_status = 'sent';
       } catch (err: any) {
         wpp_status = 'failed';
         wpp_error = err?.message ?? 'Error desconocido Meta API';
         fastify.log.error({ err, ticketId }, 'WPP: error enviando respuesta via Meta API');
+        // Recorded on the message itself (not just returned in this HTTP response) so
+        // DeliveryStatus shows the red "no se pudo entregar" X - e.g. WhatsApp's 24h
+        // customer-service-window policy rejecting a business-initiated message with
+        // no active session. Broadcast so anyone else with this chat already open
+        // (not just whoever clicked send) sees it update live, same as a real Meta
+        // webhook status would.
+        const failed = await fastify.prisma.ticketMessage.update({
+          where: { id: message.id },
+          data: { failed_reason: String(wpp_error).slice(0, 255) },
+          select: { delivered: true, read_by_client: true, failed_reason: true },
+        });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, ...failed,
+        });
       }
     } else {
       fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, mensaje solo guardado en BD');
@@ -115,76 +159,149 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ data: message, wpp_status, wpp_error });
   });
 
+  // POST /api/v1/inbox/:ticketId/send-image - staff sends a photo, todos los roles
+  // (same access as /reply). Base64 in the JSON body, same shape as files.ts's
+  // POST /invoice, rather than multipart - no new upload-parsing dependency needed
+  // for what's still a small, staff-only image (5MB cap below).
+  fastify.post('/:ticketId/send-image', {
+    preHandler: [authenticate],
+    bodyLimit: Math.ceil(MAX_IMAGE_BYTES * 1.4) + 100_000, // base64 overhead + JSON framing
+  }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({
+      data: z.string().min(1),
+      mime_type: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+      caption: z.string().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+    if (!isSupportedImageMime(body.data.mime_type)) {
+      return reply.status(400).send({ error: 'Tipo de imagen no soportado', code: 'VALIDATION_ERROR' });
+    }
+
+    const ticket = await fastify.prisma.ticket.findFirst({
+      where: { id: ticketId, org_id: req.user.orgId },
+      include: { org: true },
+    });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const buffer = Buffer.from(body.data.data, 'base64');
+    if (buffer.length === 0) return reply.status(400).send({ error: 'Imagen vacía', code: 'VALIDATION_ERROR' });
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      return reply.status(400).send({ error: 'Imagen demasiado grande (máx 5 MB)', code: 'VALIDATION_ERROR' });
+    }
+    // The declared mime_type is just a string the browser sent - never trusted on
+    // its own. Checking the real file signature is what actually stops something
+    // that isn't a genuine image (mislabeled on purpose or corrupted in transit)
+    // from being stored and relayed to Meta as if it were one.
+    const realMime = detectImageMime(buffer);
+    if (!realMime || realMime !== body.data.mime_type) {
+      return reply.status(400).send({ error: 'El archivo no es una imagen válida del tipo indicado', code: 'VALIDATION_ERROR' });
+    }
+
+    const token = await storeMedia(buffer, body.data.mime_type);
+    const caption = body.data.caption?.trim() || null;
+
+    const message = await fastify.prisma.ticketMessage.create({
+      data: {
+        ticket_id: ticketId,
+        direction: 'out',
+        text: caption,
+        media_url: token,
+        media_type: 'image',
+        media_caption: caption,
+        sent_by: req.user.userId,
+      },
+      include: { sender: { select: { id: true, name: true } } },
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    let wpp_status: 'sent' | 'no_credentials' | 'failed' = 'no_credentials';
+    let wpp_error: string | undefined;
+
+    if (provider) {
+      try {
+        // Bytes uploaded straight to Meta (never a public URL of ours) - see
+        // meta-cloud.ts's uploadMedia/sendImage for why that's the point.
+        const mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+        const { messageId } = await provider.sendImage(ticket.phone, mediaId, caption ?? undefined);
+        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+        });
+        wpp_status = 'sent';
+      } catch (err: any) {
+        wpp_status = 'failed';
+        wpp_error = err?.message ?? 'Error desconocido Meta API';
+        fastify.log.error({ err, ticketId }, 'WPP: error enviando imagen via Meta API');
+        const failed = await fastify.prisma.ticketMessage.update({
+          where: { id: message.id },
+          data: { failed_reason: String(wpp_error).slice(0, 255) },
+          select: { delivered: true, read_by_client: true, failed_reason: true },
+        });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+          ticketId, messageId: message.id, ...failed,
+        });
+      }
+    } else {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, imagen solo guardada en BD');
+    }
+
+    return reply.status(201).send({ data: message, wpp_status, wpp_error });
+  });
+
+  // GET /api/v1/inbox/media/:token - serves a chat photo (inbound or outbound).
+  // Staff-auth only (bearer JWT) - unlike the client-facing invoice/form links,
+  // nobody outside the org's own staff session is ever meant to open this, so the
+  // opaque token doesn't need its own TTL/revocation layer on top of that.
+  fastify.get('/media/:token', { preHandler: [authenticate] }, async (req, reply) => {
+    const { token } = req.params as { token: string };
+    if (!isValidMediaToken(token)) return reply.status(400).send({ error: 'Token inválido' });
+
+    // Confirms this token actually belongs to a message in THIS user's org before
+    // serving it - the token's entropy alone already makes it unguessable, this is
+    // just the org-isolation check every other org-scoped lookup in this file has.
+    const msg = await fastify.prisma.ticketMessage.findFirst({
+      where: { media_url: token, ticket: { org_id: req.user.orgId } },
+      select: { id: true },
+    });
+    if (!msg) return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+
+    try {
+      const buffer = await loadMedia(token);
+      reply.header('Content-Type', mimeTypeForToken(token));
+      reply.header('Cache-Control', 'private, max-age=86400');
+      // Stops a browser from ever second-guessing the Content-Type above and
+      // trying to sniff/render the bytes as something else (e.g. HTML) if this
+      // response is ever opened directly instead of through ChatImage's
+      // fetch-as-blob path - the standard defense against a mislabeled upload
+      // being executed instead of just failing to display as an image.
+      reply.header('X-Content-Type-Options', 'nosniff');
+      reply.header('Content-Disposition', 'inline');
+      return reply.send(buffer);
+    } catch (err) {
+      req.log.error({ err, token }, 'No se pudo leer la imagen del almacenamiento');
+      return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+    }
+  });
+
   // GET /api/v1/inbox/:ticketId/form-link - genera link firmado para el formulario del cliente
+  // Token minting + state reset lives in lib/formLink.ts, shared with webhook.ts's
+  // auto-send-right-after-welcome (same reasoning: both must reset the exact same
+  // fields the exact same way, not drift apart as either gets edited later).
   fastify.get('/:ticketId/form-link', { preHandler: [authenticate] }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
 
     const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
 
-    // Expires at the end of the current Colombia calendar day (UTC-5), not a flat N
-    // days from now - a link generated at 11pm and one generated at 8am must both die
-    // at the same midnight, so "the link only works today" actually means today, and
-    // staff sending a fresh one tomorrow is what lets that new order find/merge with
-    // whatever's already open from today (see public.ts's open-orders lookup).
-    // Colombia has no DST, so "Colombia midnight" is always UTC 05:00 of that date.
-    const nowCol = new Date(Date.now() - 5 * 3600000);
-    const tomorrowColMidnightUtcMs = Date.UTC(nowCol.getUTCFullYear(), nowCol.getUTCMonth(), nowCol.getUTCDate() + 1, 5, 0, 0);
-    const expiresInSeconds = Math.max(60, Math.floor((tomorrowColMidnightUtcMs - Date.now()) / 1000));
-
-    // Explicit iat (instead of leaving jsonwebtoken to stamp its own "now") so it
-    // matches exactly what's written to form_token_min_iat below - the two must
-    // agree down to the millisecond-rounded-to-second for THIS token to still pass
-    // its own supersede check (public.ts's assertLinkStillValid: strictly-older
-    // tokens are rejected, this one must not count as older than itself).
-    const issuedAt = new Date();
-    const issuedAtSec = Math.floor(issuedAt.getTime() / 1000);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (fastify.jwt.sign as any)(
-      {
-        type: 'form_link',
-        iat: issuedAtSec,
-        ticketId: ticket.id,
-        orgId: req.user.orgId,
-        sentByUserId: req.user.userId,
-      },
-      { expiresIn: expiresInSeconds },
-    ) as string;
-
-    // A fresh link supersedes any earlier revocation AND every previously-issued
-    // still-unexpired link on this ticket - bumping form_token_min_iat makes
-    // public.ts's assertLinkStillValid reject any older token automatically, so
-    // staff no longer has to separately "Bloquear link" the old one before sending
-    // a new one. Also clears any device lock (public.ts's FormLinkSession) -
-    // sending a new link is a deliberate "start over" action, e.g. to fix a
-    // false-positive lockout from the wrong device claiming an earlier link.
-    // form_link_opened_at resets too - this new link has its own fresh 10-minute
-    // unopened-dies window (public.ts's assertLinkStillValid), independent of
-    // whether the previous link was ever opened.
-    // link_failed_attempts resets too - sending a fresh link is exactly the "give
-    // them another chance" action that clears the ticket-wide soft wrong-guess
-    // block (linkSecurity.ts's clearSoftLinkBlock does the same thing; inlined here
-    // since this update was already happening anyway). Un-blocks the factura link(s)
-    // for this ticket too, not just this form link - the soft block is shared.
-    // link_failed_total (the cumulative count behind the 24h hard block) is NOT
-    // reset here on purpose - that's what makes it actually cumulative instead of
-    // something a new link resets for free.
-    await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_token_min_iat: issuedAt, form_link_opened_at: null, link_failed_attempts: 0 } });
-    await fastify.prisma.revokedFormToken.deleteMany({ where: { ticket_id: ticket.id, org_id: req.user.orgId } });
-    await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticket.id } });
-
-    const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
-    // Percent-encode underscores - base64url tokens routinely contain them, and
-    // WhatsApp's renderer treats a pair of underscores as italic-markdown delimiters.
-    // An odd one anywhere in the URL leaves WhatsApp "waiting for a closing
-    // underscore", which silently truncates how much of the link is actually
-    // tappable (matches the exact issue files.ts's invoice filenames hit before -
-    // this is the same fix, applied to the query string instead of a filename).
-    // %5F round-trips transparently: the browser decodes it back to `_` before the
-    // app ever reads `?t=`, so nothing downstream needs to know this happened.
-    const safeToken = token.replace(/_/g, '%5F');
-    const url = `${frontendUrl}/form?t=${safeToken}`;
+    const url = await generateFormLinkUrl(fastify, ticket.id, req.user.orgId, req.user.userId);
     return reply.send({ data: { url } });
   });
 

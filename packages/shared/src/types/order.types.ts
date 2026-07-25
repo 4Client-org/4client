@@ -34,6 +34,16 @@ export interface OrderHistoryEntry {
   created_at: string;
 }
 
+export interface OrderObservation {
+  id: string;
+  order_id: string;
+  author_id: string;
+  author: { id: string; name: string };
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Order {
   id: string;
   org_id: string;
@@ -56,11 +66,13 @@ export interface Order {
   paid_by: string | null;
   amount_received: number | null;
   change_amount: number | null;
+  cod_choice: 'completo' | 'vuelta' | null;
   locked: boolean;
   caja_cerrada: boolean;
   notes: string | null;
   created_at: string;
   items: OrderItem[];
   history?: OrderHistoryEntry[];
+  observations: OrderObservation[];
   total: number;
 }

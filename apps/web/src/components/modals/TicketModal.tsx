@@ -1,15 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRef, useEffect, useState, KeyboardEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban } from 'lucide-react';
+import { useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
+import ChatImage from '../ui/ChatImage';
+import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
 import { api } from '../../lib/api';
-import { buildFormLinkMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { fmtCOP, STATUS_LABEL, todayStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 import { toast } from '../ui/Toast';
 import { ConfirmModal } from '../ui/ConfirmModal';
 
@@ -78,9 +79,23 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     };
   }, [accessToken, ticketId, qc]);
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - scrolling only on message-count change fired too early
+  // for images, leaving the bottom of the photo cut off until manually scrolled.
+  // ResizeObserver on the inner wrapper (not chatRef itself, whose own size is
+  // fixed by its flex parent) catches both cases the same way.
+  const chatInnerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-  }, [ticket?.messages?.length]);
+    const outer = chatRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [ticketId]);
 
   const sendMut = useMutation({
     mutationFn: () => api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/reply`, { text: reply }),
@@ -102,22 +117,58 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     onError: (e: any) => toast(e.message, true),
   });
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendImageMut = useMutation({
+    mutationFn: (payload: { data: string; mime_type: string }) =>
+      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/send-image`, payload),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['ticket', ticketId, fecha] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      if (res?.wpp_status === 'failed') {
+        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
+      } else if (res?.wpp_status === 'no_credentials') {
+        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
+      }
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  async function handlePickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
+    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
+    const data = await fileToBase64(file);
+    sendImageMut.mutate({ data, mime_type: file.type });
+  }
+
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ticket', ticketId] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
-      toast('Formulario enviado');
     },
     onError: (e: any) => toast(e.message, true),
   });
 
   async function sendFormLink() {
+    let url: string;
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-      formLinkMut.mutate(buildFormLinkMessage(res.data.url));
+      url = res.data.url;
     } catch {
       toast('No se pudo generar el link', true);
+      return;
+    }
+    try {
+      // Two separate messages, in order (awaited, not fire-and-forget - the whole
+      // point is the notice arrives before the link, see formLinkMessage.ts).
+      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      await formLinkMut.mutateAsync(url);
+      toast('Formulario enviado');
+    } catch {
+      // formLinkMut's own onError already toasted the specific reason.
     }
   }
 
@@ -129,16 +180,15 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
   const activeOrders = (ticket?.orders ?? []).filter((o: any) => o.status !== 'papelera');
   const hasOrders = activeOrders.length > 0;
-  // The link itself already expires (end of the Colombia calendar day it was sent, or
-  // sooner - see inbox.ts's /form-link route) - viewing a past day's chat here means
-  // whatever link was ever sent for it is already dead, so sending/blocking one from
-  // this stale view can only confuse ("bloqueado" a link that already expired, or a
-  // fresh link that's really meant for TODAY's conversation, not the day being read).
-  // Also true the moment TODAY's caja gets closed early (cierre.ts only allows
-  // closing today), same as a past day for this purpose.
+  // The link itself already expires (24h from issuance, or 4h if never opened - see
+  // formLink.ts) - viewing a past day's chat here means whatever link was ever sent
+  // for it is very likely already dead, so sending/blocking one from this stale view
+  // can only confuse ("bloqueado" a link that already expired, or a fresh link
+  // that's really meant for TODAY's conversation, not the day being read). Also true
+  // the moment TODAY's caja gets closed early (cierre.ts only allows closing today),
+  // same as a past day for this purpose.
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
-  const withinFormHours = useWithinFormHours();
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -169,18 +219,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
               <button
                 className="hdr-ic-btn"
-                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Enviar formulario de pedido al cliente'}
+                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                 onClick={sendFormLink}
-                disabled={formLinkMut.isPending || isPastDay || !withinFormHours}
+                disabled={formLinkMut.isPending || isPastDay}
               >
                 <ClipboardList size={13} />
                 Formulario
               </button>
               <button
                 className="hdr-ic-btn"
-                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Bloquear el link de formulario enviado a este cliente'}
+                title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
                 onClick={() => setShowBlockConfirm(true)}
-                disabled={blockLinkMut.isPending || isPastDay || !withinFormHours}
+                disabled={blockLinkMut.isPending || isPastDay}
               >
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
@@ -189,10 +239,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           </div>
 
           {/* Messages - scrollable */}
-          <div ref={chatRef} style={{
-            flex: 1, overflowY: 'auto', padding: '10px',
-            display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0,
-          }}>
+          <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
+           <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(ticket?.messages ?? []).map((msg: any, i: number) => {
               const isOut = msg.direction === 'out';
               return (
@@ -206,7 +254,9 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                     {isOut && msg.sender?.name && (
                       <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
                     )}
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>
+                    {msg.media_type === 'image'
+                      ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
+                      : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                       {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                       {isOut && msg.wpp_message_id && (
@@ -220,6 +270,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             {!isLoading && (!ticket?.messages || ticket.messages.length === 0) && (
               <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
             )}
+           </div>
           </div>
 
           {/* Reply bar */}
@@ -228,6 +279,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             display: 'flex', gap: 6, alignItems: 'flex-end',
             borderTop: '1px solid #D0D8D0', flexShrink: 0,
           }}>
+            <input ref={fileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handlePickImage} style={{ display: 'none' }} />
+            <button
+              title="Adjuntar foto"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sendImageMut.isPending}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)',
+                padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0,
+              }}
+            >
+              <Paperclip size={17} />
+            </button>
             <textarea
               rows={2}
               placeholder="Escribe un mensaje... (Enter para enviar)"

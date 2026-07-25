@@ -323,7 +323,191 @@ describe('orders routes', () => {
     expect(secondCobro.json().code).toBe('ORDER_LOCKED');
   });
 
-  it('POST /orders/:id/cobro blocks closing when any single item has no price, even if the order total is > 0 from the other items', async () => {
+  describe('PATCH /:id on a locked (closed) order - only admin can fully edit, anyone can add an observación', () => {
+    async function createAndCloseOrder(overrides: Record<string, unknown> = {}) {
+      const empleado = await app.prisma.employee.create({
+        data: { org_id: orgAId, name: 'Domiciliario Cerrado' },
+      });
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({
+          fecha: '2026-01-17', customer_phone: '3009991111', employee_id: empleado.id, ...overrides,
+        }),
+      });
+      const order = create.json().data;
+      const total = order.items.reduce((s: number, i: any) => s + Number(i.price), 0);
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: total, password: ENCARGADO_PASS },
+      });
+      expect(cobro.statusCode).toBe(200);
+      return order.id as string;
+    }
+
+    it('encargado (non-admin) trying to change a real field on a locked order -> 409 ORDER_LOCKED', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991112' });
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(encargadoToken),
+        payload: { address: 'Calle Cambiada 999' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('ORDER_LOCKED');
+
+      const fresh = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(fresh.address).not.toBe('Calle Cambiada 999');
+    });
+
+    it('encargado (non-admin) CAN add an observation on a locked order -> 201, logged to history with their own actor id', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991113' });
+      const res = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken),
+        payload: { text: 'El cliente llamó a pedir cambio de dirección después de cerrado' },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.observations.at(-1).text).toBe('El cliente llamó a pedir cambio de dirección después de cerrado');
+      // Still locked/unchanged otherwise - only the observation was added.
+      expect(res.json().data.locked).toBe(true);
+
+      const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
+      const obsEntry = history.find(h => h.field === 'Observación');
+      expect(obsEntry).toBeDefined();
+      expect(obsEntry!.value_after).toContain('cambio de dirección');
+    });
+
+    it('admin CAN fully edit a locked order (day not closed) - not just observacion', async () => {
+      const orderId = await createAndCloseOrder({ customer_phone: '3009991114' });
+      const adminEmail = `locked-admin-${Date.now()}@example.com`;
+      const admin = await createTestUser(app.prisma, orgAId, 'admin', 'LockedAdminPass1!', { email: adminEmail });
+      const adminToken = await login(app, adminEmail, 'LockedAdminPass1!');
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(adminToken),
+        payload: { address: 'Calle Corregida Por Admin 1' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.address).toBe('Calle Corregida Por Admin 1');
+      void admin;
+    });
+
+    it('admin CANNOT edit a locked order once the whole day has been cerrado (caja cerrada) - DAY_CLOSED wins even for admin', async () => {
+      // A fecha used nowhere else in this file - the DailyClose row created below
+      // persists for the rest of the suite's run (no per-test DB reset), so reusing
+      // a date any other test also creates orders on would spuriously 409 them too.
+      const orderId = await createAndCloseOrder({ fecha: '2026-01-30', customer_phone: '3009991115' });
+      const adminEmail = `dayclosed-admin-${Date.now()}@example.com`;
+      const admin = await createTestUser(app.prisma, orgAId, 'admin', 'DayClosedAdminPass1!', { email: adminEmail });
+      const adminToken = await login(app, adminEmail, 'DayClosedAdminPass1!');
+
+      await app.prisma.dailyClose.create({
+        data: { org_id: orgAId, fecha: new Date('2026-01-30'), closed_by: admin.id },
+      });
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+        headers: authHeader(adminToken),
+        payload: { address: 'Calle No Debería Cambiar' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().code).toBe('DAY_CLOSED');
+
+      // But adding an observation still works, even with the day closed too - that's
+      // the one exception that survives every freeze, by design.
+      const obsRes = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(adminToken),
+        payload: { text: 'Nota agregada después del cierre de caja del día' },
+      });
+      expect(obsRes.statusCode).toBe(201);
+      expect(obsRes.json().data.observations.at(-1).text).toBe('Nota agregada después del cierre de caja del día');
+    });
+  });
+
+  describe('observaciones - multiple entries, edit restricted to the author', () => {
+    async function createOpenOrder(overrides: Record<string, unknown> = {}) {
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ fecha: '2026-01-18', customer_phone: '3009991120', ...overrides }),
+      });
+      return create.json().data.id as string;
+    }
+
+    it('appends observations in order instead of overwriting, each with its own author', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991121' });
+
+      const first = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Primera nota' },
+      });
+      expect(first.statusCode).toBe(201);
+      expect(first.json().data.observations).toHaveLength(1);
+
+      const second = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Segunda nota' },
+      });
+      expect(second.statusCode).toBe(201);
+      const obs = second.json().data.observations;
+      expect(obs).toHaveLength(2);
+      expect(obs[0].text).toBe('Primera nota');
+      expect(obs[1].text).toBe('Segunda nota');
+      expect(obs[0].author.id).toBeDefined();
+    });
+
+    it('the author can edit their own observation -> 200, logged to history', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991122' });
+      const created = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Texto original' },
+      });
+      const obsId = created.json().data.observations[0].id;
+
+      const edited = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}/observations/${obsId}`,
+        headers: authHeader(encargadoToken), payload: { text: 'Texto corregido' },
+      });
+      expect(edited.statusCode).toBe(200);
+      expect(edited.json().data.observations[0].text).toBe('Texto corregido');
+
+      const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
+      const editEntry = history.find(h => h.action_type === 'observacion_editada');
+      expect(editEntry).toBeDefined();
+      expect(editEntry!.value_before).toBe('Texto original');
+      expect(editEntry!.value_after).toBe('Texto corregido');
+    });
+
+    it('a DIFFERENT staff member cannot edit someone else\'s observation -> 403 NOT_AUTHOR, text unchanged', async () => {
+      const orderId = await createOpenOrder({ customer_phone: '3009991123' });
+      const otherEmail = `other-encargado-${Date.now()}@example.com`;
+      await createTestUser(app.prisma, orgAId, 'encargado', 'OtherEncargadoPass1!', { email: otherEmail });
+      const otherToken = await login(app, otherEmail, 'OtherEncargadoPass1!');
+
+      const created = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${orderId}/observations`,
+        headers: authHeader(encargadoToken), payload: { text: 'Nota de encargado original' },
+      });
+      const obsId = created.json().data.observations[0].id;
+
+      const res = await app.inject({
+        method: 'PATCH', url: `/api/v1/orders/${orderId}/observations/${obsId}`,
+        headers: authHeader(otherToken), payload: { text: 'Intento de edición ajena' },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('NOT_AUTHOR');
+
+      const fresh = await app.prisma.orderObservation.findUniqueOrThrow({ where: { id: obsId } });
+      expect(fresh.text).toBe('Nota de encargado original');
+    });
+  });
+
+  it('POST /orders/:id/cobro closes fine with a $0 item (agotado/out of stock) mixed in - $0 is a real, final price, never treated as "still needs pricing"', async () => {
     const empleado = await app.prisma.employee.create({
       data: { org_id: orgAId, name: 'Domiciliario de Prueba 2' },
     });
@@ -335,7 +519,7 @@ describe('orders routes', () => {
         fecha: '2026-01-16', customer_phone: '3009876543', employee_id: empleado.id,
         items: [
           { product_name: 'Papa Criolla', quantity_label: '2 kg', price: 5000, sort_order: 0 },
-          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 }, // no price set
+          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 }, // agotado
         ],
       }),
     });
@@ -347,8 +531,217 @@ describe('orders routes', () => {
       headers: authHeader(encargadoToken),
       payload: { amount_received: 5000, password: ENCARGADO_PASS },
     });
+    expect(cobro.statusCode).toBe(200);
+    expect(cobro.json().data.status).toBe('cerrado');
+    expect(cobro.json().data.paid).toBe(true);
+  });
+
+  it('POST /orders/:id/cobro closes an order where EVERY item is agotado (price $0) - a legitimate $0 total, not a NO_TOTAL error', async () => {
+    const empleado = await app.prisma.employee.create({
+      data: { org_id: orgAId, name: 'Domiciliario de Prueba 3' },
+    });
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({
+        fecha: '2026-01-16', customer_phone: '3009876544', employee_id: empleado.id,
+        items: [
+          { product_name: 'Papa Criolla', quantity_label: '2 kg', price: 0, sort_order: 0 },
+          { product_name: 'Cebolla Roja', quantity_label: '1 kg', price: 0, sort_order: 1 },
+        ],
+      }),
+    });
+    const order = create.json().data;
+
+    const cobro = await app.inject({
+      method: 'POST',
+      url: `/api/v1/orders/${order.id}/cobro`,
+      headers: authHeader(encargadoToken),
+      payload: { amount_received: 0, password: ENCARGADO_PASS },
+    });
+    expect(cobro.statusCode).toBe(200);
+    expect(cobro.json().data.status).toBe('cerrado');
+    expect(cobro.json().data.amount_received).toBe('0');
+  });
+
+  it('POST /orders/:id/cobro rejects an amount_received below the total - previously unvalidated, could record a negative change_amount', async () => {
+    const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Cobro Bajo' } });
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-17', customer_phone: '3001112222', employee_id: empleado.id }),
+    });
+    const order = create.json().data; // total = 8000
+
+    const cobro = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 5000, password: ENCARGADO_PASS },
+    });
+    expect(cobro.statusCode).toBe(400);
+    expect(cobro.json().code).toBe('VALIDATION_ERROR');
+
+    const fresh = await app.prisma.order.findUnique({ where: { id: order.id } });
+    expect(fresh!.paid).toBe(false);
+  });
+
+  it('cobro-en-casa: POST /orders rejects amount_received below the total', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 5000, cod_choice: 'vuelta' }), // total is 8000
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('mayor o igual al total');
+  });
+
+  it('cobro-en-casa: POST /orders accepts "completo" (amount_received === total), stores it', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-19', payment_method: 'cod', amount_received: 8000, cod_choice: 'completo' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(Number(res.json().data.amount_received)).toBe(8000);
+    expect(res.json().data.cod_choice).toBe('completo');
+  });
+
+  it('cobro-en-casa: amount_received and cod_choice must travel together - one without the other is rejected', async () => {
+    const noChoice = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000 }),
+    });
+    expect(noChoice.statusCode).toBe(400);
+
+    const noAmount = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', cod_choice: 'completo' }),
+    });
+    expect(noAmount.statusCode).toBe(400);
+  });
+
+  it('cobro-en-casa: "completo" must equal the total exactly, not just be >= it', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 9000, cod_choice: 'completo' }), // total is 8000
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('cobro-en-casa: "completo" with a total of $0 (every item agotado/priced at 0) is allowed - 0 is a real value, only negative is rejected', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({
+        fecha: '2026-01-18', payment_method: 'cod', amount_received: 0, cod_choice: 'completo',
+        items: [{ product_name: 'Papa Criolla', quantity_label: '2 kg', price: 0, sort_order: 0 }],
+      }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(Number(res.json().data.amount_received)).toBe(0);
+  });
+
+  it('cobro-en-casa: amount_received is rejected on a non-cod order (PATCH and POST)', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-20', payment_method: 'cash', amount_received: 8000 }),
+    });
+    expect(create.statusCode).toBe(400);
+
+    const createOk = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-20', payment_method: 'cash' }),
+    });
+    const order = createOk.json().data;
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 8000 },
+    });
+    expect(patch.statusCode).toBe(400);
+  });
+
+  it('cobro-en-casa: POST /orders/:id/cobro is blocked until amount_received has been recorded, even with every other field filled', async () => {
+    const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Cod Missing' } });
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({
+        fecha: '2026-01-21', customer_phone: '3003334444', employee_id: empleado.id, payment_method: 'cod',
+      }),
+    });
+    const order = create.json().data;
+    expect(order.amount_received).toBeNull();
+
+    const cobro = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 8000, password: ENCARGADO_PASS },
+    });
     expect(cobro.statusCode).toBe(400);
     expect(cobro.json().code).toBe('MISSING_FIELDS');
-    expect(cobro.json().error).toContain('Cebolla Roja');
+    expect(cobro.json().error).toContain('monto de pago');
+
+    // Recording it via a normal PATCH (no password) unblocks the cobro.
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000, cod_choice: 'vuelta' },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const cobro2 = await app.inject({
+      method: 'POST', url: `/api/v1/orders/${order.id}/cobro`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000, password: ENCARGADO_PASS },
+    });
+    expect(cobro2.statusCode).toBe(200);
+    expect(Number(cobro2.json().data.change_amount)).toBe(2000);
+  });
+
+  it('cobro-en-casa: "vuelta" chosen with an amount that happens to equal the total still round-trips as "vuelta", not silently shown as "completo"', async () => {
+    // Zero change owed - numerically identical to "completo" if the choice were
+    // ever inferred from amount vs total instead of read from cod_choice directly.
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000, cod_choice: 'vuelta' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data.cod_choice).toBe('vuelta');
+
+    const fresh = await app.prisma.order.findUnique({ where: { id: res.json().data.id } });
+    expect(fresh!.cod_choice).toBe('vuelta');
+  });
+
+  it('cobro-en-casa: choosing/changing completo-vuelta is recorded in order history, same as any other field edit', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-18', payment_method: 'cod', amount_received: 8000, cod_choice: 'completo' }),
+    });
+    const order = create.json().data;
+
+    const createHist = await app.prisma.orderHistory.findFirst({ where: { order_id: order.id, field: 'Pago en efectivo' } });
+    expect(createHist?.value_after).toContain('Completo');
+
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { amount_received: 10000, cod_choice: 'vuelta' },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const editHist = await app.prisma.orderHistory.findFirst({
+      where: { order_id: order.id, field: 'Pago en efectivo', notes: null },
+      orderBy: { created_at: 'desc' },
+    });
+    expect(editHist?.value_before).toContain('Completo');
+    expect(editHist?.value_after).toContain('vuelta');
+    expect(editHist?.value_after).toContain('10.000');
+  });
+
+  it('a ticket-less order (channel "call") can have customer_phone set via PATCH - closes the previously-permanent cobro gap', async () => {
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+      payload: sampleOrderPayload({ fecha: '2026-01-22' }), // channel: 'call', no ticket_id, no customer_phone
+    });
+    const order = create.json().data;
+    expect(order.customer_phone).toBeFalsy();
+
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}`, headers: authHeader(encargadoToken),
+      payload: { customer_phone: '3005556666' },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().data.customer_phone).toBe('3005556666');
   });
 });

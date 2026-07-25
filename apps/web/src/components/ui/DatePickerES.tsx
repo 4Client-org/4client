@@ -95,7 +95,9 @@ export default function DatePickerES({ value, onChange, className }: Props) {
 
       {open && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 50,
+          // Above .ah (200) and the swimlane's sticky bars (zona roja 160, status
+          // header 150) - this popup used to render behind all of them once open.
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 250,
           background: 'var(--b)', border: '1px solid var(--brd)', borderRadius: 'var(--rad)',
           boxShadow: 'var(--shf)', padding: 12, width: 260,
         }}>

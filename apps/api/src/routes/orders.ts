@@ -40,7 +40,10 @@ async function createOrderWithRetryNum<T>(
 
 const orderItemSchema = z.object({
   product_name:   z.string().min(1).max(200),
-  quantity_label: z.string().max(50).optional(),
+  // Matches the DB column (schema.prisma: quantity_label @db.VarChar(100)) - staff
+  // and the client form both now allow free-text quantities ("una papa mediana",
+  // not just a number+unit), so this needs real room, not just enough for "10 Kilo".
+  quantity_label: z.string().max(100).optional(),
   price:          z.number().min(0).max(9_999_999),
   sort_order:     z.number().default(0),
   // Round-tripped from GET /orders/:id, not staff-settable in practice (the UI never
@@ -63,24 +66,54 @@ const createOrderSchema = z.object({
   notes:          z.string().max(1000).optional(),
   fecha:          z.string().optional(),
   items:          z.array(orderItemSchema).min(1).max(100),
+  // "¿Con cuánto paga el cliente?" for a cobro-en-casa (cod) order - set as soon as
+  // staff knows it (not gated behind the final password-protected /cobro), so the
+  // domiciliario can be told how much change to bring. Reuses the SAME column the
+  // final cobro already writes (amount_received) rather than a separate field - see
+  // updateOrderSchema below for the full reasoning and validation.
+  amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
+  // Which of the two choices staff picked - stored explicitly (see schema.prisma's
+  // own comment) rather than inferred from amount_received vs the total, which broke
+  // the one case where "vuelta" is typed as exactly the total (zero change owed).
+  cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
 });
 
 const updateOrderSchema = z.object({
   customer_name:  z.string().min(1).max(200).optional(),
   // customer_phone deliberately absent - it's always the ticket's real WhatsApp
   // number (set once at creation, see POST / above) and must never drift from it,
-  // so there's no field here for staff to send a different value through.
+  // so there's no field here for staff to send a different value through. EXCEPT for
+  // a ticket-less order (channel 'call', no ticket_id) - there's no ticket to source
+  // a phone from, so the PATCH handler below allows this field through ONLY in that
+  // case (checked against `existing.ticket_id`, not a client-supplied flag).
+  customer_phone: z.string().max(20).optional(),
   address:        z.string().max(500).optional(),
   payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod']).optional(),
   employee_id:    z.string().uuid().nullable().optional(),
   notes:          z.string().max(1000).optional(),
   items:          z.array(orderItemSchema).min(1).max(100).optional(),
+  // Same field as createOrderSchema above - staff picks "completo" (send the order's
+  // current total) or "necesita vuelta" (send what the client will pay with) as soon
+  // as cobro-en-casa is selected, on THIS order's regular save, no password needed.
+  // null explicitly clears it (e.g. switching away from cod). Validated below against
+  // the order's own total - must be >= 0 and >= total (0 is valid: every item
+  // agotado is a real $0 order), same rule the final /cobro already enforces, so
+  // whatever gets recorded here is guaranteed to still be a
+  // valid answer once cobro time actually comes (assuming the total hasn't changed
+  // since - the final /cobro re-validates against the total lit AT that time too).
+  amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
+  cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
+});
+
+const observationSchema = z.object({
+  text: z.string().min(1).max(1000),
 });
 
 const ORDER_FIELD_LABELS: Record<string, string> = {
   ticket_id: 'ticket', customer_name: 'nombre del cliente', customer_phone: 'teléfono',
   address: 'dirección', channel: 'canal', payment_method: 'método de pago',
   employee_id: 'domiciliario', notes: 'notas', fecha: 'fecha', items: 'productos',
+  amount_received: 'monto de pago', cod_choice: 'completo o vuelta',
 };
 
 // A blanket "Datos inválidos" doesn't tell anyone which field actually failed - turns
@@ -110,6 +143,46 @@ async function findDayClose(prisma: PrismaClient, orgId: string, fecha: Date) {
   return prisma.dailyClose.findUnique({ where: { org_id_fecha: { org_id: orgId, fecha } } });
 }
 
+// Shared by POST / and PATCH /:id - validates the "¿con cuánto paga?" amount for a
+// cobro-en-casa order against the SAME rule the final /cobro enforces (must be a
+// real answer, > 0, and enough to cover the total): a value recorded here that
+// couldn't survive that same check later would be worse than not recording anything
+// at all - staff would trust a number that's already known-wrong. Returns an error
+// string, or null if the value (or its absence) is fine.
+function validateCodAmount(
+  amountReceived: number | null | undefined,
+  codChoice: string | null | undefined,
+  paymentMethod: string,
+  total: number,
+): string | null {
+  if (amountReceived === undefined && codChoice === undefined) return null;
+  const amount = amountReceived ?? null;
+  const choice = codChoice ?? null;
+  if (amount === null && choice === null) return null;
+  if (paymentMethod !== 'cod') return 'El monto de pago solo aplica a pedidos con cobro en casa';
+  // Both travel together always - a bare amount with no recorded choice (or vice
+  // versa) can't be hydrated back into "completo" vs "vuelta" later (see
+  // schema.prisma's cod_choice comment for why that distinction can't be inferred
+  // from the number alone).
+  if (amount === null || choice === null) return 'Indica si el cliente paga completo o cuánto paga (con vuelta)';
+  // 0 is a real, valid total (every item on the order is agotado/priced at 0) - only
+  // an actually negative amount is ever wrong, same rule as an item's own price.
+  if (amount < 0) return 'El monto no puede ser negativo';
+  if (amount < total) return `El monto debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`;
+  if (choice === 'completo' && amount !== total) return 'El monto de "completo" debe ser igual al total del pedido';
+  return null;
+}
+
+// "Completo/vuelta" shown as one combined, readable history value (not two separate
+// field-by-field diffs) - staff picks both together, and "vuelta $2.000" only makes
+// sense read alongside which choice it was for. Shared by POST / (creation) and
+// PATCH /:id (edit diff).
+function codDisplay(choice: string | null | undefined, amount: any, total: number): string {
+  if (!choice) return 'Sin definir';
+  if (choice === 'completo') return `Completo ($${Number(amount ?? total).toLocaleString('es-CO')})`;
+  return `Necesita vuelta - paga con $${Number(amount).toLocaleString('es-CO')} (vuelta $${(Number(amount) - total).toLocaleString('es-CO')})`;
+}
+
 function buildOrderSelect(includeHistory = false) {
   return {
     id: true, org_id: true, ticket_id: true, num: true,
@@ -117,13 +190,17 @@ function buildOrderSelect(includeHistory = false) {
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
-    change_amount: true, locked: true, caja_cerrada: true, notes: true,
+    change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
     client_modified: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
     registeredBy: { select: { id: true, name: true } },
     paidBy: { select: { id: true, name: true } },
     items: { orderBy: { sort_order: 'asc' as const } },
+    observations: {
+      orderBy: { created_at: 'asc' as const },
+      include: { author: { select: { id: true, name: true } } },
+    },
     ...(includeHistory ? {
       history: {
         orderBy: { created_at: 'asc' as const },
@@ -163,6 +240,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
 
     const { items, fecha, ...rest } = body.data;
+
+    const codError = validateCodAmount(rest.amount_received, rest.cod_choice, rest.payment_method, items.reduce((s, i) => s + i.price, 0));
+    if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // ticket_id/employee_id are just UUIDs from the request body - Prisma's FK check
     // only confirms the row exists SOMEWHERE, not that it belongs to this org (both
@@ -232,6 +312,18 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         })),
       });
     }
+    if (order.cod_choice) {
+      const createTotal = order.items.reduce((s, i) => s + Number(i.price), 0);
+      await fastify.prisma.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: order.id, actor_id: req.user.userId,
+          action_type: 'edit', field: 'Pago en efectivo',
+          value_before: 'Sin definir',
+          value_after: codDisplay(order.cod_choice, order.amount_received, createTotal),
+          notes: 'Definido al crear el pedido',
+        },
+      });
+    }
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:created', order as any);
 
@@ -262,12 +354,41 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    if (existing.locked) return reply.status(409).send({ error: 'Pedido bloqueado', code: 'ORDER_LOCKED' });
+
+    // A locked/closed order is normally frozen for everyone - one exception: an
+    // admin (or dev, which bypasses every requireRole check anyway - see
+    // middleware/auth.ts) can fully edit even a LOCKED order - but NOT once the
+    // whole day has been cerrado (DAY_CLOSED below still blocks everyone, admin
+    // included; that's a stronger, whole-day accounting freeze, a separate concern
+    // from this one order being individually paid/closed). Adding/editing an
+    // observación is no longer part of this route at all (see POST/PATCH
+    // /:id/observations below) - those stay open on a locked/closed order without
+    // needing a carve-out here.
+    const isAdminOrDev = req.user.role === 'admin' || req.user.role === 'dev';
+
     if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
       return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
     }
+    if (existing.locked && !isAdminOrDev) {
+      return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
+    }
 
     const { items, ...fields } = body.data;
+
+    // customer_phone only ever settable when this order has no ticket - one with a
+    // ticket must always mirror that ticket's real WhatsApp number (see
+    // updateOrderSchema's comment), so a value sent here is silently dropped rather
+    // than trusted in that case. This is what actually lets a ticket-less (channel
+    // 'call') order that was created with no phone yet get one later - previously
+    // there was no path to set it at all, permanently blocking that order's cobro.
+    if (fields.customer_phone !== undefined && existing.ticket_id) {
+      delete fields.customer_phone;
+    }
+
+    const totalForCodCheck = (items ?? await fastify.prisma.orderItem.findMany({ where: { order_id: id }, select: { price: true } }))
+      .reduce((s, i) => s + Number(i.price), 0);
+    const codError = validateCodAmount(fields.amount_received, fields.cod_choice, fields.payment_method ?? existing.payment_method, totalForCodCheck);
+    if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
 
     // Same cross-org guard as POST / - employee_id is a bare UUID from the request
     // body, and Employee.id is globally unique (not scoped per org), so an id
@@ -328,6 +449,23 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const prevItems = items !== undefined
       ? await fastify.prisma.orderItem.findMany({ where: { order_id: id } })
       : [];
+
+    if (fields.cod_choice !== undefined || fields.amount_received !== undefined) {
+      const beforeTotal = items !== undefined ? prevItems.reduce((s, i) => s + Number(i.price), 0) : totalForCodCheck;
+      const before = codDisplay(existing.cod_choice, existing.amount_received, beforeTotal);
+      const after = codDisplay(
+        fields.cod_choice !== undefined ? fields.cod_choice : existing.cod_choice,
+        fields.amount_received !== undefined ? fields.amount_received : existing.amount_received,
+        totalForCodCheck,
+      );
+      if (before !== after) {
+        historyEntries.push({
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'edit', field: 'Pago en efectivo',
+          value_before: before, value_after: after,
+        });
+      }
+    }
 
     const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
       if (items !== undefined) {
@@ -405,6 +543,73 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     return reply.send({ data: updatedOrder });
   });
 
+  // POST /api/v1/orders/:id/observations - adds a new note, stacked below any
+  // existing ones. Always allowed, even on a locked/closed order or a day already
+  // cerrado (same "pedido cerrado, pasó algo" exception the old single-field
+  // `observacion` had) - deliberately does NOT run the DAY_CLOSED/ORDER_LOCKED
+  // checks that guard PATCH /:id.
+  fastify.post('/:id/observations', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = observationSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'La observación no puede estar vacía', code: 'VALIDATION_ERROR' });
+
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+
+    const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
+      await tx.orderObservation.create({
+        data: { org_id: req.user.orgId, order_id: id, author_id: req.user.userId, text: body.data.text },
+      });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'observacion', field: 'Observación',
+          value_before: '', value_after: body.data.text,
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
+    return reply.status(201).send({ data: updatedOrder });
+  });
+
+  // PATCH /api/v1/orders/:id/observations/:obsId - only the staff member who wrote
+  // the note can edit it (checked against author_id, no admin override - a
+  // deliberately narrower rule than PATCH /:id's admin-can-edit-locked exception).
+  // Same "always allowed regardless of locked/day-closed" as POST above.
+  fastify.patch('/:id/observations/:obsId', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id, obsId } = req.params as { id: string; obsId: string };
+    const body = observationSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'La observación no puede estar vacía', code: 'VALIDATION_ERROR' });
+
+    const existing = await fastify.prisma.orderObservation.findFirst({
+      where: { id: obsId, order_id: id, org_id: req.user.orgId },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Observación no encontrada', code: 'NOT_FOUND' });
+    if (existing.author_id !== req.user.userId) {
+      return reply.status(403).send({ error: 'Solo quien escribió la observación puede editarla', code: 'NOT_AUTHOR' });
+    }
+    if (body.data.text === existing.text) {
+      return reply.status(400).send({ error: 'No hay cambios que guardar', code: 'VALIDATION_ERROR' });
+    }
+
+    const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
+      await tx.orderObservation.update({ where: { id: obsId }, data: { text: body.data.text } });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'observacion_editada', field: 'Observación',
+          value_before: existing.text, value_after: body.data.text,
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedOrder as any);
+    return reply.send({ data: updatedOrder });
+  });
+
   // PATCH /api/v1/orders/:id/status
   fastify.patch('/:id/status', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -476,18 +681,37 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     if (!existing.payment_method || existing.payment_method === 'sin_asignar') missing.push('método de pago');
     if (!existing.employee_id) missing.push('domiciliario');
     if (existing.items.length === 0) missing.push('productos');
-    // Every item needs a real price - a single unpriced product (even just one, even
-    // if the rest of the order totals something > 0) must block closing, not just an
-    // all-zero order.
-    const unpriced = existing.items.filter(i => Number(i.price) <= 0);
-    if (unpriced.length > 0) missing.push(`precio de ${unpriced.map(i => i.product_name).join(', ')}`);
+    // $0 is a legitimate, final price (item is agotado) - never treated as "still
+    // needs pricing". Negative never reaches here at all: the item schema (price:
+    // z.number().min(0)) already rejects it on every write path, so there's nothing
+    // left to validate here beyond the length check above.
+    // A cobro-en-casa order must already have its "¿con cuánto paga?" answer recorded
+    // (set at creation/edit time, see updateOrderSchema/validateCodAmount above) -
+    // staff can't reach the final password-gated confirmation without ever having
+    // decided "completo" or a real amount, matching every other required field here.
+    if (existing.payment_method === 'cod' && existing.amount_received == null) {
+      missing.push('monto de pago en efectivo (completo o con vuelta)');
+    }
     if (missing.length > 0) {
       return reply.status(400).send({ error: `Faltan datos para cerrar el pedido: ${missing.join(', ')}`, code: 'MISSING_FIELDS' });
     }
 
+    // A $0 total is legitimate - every item agotado (priced $0 each) is a real,
+    // closeable order, not an error state. No NO_TOTAL block here anymore; the sum
+    // of non-negative item prices (enforced at the schema level) can never go negative.
     const total = existing.items.reduce((s, i) => s + Number(i.price), 0);
-    if (total <= 0) {
-      return reply.status(400).send({ error: 'No es posible cerrar el pedido porque no tiene un total calculado', code: 'NO_TOTAL' });
+    // Was previously unchecked - a submitted amount below the total silently produced
+    // a NEGATIVE change_amount, recorded as-is. Same rule as validateCodAmount above,
+    // applied here too since this is the one place that ALWAYS runs regardless of
+    // payment method (cash/transfer confirmations go through this exact same field).
+    // total is always >= 0 here (see above), so amount_received is always being
+    // checked against a real total - < 0 (not <= 0) for consistency with
+    // validateCodAmount's own rule (amount_received === total === 0 must pass).
+    if (body.data.amount_received < 0) {
+      return reply.status(400).send({ error: 'El monto recibido no puede ser negativo', code: 'VALIDATION_ERROR' });
+    }
+    if (body.data.amount_received < total) {
+      return reply.status(400).send({ error: `El monto recibido debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`, code: 'VALIDATION_ERROR' });
     }
     const change = body.data.amount_received - total;
 

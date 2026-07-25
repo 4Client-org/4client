@@ -3,8 +3,17 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
-const SEED_ADMIN_PASS = process.env.SEED_ADMIN_PASS ?? 'FruverAdmin2026!';
-const SEED_DEV_PASS   = process.env.SEED_DEV_PASS   ?? 'FruverDevSeed2026!';
+// No hardcoded fallback - a password baked into git history is a known password
+// forever, for whichever account ends up created with it (this script's target org/
+// emails match the real client, not a throwaway fixture). Failing loud here means
+// the worst case of forgetting to set these is "the script refuses to run", not
+// "creates or resets a real account to a string anyone with repo read access knows".
+if (!process.env.SEED_ADMIN_PASS || !process.env.SEED_DEV_PASS) {
+  console.error('❌ SEED_ADMIN_PASS y SEED_DEV_PASS son obligatorias (sin valor por defecto) - defínelas antes de correr el seed.');
+  process.exit(1);
+}
+const SEED_ADMIN_PASS = process.env.SEED_ADMIN_PASS;
+const SEED_DEV_PASS   = process.env.SEED_DEV_PASS;
 
 const PRODUCTOS = [
   // Verduras
@@ -92,20 +101,26 @@ async function main() {
   });
   console.log(`✅ Org: ${org.name} (${org.id})`);
 
-  // Usuario admin
+  // Usuario admin - `update: {}` on purpose: this script is meant to be safely
+  // re-runnable to add/fix products (see the loop below) without silently resetting
+  // a real, already-in-use account's password/role/active status back to whatever
+  // this run's env vars happen to be. Only a genuinely NEW account gets these values;
+  // an existing one is left exactly as staff has since changed it (e.g. via
+  // POST /users/:id/reset-password, which is the actual supported way to reset one).
   const adminHash = await bcrypt.hash(SEED_ADMIN_PASS, 12);
   const admin = await prisma.user.upsert({
     where: { org_id_email: { org_id: org.id, email: 'admin@fruver.com' } },
-    update: { password_hash: adminHash, role: 'admin', active: true },
+    update: {},
     create: { org_id: org.id, email: 'admin@fruver.com', password_hash: adminHash, name: 'Juan Ignasio', role: 'admin' },
   });
   console.log(`✅ Admin: ${admin.email}`);
 
-  // Usuario dev (super-admin del sistema)
+  // Usuario dev (super-admin del sistema) - same "never touch an existing account"
+  // reasoning as admin above.
   const devHash = await bcrypt.hash(SEED_DEV_PASS, 12);
   await prisma.user.upsert({
     where: { org_id_email: { org_id: org.id, email: 'dev@fruver.com' } },
-    update: { password_hash: devHash, role: 'dev', active: true },
+    update: {},
     create: { org_id: org.id, email: 'dev@fruver.com', password_hash: devHash, name: 'Jose Alvarez', role: 'dev' },
   });
   console.log('✅ Dev: dev@fruver.com');

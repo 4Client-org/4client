@@ -9,6 +9,11 @@
   --shf:0 8px 32px rgba(26,122,74,.18);
   --rad:12px; --radb:18px;
   --f:'Inter',system-ui,sans-serif;
+  /* Mirrors .ac's own padding at each breakpoint (see the media queries near the
+     bottom of this file) - the swimlane's sticky bars use this to bleed through
+     .ac's padding so they reach the true top of the scroll area instead of
+     stopping short by exactly this amount. */
+  --ac-pad:22px;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;font-size:16px;-webkit-font-smoothing:antialiased;}
@@ -33,13 +38,19 @@ input,select,textarea{font-family:var(--f);}
 /* BUTTONS */
 .bpri{display:block;width:100%;padding:14px;background:var(--v);color:var(--b);border:none;border-radius:var(--rad);font-size:15px;font-weight:700;cursor:pointer;transition:all .2s;margin-top:4px;}
 .bpri:hover{background:var(--vd);transform:translateY(-1px);box-shadow:0 4px 16px rgba(26,122,74,.3);}
-.bpri:disabled{opacity:.6;cursor:not-allowed;transform:none;}
+.bpri:disabled{opacity:.6;cursor:not-allowed;transform:none;pointer-events:none;}
 .bsec{padding:11px 18px;background:var(--bg);color:var(--n);border:2px solid var(--brd);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;}
 .bsec:hover{border-color:var(--n);}
 .bdel{padding:11px 16px;background:var(--rc);color:var(--r);border:2px solid var(--r);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
 .bdel:hover{background:var(--r);color:#fff;}
 .bverde{padding:11px 16px;background:var(--vc);color:var(--v);border:2px solid var(--v);border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
 .bverde:hover{background:var(--v);color:#fff;}
+/* .bpri has its own :disabled rule above (predates this) - these three never had
+   one, so a disabled button using them was functionally inert (React blocks the
+   click) but visually identical to an active one: full color, pointer cursor, still
+   reacting to hover. pointer-events:none also kills the :hover rules above outright,
+   not just the click itself. */
+.bsec:disabled,.bdel:disabled,.bverde:disabled{opacity:.5;cursor:not-allowed;pointer-events:none;}
 .bnew{background:var(--v);color:#fff;border:none;padding:10px 16px;border-radius:var(--rad);font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
 .bnew:hover{background:var(--vd);transform:translateY(-1px);box-shadow:0 4px 14px rgba(26,122,74,.3);}
 .bout{background:none;border:2px solid var(--brd);color:var(--gt);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;transition:all .2s;font-weight:600;white-space:nowrap;}
@@ -62,13 +73,42 @@ input,select,textarea{font-family:var(--f);}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
-.ac{padding:22px;flex:1;min-height:0;overflow-y:auto;}
+/* No top padding here on purpose - the swimlane's sticky bars (zona roja, the
+   status header row) need `top:0` to mean truly flush against .ac's visible top
+   edge (right under .ah), with zero built-in gap. Each tab's own first child adds
+   that same amount back as its own paddingTop instead, which - unlike .ac's
+   padding - doesn't affect where sticky descendants measure "stuck" from.
+   overflow-x:auto here (not just overflow-y) so THIS is the swimlane's one and
+   only scrolling ancestor - see .slane-wrap below for why it can't own its own
+   horizontal scroll without breaking the sticky status-header row. */
+.ac{padding:0 var(--ac-pad) var(--ac-pad);flex:1;min-height:0;overflow:auto;}
 .ac.inbox-mode{overflow:hidden;display:flex;flex-direction:column;padding-bottom:0;}
 .ac.wm{background-image:url('/fruver-san-gabriel-watermark.png');background-repeat:no-repeat;background-position:center 120px;background-size:520px auto;}
 
 /* SWIMLANE */
-.slane-wrap{overflow-x:auto;margin-bottom:20px;}
+/* No overflow-x:auto here - horizontal scroll now lives on .ac instead (see its
+   own comment). Setting overflow-x without overflow-y here doesn't just add a
+   horizontal scrollbar: per the CSS Overflow spec, a plain (unset) overflow-y
+   computes to `auto` too whenever overflow-x isn't `visible` - EVEN if overflow-y
+   is explicitly written as `visible` (verified: that override still applies to an
+   explicit declaration, not just the default). That silently made this element
+   the nearest scrolling ancestor for the sticky status-header row instead of .ac,
+   which broke its stickiness outright past a certain scroll depth (confirmed with
+   an isolated repro: the header stopped sticking at all and scrolled off-screen
+   like ordinary content, which is what let it drift down over the ticket cards
+   instead of stopping flush under zona roja). */
+.slane-wrap{margin-bottom:20px;}
 .slane{display:grid;grid-template-columns:260px repeat(6,minmax(120px,1fr));min-width:1050px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
+/* Header row is its OWN grid (a sibling of the body grid, not a row inside it) -
+   position:sticky on a grid item only sticks within its own grid AREA, so a
+   header cell that's row 1 of a grid whose later rows are the (much taller)
+   scrolling ticket list can never stick past that single row's height once it
+   scrolls by. Splitting them into two separate grids (both still using .slane so
+   they share identical column widths at every breakpoint) is what actually lets
+   the header stick for the full scroll range. Kept inside the same .slane-wrap as
+   the body so both still scroll horizontally in sync on narrow screens. */
+.slane-header{margin-bottom:0;border-radius:var(--rad) var(--rad) 0 0;border-bottom:none;}
+.slane-body{border-radius:0 0 var(--rad) var(--rad);border-top:none;}
 .slane-hcell{padding:10px 12px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--gt);background:var(--b);border-bottom:2px solid var(--brd);border-right:2px solid var(--brd);display:flex;align-items:center;gap:6px;}
 .slane-hcell:last-child{border-right:none;}
 .slane-hcell.wpp-col{background:var(--vc);color:var(--vd);}
@@ -215,6 +255,12 @@ input,select,textarea{font-family:var(--f);}
 /* DASHBOARD */
 .agrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:0;}
 @media(max-width:1100px){.agrid{grid-template-columns:1fr;}}
+/* Same card grid as .agrid, just 4 columns - the chat-stats section needs a 4th
+   tile (chats sin pedido) that the 3-column order-stats section right next to it
+   doesn't, so this is its own class rather than changing .agrid for both. */
+.agrid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:0;}
+@media(max-width:1100px){.agrid4{grid-template-columns:1fr 1fr;}}
+@media(max-width:700px){.agrid4{grid-template-columns:1fr;}}
 .arow{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;align-items:start;}
 @media(max-width:900px){.arow{grid-template-columns:1fr;gap:14px;}}
 .acard{background:var(--b);border-radius:var(--rad);padding:18px;box-shadow:var(--sh);text-align:center;}
@@ -357,7 +403,7 @@ input,select,textarea{font-family:var(--f);}
    RESPONSIVE
    Targets: tablet landscape + phone landscape for the swimlane
    board (portrait/narrow-phone swimlane is explicitly out of
-   scope - too many columns to ever look good narrow; .slane-wrap
+   scope - too many columns to ever look good narrow; .ac
    already has overflow-x:auto as the fallback safety net).
    Modals stay usable down to phone portrait.
    Ordered widest -> narrowest so later blocks override earlier
@@ -379,12 +425,12 @@ input,select,textarea{font-family:var(--f);}
   .dc-tot{font-size:12px;}
   .dc-btn{width:30px;height:32px;font-size:15px;}
   .dc-det-btn{height:32px;font-size:10px;padding:0 3px;}
-  .ac{padding:16px;}
+  .ac{padding:0 16px 16px;--ac-pad:16px;}
   .tab{padding:0 13px;font-size:13px;}
   .khead{gap:8px;}
 }
 
-/* PHONE LANDSCAPE (~560px-900px): narrowest realistic target; .slane-wrap horizontal scroll is the safety net when content doesn't perfectly fit */
+/* PHONE LANDSCAPE (~560px-900px): narrowest realistic target; .ac's horizontal scroll is the safety net when content doesn't perfectly fit */
 @media (max-width:900px){
   .slane{grid-template-columns:148px repeat(6,minmax(108px,1fr));min-width:796px;}
   .slane-hcell{padding:6px 6px;font-size:9px;letter-spacing:.3px;}
@@ -408,7 +454,7 @@ input,select,textarea{font-family:var(--f);}
   .huser{padding:5px 10px;gap:6px;}
   .un{font-size:12px;}
   .ur2{font-size:10px;}
-  .ac{padding:12px;}
+  .ac{padding:0 12px 12px;--ac-pad:12px;}
   .khead{margin-bottom:12px;}
   .ktit{font-size:17px;}
 }
@@ -416,7 +462,7 @@ input,select,textarea{font-family:var(--f);}
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
    but guard against page-level breakage and keep modals usable single-column */
 @media (max-width:560px){
-  .ac{overflow-x:hidden;padding:10px;}
+  .ac{overflow-x:hidden;padding:0 10px 10px;}
   .khead{gap:8px;}
   .ktit{font-size:16px;}
   .agrid{grid-template-columns:1fr;}

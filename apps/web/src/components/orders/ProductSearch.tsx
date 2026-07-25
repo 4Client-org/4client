@@ -1,5 +1,16 @@
-import { useState, useMemo, useEffect, useRef, KeyboardEvent } from 'react';
+import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef, KeyboardEvent } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
+import { toast } from '../ui/Toast';
+
+// A negative price must never make it into `items` at all - not just get blocked
+// downstream at Guardar/Copiar/PDF/Enviar factura (defense-in-depth, still in place
+// in DetallePedidoModal/NuevoPedidoModal) but rejected right here, at the only
+// places a value actually commits: Enter and the ✓ button. An empty/non-numeric
+// string isn't "negative" - that's the separate "no price set yet" case.
+function isNegativePrice(priceStr: string | undefined): boolean {
+  const n = parseFloat(priceStr ?? '');
+  return !isNaN(n) && n < 0;
+}
 
 interface Product { id: string; name: string; category: string; }
 interface Item { product_name: string; quantity_label: string; price: string; added_by_client?: boolean; }
@@ -13,6 +24,19 @@ interface Props {
   clearKey?: number;
 }
 
+// Exposed so a parent (NuevoPedidoModal/DetallePedidoModal) can force-commit
+// whatever's mid-edit in the Factbox table right before it reads `items` to save -
+// otherwise a row left open (typed but not confirmed with Enter/✓) was silently
+// dropped by a direct click on the modal's own "Guardar" button: that button only
+// ever read the `items` PROP, which commitEditField/saveEdit only update via
+// onChange, a step the person never triggered. Returns the fully-merged array
+// synchronously (not just via the onChange side effect) because the caller needs it
+// in the SAME tick, before its own save fires - onChange's resulting setItems is
+// only visible on the next render, too late for a save already about to happen.
+export interface ProductSearchHandle {
+  commitPendingEdit: () => Item[];
+}
+
 function groupByCategory(products: Product[]) {
   const order: string[] = [];
   const groups: Record<string, Product[]> = {};
@@ -23,10 +47,13 @@ function groupByCategory(products: Product[]) {
   return order.map(cat => ({ category: cat, products: groups[cat] }));
 }
 
-export default function ProductSearch({ products, items, locked, onChange, onLocalDirty, clearKey }: Props) {
+const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
+  { products, items, locked, onChange, onLocalDirty, clearKey }, ref,
+) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
+  const factboxSearchRef = useRef<HTMLInputElement>(null);
   const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string }>>({});
   // Which committed item (by product_name) is being edited inline in the Factbox
   // table below - editing never touches the catalog's collapsed state anymore, so
@@ -42,12 +69,17 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
   const [manualQty, setManualQty] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualError, setManualError] = useState('');
+  // Filters the Factbox table below (already-selected items), separate from the
+  // catalog search above - lets staff quickly find one line to price on an order
+  // with many items, instead of scrolling the whole committed list.
+  const [factboxSearch, setFactboxSearch] = useState('');
 
   // Clear local inputs when parent signals a save (clearKey increments)
   useEffect(() => {
     if (clearKey == null) return;
     setLocalInputs({});
     onLocalDirty?.(false);
+    setFactboxSearch('');
   }, [clearKey]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
@@ -80,9 +112,28 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     setLocalInputs(prev => ({ ...prev, [name]: { ...getLocal(name), [field]: val } }));
   }
 
-  function commitProduct(productName: string) {
+  // Returns the resulting items array (not just void) - commitPendingEdit below
+  // needs the ACTUAL merged list synchronously, not the state update this also
+  // triggers via onChange, which only lands on the next render and would still be
+  // stale to whatever reads `items` right after calling it in the same tick.
+  // Returns null specifically when blocked (negative price) - distinct from the
+  // legitimate "nothing typed" no-op (which returns `items` unchanged) - callers
+  // that close the edit row on commit (saveEdit) need to tell those apart, so a
+  // blocked attempt doesn't get silently discarded by closing the row anyway.
+  function commitProduct(productName: string): Item[] | null {
     const local = localInputs[productName];
-    if (!local?.qty.trim() && !local?.price.trim()) return;
+    if (isNegativePrice(local?.price)) {
+      toast('El precio no puede ser negativo', true);
+      return null;
+    }
+    // Nothing typed at all is only a no-op for a brand-new catalog row (nothing to
+    // add yet). An EXISTING factbox item being edited must still commit even if
+    // both fields end up cleared - otherwise the edit (e.g. clearing a stale price
+    // down to nothing, meaning to leave it at 0) is silently discarded instead of
+    // saved, and the row keeps showing its old value with no way to tell why.
+    if (!local?.qty.trim() && !local?.price.trim() && !items.some(i => i.product_name === productName)) {
+      return items;
+    }
 
     // Preserve provenance - staff editing qty/price on a line the client added
     // (typically filling in the price, which the client's form never sets) must not
@@ -91,7 +142,9 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     const newItem: Item = {
       product_name: productName,
       quantity_label: local.qty.trim(),
-      price: local.price.trim(),
+      // Left blank -> 0, same reasoning as commitEditField below: a blank price
+      // must never be what actually blocks saving the order.
+      price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
     };
 
@@ -112,6 +165,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     // the catalog is collapsed, e.g. when this commit came from an inline Factbox edit)
     setSearch('');
     requestAnimationFrame(() => searchRef.current?.focus());
+    return next;
   }
 
   function handleKey(e: KeyboardEvent<HTMLInputElement>, productName: string) {
@@ -125,34 +179,53 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     onChange(items.filter(i => i.product_name !== productName));
   }
 
-  function editItem(item: Item) {
+  // Which field to focus once editingRow actually changes (the effect below can't
+  // take a parameter, since it just reacts to state) - defaults to qty (pencil
+  // click, or clicking the quantity value itself), set to 'price' right before
+  // switching rows via an arrow key so landing on the new row lands in the same
+  // column the person was already in.
+  const editFocusField = useRef<'qty' | 'price'>('qty');
+
+  function editItem(item: Item, field: 'qty' | 'price' = 'qty') {
     // A price of "0" (unset) showed literally as "0" in the input, forcing whoever's
     // typing to delete it first - show it empty instead, same as a genuinely unset one.
     const priceVal = parseFloat(item.price) > 0 ? item.price : '';
     setLocalInputs(prev => ({ ...prev, [item.product_name]: { qty: item.quantity_label, price: priceVal } }));
     onLocalDirty?.(true);
+    editFocusField.current = field;
     setEditingRow(item.product_name);
   }
 
   // Commits the currently-typed qty/price for a row WITHOUT closing its edit mode -
   // used when Enter just advances focus to the next field, not when the person is
   // done with the whole row (that's saveEdit, which also calls this then closes).
-  function commitEditField(productName: string) {
+  // Returns false when blocked (negative price) - callers (advanceToPrice/
+  // advanceToNextRow) must NOT move focus away in that case, so the person stays
+  // right on the bad value instead of it silently vanishing to the next field.
+  function commitEditField(productName: string): boolean {
     const local = localInputs[productName];
-    if (local === undefined) return;
+    if (local === undefined) return true;
+    if (isNegativePrice(local.price)) {
+      toast('El precio no puede ser negativo', true);
+      return false;
+    }
     const priorItem = items.find(i => i.product_name === productName);
     const newItem: Item = {
       product_name: productName,
       quantity_label: local.qty.trim(),
-      price: local.price.trim(),
+      // Left blank -> 0 immediately, not just at save time - staff shouldn't have
+      // to type a price to move on, and a blank value must never be what blocks
+      // saving the order.
+      price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
     };
     onChange(items.map(i => i.product_name === productName ? newItem : i));
+    return true;
   }
 
   // Enter in the qty field of a row being edited: save qty, jump to price - same row.
   function advanceToPrice(productName: string) {
-    commitEditField(productName);
+    if (!commitEditField(productName)) return;
     requestAnimationFrame(() => { editPriceRef.current?.focus(); editPriceRef.current?.select(); });
   }
 
@@ -160,11 +233,73 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
   // edit mode - the editingRow effect below already focuses editQtyRef whenever
   // editingRow changes, so opening the next row is all this needs to do.
   function advanceToNextRow(productName: string) {
-    commitEditField(productName);
+    if (!commitEditField(productName)) return;
     const idx = items.findIndex(i => i.product_name === productName);
     const next = idx >= 0 ? items[idx + 1] : undefined;
     if (next) editItem(next);
     else setEditingRow(null); // last row - nothing further to advance to
+  }
+
+  // Up/Down between rows, same column: commits whatever's typed in the row being
+  // left (same as Enter does) - moving away from a row must never silently drop
+  // what was just typed there, and NOT move at all if that commit is blocked
+  // (negative price), matching advanceToPrice/advanceToNextRow's own guard.
+  // Navigates the FILTERED (visibleItems) list, not the full unfiltered one - the
+  // point of the factbox search box is to narrow down which rows arrow-nav even
+  // reaches.
+  function moveToRow(fromProductName: string, direction: 'up' | 'down', field: 'qty' | 'price') {
+    if (!commitEditField(fromProductName)) return;
+    const idx = visibleItems.findIndex(i => i.product_name === fromProductName);
+    if (idx < 0) return;
+    if (direction === 'up' && idx === 0) {
+      // Clear editingRow (not just move focus) - if this row was already the one
+      // in edit mode, calling editItem on it again from the search box's ArrowDown
+      // (same product_name) would be a no-op setState, and the effect that focuses
+      // the field only fires when editingRow actually CHANGES. Without this, arrowing
+      // up to the search box then back down landed nowhere.
+      setEditingRow(null);
+      factboxSearchRef.current?.focus();
+      return;
+    }
+    const next = visibleItems[direction === 'up' ? idx - 1 : idx + 1];
+    if (next) editItem(next, field);
+  }
+
+  // Shared by both the qty and price inputs of a row being edited. Enter/Escape
+  // behavior is unchanged (still per-field, see advanceToPrice/advanceToNextRow/
+  // cancelEdit); this adds arrow-key movement between editable fields:
+  // Left/Right toggle qty<->price on the SAME row, Up/Down move to the row
+  // above/below in the SAME column.
+  function handleEditArrowKeys(e: KeyboardEvent<HTMLInputElement>, productName: string, field: 'qty' | 'price') {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveToRow(productName, e.key === 'ArrowUp' ? 'up' : 'down', field);
+      return;
+    }
+    if (e.key === 'ArrowRight' && field === 'qty') {
+      // Boundary-aware: a plain ArrowRight while there's still text ahead of the
+      // cursor must move the cursor through the text like normal, same as any
+      // other input - only jump fields once there's nowhere left to move within
+      // this one. (Qty is a text input, so selectionStart is reliable here.)
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      editFocusField.current = 'price';
+      editPriceRef.current?.focus();
+      editPriceRef.current?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && field === 'price') {
+      // Price is type="number" - selectionStart isn't reliably readable on that
+      // input type across browsers, so this jumps unconditionally rather than
+      // risk throwing/silently doing nothing on a boundary check that can't be
+      // trusted here. Prices are short and usually retyped fresh (select() on
+      // focus already selects everything), so this is a fair trade-off.
+      e.preventDefault();
+      editFocusField.current = 'qty';
+      editQtyRef.current?.focus();
+      editQtyRef.current?.select();
+    }
   }
 
   function cancelEdit(productName: string) {
@@ -176,14 +311,31 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
     setEditingRow(null);
   }
 
-  function saveEdit(productName: string) {
-    commitProduct(productName);
+  // Returns null when blocked (negative price) too, same as commitProduct - the ✓
+  // button must leave the row open on a rejected value instead of closing over it
+  // and silently reverting to whatever the item was before.
+  function saveEdit(productName: string): Item[] | null {
+    const next = commitProduct(productName);
+    if (next === null) return null;
     setEditingRow(null);
+    return next;
   }
+
+  useImperativeHandle(ref, () => ({
+    // Falls back to the current `items` (not null) when blocked - the modal's own
+    // Guardar just proceeds without that particular edit rather than erroring out;
+    // the person already saw the "no puede ser negativo" toast and the row stayed
+    // open with their bad value still in it for them to fix.
+    commitPendingEdit: () => (editingRow ? saveEdit(editingRow) : items) ?? items,
+  }));
 
   function addManualProduct() {
     const name = manualName.trim();
     if (!name) return;
+    if (isNegativePrice(manualPrice)) {
+      setManualError('El precio no puede ser negativo.');
+      return;
+    }
     // Items are keyed by product_name throughout this file (React key, edit/remove
     // lookups) - a manual entry colliding with an existing line would silently merge
     // into/overwrite it instead of adding a new one.
@@ -198,11 +350,17 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
 
   useEffect(() => {
     if (!editingRow) return;
-    editQtyRef.current?.focus();
-    editQtyRef.current?.select();
+    const ref = editFocusField.current === 'price' ? editPriceRef : editQtyRef;
+    ref.current?.focus();
+    ref.current?.select();
   }, [editingRow]);
 
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
+  const factboxSearchLower = factboxSearch.toLowerCase().trim();
+  const visibleItems = useMemo(
+    () => factboxSearchLower ? items.filter(i => i.product_name.toLowerCase().includes(factboxSearchLower)) : items,
+    [items, factboxSearchLower],
+  );
 
   // Locked mode: read-only table
   if (locked) {
@@ -331,6 +489,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
+                        min="0"
                         value={local.price}
                         onChange={e => setLocal(p.name, 'price', e.target.value)}
                         onKeyDown={e => handleKey(e, p.name)}
@@ -362,13 +521,45 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
       )}
 
       {/* Factbox - committed items table with edit/remove */}
+      {items.length > 0 && (
+        <div className="psearch" style={{ marginBottom: 7 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" strokeWidth="2.5">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            ref={factboxSearchRef}
+            type="text"
+            placeholder="Buscar entre los productos del pedido..."
+            value={factboxSearch}
+            onChange={e => setFactboxSearch(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'ArrowDown' && visibleItems.length > 0) {
+                e.preventDefault();
+                editItem(visibleItems[0], 'qty');
+              }
+            }}
+          />
+          {factboxSearch && (
+            <button onClick={() => setFactboxSearch('')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 18, color: 'var(--gt)', lineHeight: 1 }}>
+              ×
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ border: '1px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden', marginBottom: 14 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        {/* table-layout:fixed + explicit column widths - without this, a very long
+            quantity_label (free text is allowed now, not just "10 Kilo") makes
+            auto layout grow that COLUMN (and the whole table) to fit it, eating
+            into the Producto column's space. With fixed layout, a long value wraps
+            to more LINES within its own column instead - same trade the invoice
+            PDF already makes (splitTextToSize + row height growth). */}
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
           <thead>
             <tr style={{ background: 'var(--bg)' }}>
-              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Producto</th>
-              <th style={{ textAlign: 'center', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)', whiteSpace: 'nowrap' }}>Cantidad</th>
-              <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Precio</th>
+              <th style={{ width: '44%', textAlign: 'left', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Producto</th>
+              <th style={{ width: '28%', textAlign: 'center', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Cantidad</th>
+              <th style={{ width: '22%', textAlign: 'right', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Precio</th>
               <th style={{ padding: '8px 6px', borderBottom: '2px solid var(--brd)', width: 52 }}></th>
             </tr>
           </thead>
@@ -378,12 +569,17 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                 Filtra el catálogo, llena cantidad/precio y presiona Enter para agregar
               </td></tr>
             )}
-            {items.map((i, idx) => {
+            {items.length > 0 && visibleItems.length === 0 && (
+              <tr><td colSpan={4} style={{ padding: '12px', color: 'var(--gt)', textAlign: 'center', fontSize: 12 }}>
+                Sin resultados para "{factboxSearch}"
+              </td></tr>
+            )}
+            {visibleItems.map((i, idx) => {
               const isEditing = editingRow === i.product_name;
               const local = getLocal(i.product_name);
               return (
                 <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined }}>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
                     {i.product_name}
                     {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
                   </td>
@@ -396,12 +592,19 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                         value={local.qty}
                         onChange={e => setLocal(i.product_name, 'qty', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(i.product_name); }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); }
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(i.product_name); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
+                          handleEditArrowKeys(e, i.product_name, 'qty');
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'center' }}
                       />
-                    ) : (i.quantity_label || '-')}
+                    ) : (
+                      // Click the value directly to edit it - no longer required to
+                      // hit the pencil icon first (that button still works too).
+                      <span onClick={() => editItem(i, 'qty')} style={{ cursor: 'pointer', display: 'block', wordBreak: 'break-word' }} title="Clic para editar">
+                        {i.quantity_label || '-'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: !isEditing && i.added_by_client ? '#DC2626' : undefined }}>
                     {isEditing ? (
@@ -410,15 +613,21 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
+                        min="0"
                         value={local.price}
                         onChange={e => setLocal(i.product_name, 'price', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(i.product_name); }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); }
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(i.product_name); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
+                          handleEditArrowKeys(e, i.product_name, 'price');
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'right' }}
                       />
-                    ) : (parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-')}
+                    ) : (
+                      <span onClick={() => editItem(i, 'price')} style={{ cursor: 'pointer', display: 'block' }} title="Clic para editar">
+                        {parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: '6px', borderBottom: '1px solid var(--brd)', textAlign: 'center' }}>
                     <span style={{ display: 'inline-flex', gap: 4 }}>
@@ -487,6 +696,7 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
             className="iinput no-spin"
             placeholder="$0"
             type="number"
+            min="0"
             value={manualPrice}
             onChange={e => setManualPrice(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
@@ -513,4 +723,6 @@ export default function ProductSearch({ products, items, locked, onChange, onLoc
       </div>
     </>
   );
-}
+});
+
+export default ProductSearch;

@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
-import { buildFormLinkMessage } from '../../lib/formLinkMessage';
+import ChatImage from '../ui/ChatImage';
+import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -10,11 +11,12 @@ import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
+import DeliveryStatus from '../ui/DeliveryStatus';
 import { ConfirmModal } from '../ui/ConfirmModal';
-import ProductSearch from '../orders/ProductSearch';
+import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
+import CodPaymentField from '../orders/CodPaymentField';
 import { todayStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { useWithinFormHours, FORM_HOURS_CLOSED_MSG } from '../../hooks/useFormHours';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
 function renderText(text: string) {
@@ -45,8 +47,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const { data: employees = [] } = useEmployees();
   const createOrder = useCreateOrder();
 
-  const [canal, setCanal] = useState('whatsapp');
   const [pago, setPago] = useState('sin_asignar');
+  // Neither selected by default - staff must actively pick one once "Cobro en casa"
+  // is chosen, not fall into a silent default (see codChoice usage below).
+  const [codChoice, setCodChoice] = useState<'completo' | 'vuelta' | null>(null);
+  const [codCash, setCodCash] = useState('');
   const [nombre, setNombre] = useState(preNombre ?? '');
   // Display-only, from the ticket's real WhatsApp number - never user-editable
   // (see the disabled input below), so no setter needed.
@@ -54,9 +59,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [direccion, setDireccion] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
+  const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInnerRef = useRef<HTMLDivElement>(null);
 
   // Live chat data from API
   const { data: convoData } = useQuery({
@@ -68,22 +75,41 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   // This modal never had a socket listener at all, only the interval above - meaning a
   // message arriving while it's open could sit unseen for up to 15-60s. Same pattern as
-  // TicketModal/DetallePedidoModal.
+  // TicketModal/DetallePedidoModal. ticket:message-status (delivery/read/failure
+  // updates on a message already shown) was missing the same way in all three.
   useEffect(() => {
     if (!accessToken || !ticketId) return;
     const sock = getSocket(accessToken);
     const onMsg = (data: { ticketId: string }) => {
       if (data?.ticketId === ticketId) qc.invalidateQueries({ queryKey: ['inbox-convo', ticketId] });
     };
+    const onMsgStatus = (data: { ticketId: string }) => {
+      if (data?.ticketId === ticketId) qc.invalidateQueries({ queryKey: ['inbox-convo', ticketId] });
+    };
     sock.on('ticket:message', onMsg);
-    return () => { sock.off('ticket:message', onMsg); };
+    sock.on('ticket:message-status', onMsgStatus);
+    return () => {
+      sock.off('ticket:message', onMsg);
+      sock.off('ticket:message-status', onMsgStatus);
+    };
   }, [accessToken, ticketId, qc]);
 
   const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - scrolling only on message-count change fired too early
+  // for images, leaving the bottom of the photo cut off until manually scrolled.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [liveMessages.length]);
+    const outer = chatScrollRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [ticketId]);
 
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
@@ -132,15 +158,36 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     onClose();
   }
 
+  const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+  const codCashNum = parseFloat(codCash) || 0;
+  // Used only to gate the submit button live - handleSubmit recomputes its own
+  // version from the FINAL committed items (see finalCodValid there), since a price
+  // edit still mid-typing when Guardar is clicked isn't reflected in `total` here yet.
+  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= total);
+  // Same guard as DetallePedidoModal - a negative price must block the save, not
+  // just fail quietly server-side (orderItemSchema's price: z.number().min(0)).
+  const hasNegativePrice = items.some((i: any) => parseFloat(i.price) < 0);
+
   async function handleSubmit() {
     if (!ticketId) { toast('El pedido debe crearse desde un ticket de WhatsApp', true); return; }
     if (!nombre.trim()) { toast('El nombre es obligatorio', true); return; }
-    if (items.length === 0) { toast('Agrega al menos un producto', true); return; }
+    if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
+    // Commits whatever row is still mid-edit in the Factbox table (typed but never
+    // confirmed with Enter/✓) BEFORE reading items for the payload below - otherwise
+    // clicking straight from typing a price into this button silently dropped that
+    // edit, the exact bug report this fixes. Returns the merged array synchronously;
+    // `items` state itself only catches up on the next render, too late for this call.
+    const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
+    if (finalItems.length === 0) { toast('Agrega al menos un producto', true); return; }
+    if (finalItems.some((i: any) => parseFloat(i.price) < 0)) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
+    const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+    const finalCodAmount = codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? codCashNum : null;
+    const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= finalTotal);
+    if (pago === 'cod' && !finalCodValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
     try {
       await createOrder.mutateAsync({
         fecha,
         ticket_id: ticketId,
-        channel: canal,
         payment_method: pago,
         customer_name: nombre.trim(),
         // No customer_phone - this modal always requires a ticketId (checked above),
@@ -148,7 +195,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
         // number, never from a typed value (orders.ts's POST /).
         address: direccion.trim() || undefined,
         employee_id: empleadoId || undefined,
-        items: items.map((i: any, idx: number) => ({
+        amount_received: pago === 'cod' ? finalCodAmount : undefined,
+        cod_choice: pago === 'cod' ? codChoice : undefined,
+        items: finalItems.map((i: any, idx: number) => ({
           product_name: i.product_name,
           quantity_label: i.quantity_label || '',
           price: parseFloat(i.price) || 0,
@@ -164,11 +213,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const hasChat = !!ticketId;
   // Same reasoning as TicketModal/DetallePedidoModal - the link itself already
-  // expires by end of the Colombia day it was sent, so a past day's ticket has
-  // nothing live to send/block. Also true the moment TODAY's caja gets closed early.
+  // expires (24h from issuance, or 4h if never opened), so a past day's ticket
+  // very likely has nothing live to send/block. Also true the moment TODAY's caja
+  // gets closed early.
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
-  const withinFormHours = useWithinFormHours();
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
@@ -187,13 +236,22 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               {ticketId && (
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Enviar formulario de pedido al cliente'}
-                  disabled={isPastDay || !withinFormHours}
+                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
+                  disabled={isPastDay}
                   onClick={async () => {
+                    let url: string;
                     try {
                       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-                      replyMut.mutate(buildFormLinkMessage(res.data.url));
-                    } catch { toast('No se pudo generar el link', true); }
+                      url = res.data.url;
+                    } catch { toast('No se pudo generar el link', true); return; }
+                    try {
+                      // Two separate messages, in order (awaited, not fire-and-
+                      // forget - the notice must arrive before the link).
+                      await replyMut.mutateAsync(buildFormLinkWarningMessage());
+                      await replyMut.mutateAsync(url);
+                    } catch {
+                      // replyMut's own onError already toasted the specific reason.
+                    }
                   }}
                 >
                   <ClipboardList size={13} />
@@ -203,27 +261,33 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               {ticketId && (
                 <button
                   className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : !withinFormHours ? FORM_HOURS_CLOSED_MSG : 'Bloquear el link de formulario enviado a este cliente'}
+                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
                   onClick={() => setShowBlockConfirm(true)}
-                  disabled={blockLinkMut.isPending || isPastDay || !withinFormHours}
+                  disabled={blockLinkMut.isPending || isPastDay}
                 >
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
               )}
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+             <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number) => (
                 <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
-                  <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>
+                  {m.media_type === 'image'
+                    ? <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>
+                    : <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
                   {(m.sent_at || m.created_at) && (
-                    <div className="chat-meta">
+                    <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
                       {new Date(m.sent_at ?? m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                      {m.direction === 'out' && m.wpp_message_id && (
+                        <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
+                      )}
                     </div>
                   )}
                 </div>
               ))}
-              <div ref={messagesEndRef} />
+             </div>
             </div>
             {/* Reply input */}
             <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>
@@ -271,13 +335,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 <Smartphone size={14} /> Pedido vinculado al ticket de WhatsApp
               </div>
             )}
-            <div className="fg2">
-              <label className="fl2">Canal</label>
-              <select className="fi2" value={canal} onChange={(e) => setCanal(e.target.value)}>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="call">Llamada</option>
-              </select>
-            </div>
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente *</label>
@@ -300,7 +357,13 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Método de pago</label>
-                <select className="fi2" value={pago} onChange={(e) => setPago(e.target.value)}>
+                <select className="fi2" value={pago} onChange={(e) => {
+                  setPago(e.target.value);
+                  // Reset the cod choice on any change away from/back to 'cod' -
+                  // otherwise switching payment method and back could resurrect a
+                  // stale choice/amount that no longer matches what's on screen.
+                  setCodChoice(null); setCodCash('');
+                }}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
@@ -317,11 +380,23 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </select>
               </div>
             </div>
+            {pago === 'cod' && (
+              <CodPaymentField total={total} choice={codChoice} onChoiceChange={setCodChoice} cash={codCash} onCashChange={setCodCash} />
+            )}
             <div className="stit">Productos</div>
-            <ProductSearch products={products} items={items} onChange={setItems} />
+            <ProductSearch ref={productSearchRef} products={products} items={items} onChange={setItems} />
+            {hasNegativePrice && (
+              <div style={{
+                background: 'var(--rc)', borderRadius: 'var(--rad)', padding: '10px 14px', marginTop: 10,
+                fontSize: 13, color: 'var(--r)', fontWeight: 700, display: 'flex', alignItems: 'flex-start', gap: 8,
+              }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Hay un precio negativo - corrígelo para poder registrar el pedido.</span>
+              </div>
+            )}
             <div className="mactions">
               <button className="bsec" onClick={handleClose}>Cancelar</button>
-              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending}
+              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice || (pago === 'cod' && !codValid)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {createOrder.isPending
                   ? 'Registrando...'

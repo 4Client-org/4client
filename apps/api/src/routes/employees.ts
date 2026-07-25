@@ -35,14 +35,16 @@ export default async function employeeRoutes(fastify: FastifyInstance) {
     const body = employeeSchema.partial().safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
-    await fastify.prisma.employee.updateMany({ where: { id, org_id: req.user.orgId }, data: body.data });
+    const result = await fastify.prisma.employee.updateMany({ where: { id, org_id: req.user.orgId }, data: body.data });
+    if (result.count === 0) return reply.status(404).send({ error: 'Domiciliario no encontrado', code: 'NOT_FOUND' });
     return reply.send({ data: { ok: true } });
   });
 
   // DELETE /api/v1/employees/:id - soft delete, solo admin
   fastify.delete('/:id', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    await fastify.prisma.employee.updateMany({ where: { id, org_id: req.user.orgId }, data: { active: false } });
+    const result = await fastify.prisma.employee.updateMany({ where: { id, org_id: req.user.orgId }, data: { active: false } });
+    if (result.count === 0) return reply.status(404).send({ error: 'Domiciliario no encontrado', code: 'NOT_FOUND' });
     return reply.send({ data: { ok: true } });
   });
 }

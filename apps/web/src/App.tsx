@@ -19,7 +19,7 @@ export default function App() {
     tryRestoreSession().finally(() => setReady(true));
   }, [isForm, isFactura]);
 
-  if (isForm) return <><ClientFormPage /><UpdateBanner /></>;
+  if (isForm) return <><ClientFormPage /><UpdateBanner autoReloadImmediately /></>;
   if (isFactura) return <FacturaPage />;
   if (!ready) return <UpdateBanner />;
   return <>{token ? <MainPage /> : <LoginPage />}<UpdateBanner /></>;

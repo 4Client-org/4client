@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
 
@@ -73,5 +73,224 @@ describe('inbox routes', () => {
     });
     const unscopedIds = unscoped.json().data.orders.map((o: any) => o.id);
     expect(unscopedIds.sort()).toEqual([orderToday.id, orderYesterday.id].sort());
+  });
+
+  it('the "sin leer" dot survives opening the chat any number of times - it only clears once staff actually replies', async () => {
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: '573009990002', customer_name: 'Cliente Sin Leer', unread_count: 3 },
+    });
+
+    for (let i = 0; i < 3; i++) {
+      const opened = await app.inject({
+        method: 'GET',
+        url: `/api/v1/inbox/${ticket.id}/messages`,
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(opened.statusCode).toBe(200);
+      const stillUnread = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(stillUnread.unread_count).toBe(3);
+    }
+
+    const reply = await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Ya te atiendo' },
+    });
+    expect(reply.statusCode).toBe(201);
+
+    const afterReply = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(afterReply.unread_count).toBe(0);
+  });
+});
+
+describe('inbox routes - Meta WhatsApp delivery tracking', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminToken: string;
+  let originalFetch: typeof fetch;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    // No WPP_TOKEN_ENC_KEY in the test env (.env.test) - crypto.ts's encryptSecret/
+    // decryptSecret treat an unprefixed value as legacy plaintext, so a plain string
+    // round-trips fine here without needing real encryption for this test.
+    await app.prisma.organization.update({
+      where: { id: orgId },
+      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+    });
+    const admin = await createTestUser(app.prisma, orgId, 'admin', 'InboxWppAdmin1!');
+    adminToken = await login(app, admin.email, 'InboxWppAdmin1!');
+    originalFetch = global.fetch;
+  });
+
+  afterAll(async () => {
+    global.fetch = originalFetch;
+    await app.close();
+  });
+
+  it('POST /:ticketId/reply stores the real Meta message id - webhook.ts\'s ingestStatus can only ever match a later delivered/read status to this message by it', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230001', customer_name: 'Cliente WPP OK' } });
+    // Unique per test run, not a fixed literal - wpp_message_id is globally unique,
+    // and a hardcoded value would collide with a leftover row from a previous run
+    // against the same (not wiped between runs) test database.
+    const fakeWamid = `wamid.TESTOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Hola, tu pedido va en camino' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('sent');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+    expect(stored!.failed_reason).toBeNull();
+  });
+
+  it('POST /:ticketId/reply broadcasts ticket:message-status on a SUCCESSFUL send too, not just on failure - otherwise a chat already open on someone\'s screen never learns wpp_message_id is set and DeliveryStatus.tsx (gated on that) stays invisible until an unrelated refetch happens to catch up', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230003', customer_name: 'Cliente WPP Socket' } });
+    const fakeWamid = `wamid.SOCKETOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const emitSpy = vi.fn();
+    const toSpy = vi.spyOn(app.io, 'to').mockReturnValue({ emit: emitSpy } as any);
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Confirmando tu pedido' },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const statusEmitCall = emitSpy.mock.calls.find(call => call[0] === 'ticket:message-status');
+    expect(statusEmitCall).toBeDefined();
+    expect(statusEmitCall![1]).toMatchObject({ ticketId: ticket.id, messageId: res.json().data.id, delivered: false, read_by_client: false, failed_reason: null });
+
+    toSpy.mockRestore();
+  });
+
+  it('POST /:ticketId/reply records failed_reason when Meta rejects the send (e.g. no active 24h session and no approved template) - shows the red X instead of looking stuck forever', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230002', customer_name: 'Cliente WPP Fail' } });
+    global.fetch = (async () => new Response(JSON.stringify({ error: { message: 'Re-engagement message' } }), { status: 400 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/reply`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { text: 'Hola de nuevo' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('failed');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
+    expect(stored!.wpp_message_id).toBeNull();
+    expect(stored!.failed_reason).toContain('Re-engagement');
+  });
+
+  it('POST /:ticketId/send-image stores the photo (media_type/media_url set) and sends it via Meta\'s two-step upload-then-send, never a public URL', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230004', customer_name: 'Cliente Foto' } });
+    const fakeMediaId = `media-id-${Date.now()}`;
+    const fakeWamid = `wamid.IMG${Date.now()}`;
+
+    // Two distinct Meta endpoints get hit in sequence - branch on the URL so each
+    // returns the shape that specific call expects.
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith('/media')) {
+        return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+    }) as any;
+
+    // Smallest valid PNG (1x1, base64) - real bytes, not a placeholder string, so
+    // storeMedia/loadMedia round-trip something genuine.
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-image`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: tinyPng, mime_type: 'image/png', caption: 'Así llegó el pedido' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().wpp_status).toBe('sent');
+    const msg = res.json().data;
+    expect(msg.media_type).toBe('image');
+    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.png$/);
+    expect(msg.media_caption).toBe('Así llegó el pedido');
+
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+    expect(stored!.failed_reason).toBeNull();
+
+    // The token never carries a real R2/public URL - just an opaque key, served
+    // exclusively through our own staff-authenticated route.
+    expect(msg.media_url).not.toContain('http');
+
+    const fetched = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${msg.media_url}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.headers['content-type']).toBe('image/png');
+    // Guards against a browser sniffing/re-interpreting the bytes as something
+    // other than what Content-Type says, if this URL is ever opened directly
+    // instead of through the app's own fetch-as-blob rendering path.
+    expect(fetched.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('POST /:ticketId/send-image rejects a file whose real bytes don\'t match the declared mime_type - never trusts the label alone', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230006', customer_name: 'Cliente Foto Falsa' } });
+
+    // Plain text, not a real image, but claiming to be a PNG.
+    const fakeData = Buffer.from('<script>alert(1)</script>').toString('base64');
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-image`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: fakeData, mime_type: 'image/png' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('VALIDATION_ERROR');
+
+    const stored = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id } });
+    expect(stored).toHaveLength(0);
+  });
+
+  it('GET /media/:token rejects a malformed token and a well-formed but never-issued one', async () => {
+    const malformed = await app.inject({
+      method: 'GET', url: '/api/v1/inbox/media/not-a-real-token',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const neverIssued = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${'a'.repeat(40)}.jpg`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(neverIssued.statusCode).toBe(404);
+  });
+
+  it('GET /media/:token refuses a real token that belongs to a DIFFERENT org, even though the token itself is well-formed and does exist', async () => {
+    const otherOrg = await createTestOrg(app.prisma);
+    const otherAdmin = await createTestUser(app.prisma, otherOrg.id, 'admin', 'OtherOrgAdmin1!');
+    const otherTicket = await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573001230005', customer_name: 'Cliente Otra Org' } });
+    const otherMsg = await app.prisma.ticketMessage.create({
+      data: {
+        ticket_id: otherTicket.id, direction: 'in', media_type: 'image',
+        media_url: `${'b'.repeat(40)}.jpg`,
+      },
+    });
+    void otherAdmin;
+
+    // This test's adminToken is for `orgId`, not `otherOrg` - the token exists and
+    // is well-formed, but doesn't belong to this admin's org.
+    const res = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${otherMsg.media_url}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

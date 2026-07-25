@@ -34,6 +34,7 @@ model Organization {
   tickets             Ticket[]
   orders              Order[]
   order_history       OrderHistory[]
+  order_observations  OrderObservation[]
   daily_closes        DailyClose[]
   revoked_form_tokens RevokedFormToken[]
   audit_logs          AuditLog[]
@@ -58,6 +59,7 @@ model User {
   orders_registered   Order[]            @relation("RegisteredBy")
   orders_paid         Order[]            @relation("PaidBy")
   history_entries     OrderHistory[]
+  order_observations  OrderObservation[]
   sent_messages       TicketMessage[]
   daily_closes        DailyClose[]
   revoked_form_tokens RevokedFormToken[]
@@ -95,6 +97,7 @@ model Product {
 
   org Organization @relation(fields: [org_id], references: [id])
 
+  @@index([org_id])
   @@map("products")
 }
 
@@ -110,6 +113,7 @@ model Employee {
   org    Organization @relation(fields: [org_id], references: [id])
   orders Order[]
 
+  @@index([org_id])
   @@map("employees")
 }
 
@@ -124,12 +128,24 @@ model Ticket {
   fecha              DateTime  @default(now()) @db.Date
   deferred_to        DateTime? @db.Date
   created_at         DateTime  @default(now()) @db.Timestamptz
-  // Timestamp of the most recently issued form-link JWT for this ticket. Any token
-  // whose own `iat` predates this is rejected as superseded - so sending a fresh
-  // "Formulario" link automatically kills every earlier link for the same ticket,
-  // with no separate "Bloquear link" click needed. Null = no link issued yet (or
-  // issued before this field existed) - nothing to compare against, so old
-  // already-issued tokens keep working until their own expiry.
+  // The CURRENT live form-link token - a short random opaque string (not a JWT),
+  // looked up directly by public.ts instead of decoded/verified. Unique so a lookup
+  // by an old, already-superseded value simply finds no row (same effect the JWT
+  // "superseded" check used to produce, now automatic: overwriting this column IS
+  // what kills every earlier link for the ticket, no separate revoke needed). A long
+  // self-contained JWT (~280 chars) turned out too fragile for real WhatsApp use -
+  // mobile keyboards/clipboards/address bars would silently truncate it, corrupting
+  // the signature and showing "link inválido" for a link that was actually fine.
+  form_link_token    String?   @unique @db.VarChar(64)
+  // Who generated the CURRENT form_link_token (inbox.ts's GET /form-link, or null
+  // for the automated send-after-welcome) - replaces the JWT's own sentByUserId
+  // claim now that there's no token payload to carry it in. Order attribution
+  // (registered_by/history) falls back to the first active admin/encargado when null.
+  form_link_sent_by  String?   @db.Uuid
+  // Issued-at of the CURRENT form_link_token - null = no link issued yet. Used for
+  // both TTL checks (4h-unopened, 24h absolute) and, implicitly, staleness: since
+  // there's only ever one live token per ticket, this is simply when THAT token was
+  // minted, not a comparison target for a separate incoming value anymore.
   form_token_min_iat DateTime? @db.Timestamptz
   // Set the first time GET /form-info actually succeeds for the CURRENT link (reset
   // to null every time a fresh link is issued, same as form_token_min_iat above). A
@@ -224,6 +240,12 @@ model Order {
   paid_by         String?   @db.Uuid
   amount_received Decimal?  @db.Decimal(12, 2)
   change_amount   Decimal?  @db.Decimal(12, 2)
+  // Which of the two cobro-en-casa choices staff actually picked ('completo' |
+  // 'vuelta'), stored explicitly rather than inferred by comparing amount_received
+  // to the total - inferring broke the one time "vuelta" happens to be typed as
+  // exactly the total (zero change owed): that's indistinguishable from "completo"
+  // by value alone, so reopening the order silently flipped the shown choice.
+  cod_choice      String?   @db.VarChar(10)
   locked          Boolean   @default(false)
   caja_cerrada    Boolean   @default(false)
   source          String    @default("encargado") @db.VarChar(20)
@@ -244,6 +266,7 @@ model Order {
   paidBy       User?          @relation("PaidBy", fields: [paid_by], references: [id])
   items        OrderItem[]
   history      OrderHistory[]
+  observations OrderObservation[]
 
   @@unique([org_id, num, fecha])
   @@index([org_id, fecha])
@@ -293,6 +316,30 @@ model OrderHistory {
   @@index([order_id])
   @@index([org_id, created_at])
   @@map("order_history")
+}
+
+// A note pinned to an order, always addable/editable even on a locked/closed
+// order or a day already cerrado (orders.ts's observation routes carve out the
+// same exception the old single `observacion` column used to have on PATCH /:id).
+// Multiple entries per order now (append, don't overwrite) - each one can only be
+// edited by the staff member who wrote it (author_id checked against the acting
+// user), everyone else sees it read-only. Every create/edit also writes an
+// OrderHistory row so it shows up in the order's audit trail like any other change.
+model OrderObservation {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id     String   @db.Uuid
+  order_id   String   @db.Uuid
+  author_id  String   @db.Uuid
+  text       String   @db.VarChar(1000)
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  org    Organization @relation(fields: [org_id], references: [id])
+  order  Order        @relation(fields: [order_id], references: [id])
+  author User         @relation(fields: [author_id], references: [id])
+
+  @@index([order_id])
+  @@map("order_observations")
 }
 
 model DailyClose {

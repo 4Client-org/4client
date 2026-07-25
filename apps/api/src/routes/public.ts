@@ -3,33 +3,11 @@ import { z } from 'zod';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { sanitizeForWhatsApp } from '../lib/sanitize.js';
-import { config } from '../config.js';
 import { sortByCategoryOrder } from '../lib/categoryOrder.js';
-import { registerFailedLinkAttempt, MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
+import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 
-interface FormTokenPayload {
-  type: string;
-  ticketId: string;
-  orgId: string;
-  // clientName/clientPhone/orgName/sentByName used to be embedded here too, padding
-  // out the token (and, via WhatsApp's link-preview quirks, sometimes breaking the
-  // very link it's part of - see inbox.ts's /form-link route). Every one of those is
-  // just a snapshot of a DB column the ticketId can already look up fresh - dropped
-  // in favor of always reading current values off `ticket`/`ticket.org`, which is
-  // also strictly more correct (a client whose name got corrected after the link was
-  // sent isn't stuck seeing the old one). Old already-issued tokens still carry these
-  // extra keys - jwt.verify just ignores fields this interface doesn't declare.
-  // Optional - older already-issued tokens (before this field existed) won't have it,
-  // so every use of it below falls back to an arbitrary active staff member.
-  sentByUserId?: string;
-  // Always present (jsonwebtoken sets it automatically, and inbox.ts's /form-link
-  // route now sets it explicitly too) - seconds since epoch this specific token was
-  // signed, used to detect a superseded link. See assertLinkStillValid below.
-  iat?: number;
-}
-
-// Max orders a single form link (ticket) may generate - the link is valid for 7 days
-// with no revocation, so this caps spam from a leaked/shared link.
+// Max orders a single form link (ticket) may generate - a link can stay valid up to
+// 24h, so this caps spam from a leaked/shared link.
 const MAX_FORM_ORDERS_PER_TICKET = 3;
 
 // Wording for the client-facing WhatsApp confirmation messages - matches the buttons
@@ -49,20 +27,6 @@ function formatFechaLong(fecha: Date): string {
   return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('es-CO', {
     day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Bogota',
   });
-}
-
-// Form links only work between 4am and 8pm Colombia time (UTC-5, no DST), every day -
-// outside that window an order needs a staff member handling it directly (chat), not
-// self-service via the link (overnight self-service orders showed up unattended for
-// hours). A plain function of `now` (defaults to the real clock) instead of a closure
-// reading Date.now() directly, so a test can assert the exact boundaries (3:59am vs
-// 4:00am, 7:59pm vs 8:00pm) deterministically instead of depending on whatever real
-// wall-clock time the suite happens to run at.
-const FORM_OPEN_HOUR = 4;
-const FORM_CLOSED_HOUR = 20;
-export function isWithinFormHours(now: number = Date.now()): boolean {
-  const hourCol = new Date(now - 5 * 3600000).getUTCHours();
-  return hourCol >= FORM_OPEN_HOUR && hourCol < FORM_CLOSED_HOUR;
 }
 
 // Computes the next sequential order number for org+fecha and creates the order,
@@ -95,11 +59,6 @@ async function createOrderWithRetryNum<T>(
   throw new Error('No se pudo generar un número de pedido único');
 }
 
-// Exactly 4 digits, nothing else - rejects letters, symbols, or anything longer at
-// the schema level before it ever reaches a comparison, not just relying on the
-// last4() equality check to fail closed on its own for bad input.
-const phoneLast4Schema = z.string().regex(/^\d{4}$/, 'phone_last4 debe ser 4 dígitos');
-
 export default async function publicRoutes(fastify: FastifyInstance) {
   // Allow any origin - these endpoints are genuinely public (client-facing form)
   fastify.addHook('onRequest', async (_req, reply) => {
@@ -109,30 +68,22 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   });
   fastify.options('*', async (_req, reply) => reply.status(204).send());
 
-  function verifyFormToken(token: string): FormTokenPayload {
-    const payload = fastify.jwt.verify(token) as FormTokenPayload;
-    if (payload.type !== 'form_link') throw new Error('invalid type');
-    return payload;
-  }
-
-  // Checked BEFORE token verification (no DB/JWT work needed) and given its own
+  // Checked BEFORE token verification (no DB work needed) and given its own
   // clear message+code, unlike the generic "link inválido" used for revoked/
-  // superseded/expired/device-mismatch - this isn't a security-sensitive reason to
+  // expired/device-mismatch - this isn't a security-sensitive reason to
   // hide, and a legitimate customer deserves to know why instead of thinking their
   // link is broken.
-  // Every other invalid-link reason (revoked/superseded/org-blocked/never-opened-in-
-  // time/malformed token) stays behind the same generic message on purpose - doesn't
+  // Every other invalid-link reason (revoked/org-blocked/never-opened-in-
+  // time/unknown token) stays behind the same generic message on purpose - doesn't
   // help an attacker learn which one it was. Wrong phone digits get their own message
   // instead: that's the one case where the visitor might genuinely be the right
   // customer who just mistyped, and a useless "link inválido" only pushes them to
   // give up and ask staff to resend instead of just retrying the 4 digits.
   function sendInvalidToken(err: unknown, reply: FastifyReply) {
-    if (err instanceof Error && err.message === 'phone mismatch') {
-      return reply.status(401).send({ error: 'Número incorrecto. Verifica los últimos 4 dígitos.', code: 'PHONE_MISMATCH' });
-    }
-    // These two get their own message too (same reasoning as phone mismatch above,
-    // not a security-sensitive reason to hide) - a customer stuck after too many
-    // wrong guesses deserves to know why and what to do next, not just "link inválido".
+    // 'ticket blocked'/'link attempts exceeded' below are dead in practice now
+    // (nothing calls registerFailedLinkAttempt anymore since the phone-digits check
+    // that used to trigger it is gone - see loadTicketByFormToken) but harmless to
+    // leave: if this ever gets re-enabled, the messaging is already here.
     if (err instanceof Error && err.message === 'ticket blocked') {
       return reply.status(403).send({
         error: 'Demasiados intentos incorrectos. Este chat quedó bloqueado temporalmente por seguridad. Intenta de nuevo en 24 horas o contáctanos directamente.',
@@ -148,65 +99,45 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     return reply.status(401).send({ error: 'Link inválido o expirado', code: 'INVALID_TOKEN' });
   }
 
-  function sendFormClosed(reply: FastifyReply) {
-    return reply.status(403).send({
-      error: 'El formulario está disponible de 4:00am a 8:00pm. Para hacer tu pedido ahora, escríbenos directamente por WhatsApp.',
-      code: 'FORM_CLOSED',
-    });
-  }
+  // Four ways a form_link_token can still be dead even though it's a real string
+  // someone is presenting: (1) it just doesn't match any ticket - either bogus, or
+  // (the common case) a superseded token: generateFormLinkUrl (formLink.ts)
+  // OVERWRITES ticket.form_link_token every time a fresh link is issued, so an
+  // older link's token simply stops matching anything, no separate comparison
+  // needed; (2) explicitly revoked via POST /inbox/:ticketId/form-link/revoke;
+  // (3) org-wide blocked - admin hit "Bloquear todos los links" (POST /inbox/
+  // form-links/block-all), which stamps Organization.form_links_blocked_at after
+  // this token was issued; (4) never opened within UNOPENED_LINK_TTL_SECONDS, or
+  // (opened or not) more than 24h since issuance. All fail the same generic way on
+  // every public endpoint below - never reveals which of them it was.
+  // 4 hours - a link nobody opens within this window dies on its own. Was 10
+  // minutes (then 2h), both too short for real WhatsApp usage: a customer who
+  // doesn't see the notification right away (very common) came back to a dead link
+  // and a generic "Link inválido" with no clue that asking for a new one would fix
+  // it - reported as "the link doesn't open" even though nothing was actually
+  // broken. Four hours still bounds how long a link sent to the wrong number stays
+  // usable, just realistically instead of aggressively.
+  const UNOPENED_LINK_TTL_SECONDS = 4 * 60 * 60;
+  // Absolute cap regardless of opened state - used to be the JWT's own `exp` claim
+  // (enforced automatically by jwt.verify before any of this ran); now enforced
+  // here since there's no token payload carrying its own expiry anymore.
+  const FORM_LINK_ABSOLUTE_TTL_SECONDS = 24 * 60 * 60;
 
-  // NOT enforced under NODE_ENV=test - the route always checks the REAL current
-  // time (isWithinFormHours defaults to Date.now()), which would otherwise make
-  // every test in this file pass or fail depending on what hour it happens to be
-  // when the suite runs, completely unrelated to whatever each test actually
-  // exercises. isWithinFormHours' own boundary math is unit-tested directly instead
-  // (public.test.ts), with an explicit `now` - no dependency on the real clock.
-  function shouldBlockForHours(): boolean {
-    return config.NODE_ENV !== 'test' && !isWithinFormHours();
-  }
-
-  // Checked separately from JWT verification (which only proves the token is
-  // well-formed and unexpired) - three ways a structurally-valid token can still be
-  // dead: (1) explicitly revoked via POST /inbox/:ticketId/form-link/revoke, (2)
-  // superseded - staff sent a NEWER link for this same ticket since this one was
-  // issued (inbox.ts's GET /form-link stamps `form_token_min_iat` every time it
-  // mints a token), so this older one is silently retired without needing a
-  // separate manual revoke, or (3) org-wide blocked - admin hit "Bloquear todos los
-  // links" (POST /inbox/form-links/block-all), which stamps Organization.
-  // form_links_blocked_at the exact same way, just scoped to every ticket in the
-  // org at once instead of one. All three fail the same generic way on every public
-  // endpoint below - never reveals which of them it was.
-  // 10 minutes - a link nobody opens within this window dies on its own (see
-  // assertLinkStillValid below). Short enough that a link sent to the wrong number
-  // (staff typo, accidental forward) is only usable for a few minutes; long enough
-  // that a real customer glancing at WhatsApp a bit late still catches it.
-  const UNOPENED_LINK_TTL_SECONDS = 10 * 60;
-
-  function last4(phone: string): string {
-    return phone.replace(/\D/g, '').slice(-4);
-  }
-
-  // Split from the phone check below on purpose - GET /link-status calls only this
-  // half, with no phone_last4 at all, so the client can tell a genuinely dead link
-  // (revoked/superseded/org-blocked/never-opened-in-time) apart from "just needs the
-  // 4 digits" BEFORE ever showing the digit-entry screen. Without this split, a
-  // visitor opening an already-blocked link had to type 4 digits first and only then
-  // find out the link itself was dead - same mistake this is fixing on the factura
-  // side (files.ts), just here for form links.
-  async function assertLinkNotDead(ticketId: string, tokenIat: number | undefined) {
+  // The link itself (an unguessable random token, DB-backed, time-limited,
+  // revocable) is the entire security boundary now - see git history for the
+  // phone_last4 digit-entry step this replaced, dropped because customers kept
+  // getting confused by it. GET /link-status calls this same function - a dead
+  // link answers "is this link alive" identically whether or not the visitor has
+  // gotten as far as form-info/products/submit.
+  async function loadTicketByFormToken(token: string) {
     const ticket = await fastify.prisma.ticket.findUnique({
-      where: { id: ticketId },
-      select: {
-        phone: true,
-        form_token_min_iat: true,
-        form_link_opened_at: true,
-        link_failed_attempts: true,
-        link_blocked_until: true,
+      where: { form_link_token: token },
+      include: {
+        org: true,
         revoked_form_token: { select: { id: true } },
-        org: { select: { form_links_blocked_at: true } },
       },
     });
-    if (!ticket) throw new Error('ticket not found');
+    if (!ticket) throw new Error('invalid token');
     if (ticket.revoked_form_token) throw new Error('revoked');
     // Checked before anything token-specific below - a chat that hit
     // MAX_ATTEMPTS_HARD wrong guesses is locked out entirely for TICKET_BLOCK_HOURS,
@@ -218,42 +149,24 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // happened on the factura. Staff sending ANY fresh link (form or factura)
     // resets this counter (linkSecurity.ts's clearSoftLinkBlock).
     if (ticket.link_failed_attempts >= MAX_ATTEMPTS_SOFT) throw new Error('link attempts exceeded');
-    // Whole-second resolution on both sides - `iat` is JWT-standard seconds-since-
-    // epoch, but the stamped column is millisecond precision, so comparing raw ms
-    // would make a token superseded by the very same issuance that minted it (its
-    // `iat` always floors to <= that instant).
+    if (
+      ticket.org.form_links_blocked_at
+      && ticket.form_token_min_iat
+      && ticket.org.form_links_blocked_at > ticket.form_token_min_iat
+    ) {
+      throw new Error('org blocked');
+    }
     if (ticket.form_token_min_iat) {
-      const minIatSec = Math.floor(ticket.form_token_min_iat.getTime() / 1000);
-      if (!tokenIat || tokenIat < minIatSec) throw new Error('superseded');
-    }
-    if (ticket.org.form_links_blocked_at) {
-      const blockedAtSec = Math.floor(ticket.org.form_links_blocked_at.getTime() / 1000);
-      if (!tokenIat || tokenIat < blockedAtSec) throw new Error('org blocked');
-    }
-    // Only matters while it's still unopened - once form-info's handler stamps
-    // form_link_opened_at (below), this never fires again for this link, no matter
-    // how much later a later call comes in.
-    if (!ticket.form_link_opened_at && tokenIat) {
-      const ageSeconds = Math.floor(Date.now() / 1000) - tokenIat;
-      if (ageSeconds > UNOPENED_LINK_TTL_SECONDS) throw new Error('never opened in time');
+      const ageSeconds = (Date.now() - ticket.form_token_min_iat.getTime()) / 1000;
+      if (ageSeconds > FORM_LINK_ABSOLUTE_TTL_SECONDS) throw new Error('expired');
+      // Only matters while it's still unopened - once form-info's handler stamps
+      // form_link_opened_at (below), this never fires again for this link, no
+      // matter how much later a later call comes in.
+      if (!ticket.form_link_opened_at && ageSeconds > UNOPENED_LINK_TTL_SECONDS) {
+        throw new Error('never opened in time');
+      }
     }
     return ticket;
-  }
-
-  async function assertLinkStillValid(ticketId: string, tokenIat: number | undefined, phoneLast4: string): Promise<void> {
-    const ticket = await assertLinkNotDead(ticketId, tokenIat);
-    // Proves whoever's holding the link right now actually knows the phone number
-    // it was issued for - the token itself only proves it's a real link for THIS
-    // ticket, not that the person using it is the intended customer (a link can end
-    // up with the wrong person: staff typo, an accidental forward, etc).
-    if (!phoneLast4 || phoneLast4 !== last4(ticket.phone)) {
-      // Recorded even though the request is about to fail anyway - this counter is
-      // the whole point, not an afterthought. Bumps both the ticket-wide soft count
-      // (dies at MAX_ATTEMPTS_SOFT, checked above on the NEXT call - for THIS link
-      // and the ticket's factura links alike) and the cumulative hard-block one.
-      await registerFailedLinkAttempt(fastify.prisma, ticketId);
-      throw new Error('phone mismatch');
-    }
   }
 
   // Claims this ticket's form-link for whichever browser SUBMITS first. There's no
@@ -294,19 +207,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // here on, the client's copy becomes view-only.
   const EDITABLE_STATUSES = ['nuevo', 'preparando', 'listo'] as const;
 
-  // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever shows
-  // its "confirm your phone" screen, so a dead link (blocked/expired/revoked) shows
-  // the same "Link inválido" screen immediately instead of making the visitor type
-  // 4 digits first only to be told the link never had a chance in the first place.
-  // No phone_last4 here at all - this only answers "is this link alive", not
-  // "is this you", so it can't be used to brute-force/confirm the phone digits.
+  // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever sees the
+  // catalog, so a dead link (blocked/expired/revoked) shows the same "Link inválido"
+  // screen immediately instead of the form flashing content it's about to yank away.
   fastify.get('/link-status', async (req, reply) => {
-    if (shouldBlockForHours()) return sendFormClosed(reply);
     const q = z.object({ t: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
-      const payload = verifyFormToken(q.data.t);
-      await assertLinkNotDead(payload.ticketId, payload.iat);
+      await loadTicketByFormToken(q.data.t);
       return reply.send({ data: { valid: true } });
     } catch (err) {
       // sendInvalidToken - not a bare generic catch - so a ticket-wide block or an
@@ -318,26 +226,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/public/form-info?t=TOKEN&device_token=X&phone_last4=XXXX - verifica
-  // token y devuelve info del cliente + sus pedidos activos de hoy
+  // GET /api/v1/public/form-info?t=TOKEN&device_token=X - verifica token y devuelve
+  // info del cliente + sus pedidos activos de hoy
   fastify.get('/form-info', async (req, reply) => {
-    if (shouldBlockForHours()) return sendFormClosed(reply);
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: phoneLast4Schema }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
-      const payload = verifyFormToken(q.data.t);
-      await assertLinkStillValid(payload.ticketId, payload.iat, q.data.phone_last4);
+      const ticket = await loadTicketByFormToken(q.data.t);
 
-      const ticketInfo = await fastify.prisma.ticket.findFirst({
-        where: { id: payload.ticketId, org_id: payload.orgId },
-        select: { customer_name: true, org: { select: { name: true } }, form_link_opened_at: true },
-      });
-      if (!ticketInfo) throw new Error('ticket not found');
-
-      // First successful open of THIS link - stamps it so assertLinkStillValid's
-      // 10-minute-unopened check never fires again for it (see that function).
-      if (!ticketInfo.form_link_opened_at) {
-        await fastify.prisma.ticket.update({ where: { id: payload.ticketId }, data: { form_link_opened_at: new Date() } });
+      // First successful open of THIS link - stamps it so loadTicketByFormToken's
+      // 4-hour-unopened check never fires again for it (see that function).
+      if (!ticket.form_link_opened_at) {
+        await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_link_opened_at: new Date() } });
       }
 
       // Colombia UTC-5 local date - same "today" the client's own submissions land on.
@@ -349,7 +249,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // whether that happened today or it arrived already closed from a prior day,
       // there's nothing left for the client to see or do with it.
       const todaysOrders = await fastify.prisma.order.findMany({
-        where: { ticket_id: payload.ticketId, org_id: payload.orgId, fecha: todayLocal, status: { notIn: ['cerrado', 'papelera'] } },
+        where: { ticket_id: ticket.id, org_id: ticket.org_id, fecha: todayLocal, status: { notIn: ['cerrado', 'papelera'] } },
         select: {
           id: true, num: true, address: true, payment_method: true, status: true, source: true, created_at: true,
           items: { select: { id: true, product_name: true, quantity_label: true, price: true }, orderBy: { sort_order: 'asc' } },
@@ -360,9 +260,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         data: {
-          clientName: ticketInfo.customer_name ?? '',
-          orgName: ticketInfo.org.name,
-          orgId: payload.orgId,
+          clientName: ticket.customer_name ?? '',
+          orgName: ticket.org.name,
+          orgId: ticket.org_id,
           orders: todaysOrders.map(o => ({
             id: o.id,
             num: o.num,
@@ -384,17 +284,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/public/products?t=TOKEN&device_token=X&phone_last4=XXXX - catálogo
-  // público (sin precios)
+  // GET /api/v1/public/products?t=TOKEN&device_token=X - catálogo público (sin precios)
   fastify.get('/products', async (req, reply) => {
-    if (shouldBlockForHours()) return sendFormClosed(reply);
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1), phone_last4: phoneLast4Schema }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
-      const payload = verifyFormToken(q.data.t);
-      await assertLinkStillValid(payload.ticketId, payload.iat, q.data.phone_last4);
+      const ticket = await loadTicketByFormToken(q.data.t);
       const products = await fastify.prisma.product.findMany({
-        where: { org_id: payload.orgId, active: true },
+        where: { org_id: ticket.org_id, active: true },
         select: { id: true, name: true, category: true, unit_type: true, sort_order: true },
         orderBy: [{ category: 'asc' }, { sort_order: 'asc' }, { name: 'asc' }],
       });
@@ -425,11 +322,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (req, reply) => {
-    if (shouldBlockForHours()) return sendFormClosed(reply);
     const body = z.object({
       token: z.string().min(1),
       device_token: z.string().min(1),
-      phone_last4: phoneLast4Schema,
       // Required - a pedido without a delivery address can't actually be dispatched,
       // and staff kept having to chase clients down for it after the fact.
       address: z.string().trim().min(1, 'La dirección es obligatoria').max(500),
@@ -442,36 +337,33 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       items: z.array(z.object({
         product_name:   z.string().min(1).max(200),
         quantity_label: z.string().max(100),
+        // Client typed this in themselves rather than picking it from the catalog -
+        // always flagged added_by_client below so staff notices it needs a price/
+        // review, same red flag as any other client edit.
+        is_manual: z.boolean().optional(),
       })).min(1).max(100),
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
-    let payload: FormTokenPayload;
+    let ticket: Awaited<ReturnType<typeof loadTicketByFormToken>>;
     try {
-      payload = verifyFormToken(body.data.token);
-      await assertLinkStillValid(payload.ticketId, payload.iat, body.data.phone_last4);
-      await assertDeviceOk(payload.ticketId, body.data.device_token);
+      ticket = await loadTicketByFormToken(body.data.token);
+      await assertDeviceOk(ticket.id, body.data.device_token);
     } catch (err) {
       return sendInvalidToken(err, reply);
     }
 
-    // Fetch ticket to get org and validate it still exists
-    const ticket = await fastify.prisma.ticket.findFirst({
-      where: { id: payload.ticketId, org_id: payload.orgId },
-      include: { org: true },
-    });
-    if (!ticket) return reply.status(404).send({ error: 'Ticket no encontrado', code: 'NOT_FOUND' });
-
     // Attribute the order to whichever staff member actually sent this specific link
-    // (embedded in the token when it was generated - see inbox.ts's /form-link route),
-    // so history/registered_by shows a real name instead of an arbitrary admin. Falls
-    // back to the first active admin/encargado for tokens issued before this existed.
-    let actorUser = payload.sentByUserId
-      ? await fastify.prisma.user.findFirst({ where: { id: payload.sentByUserId, org_id: payload.orgId } })
+    // (form_link_sent_by, stamped when it was generated - see inbox.ts's /form-link
+    // route), so history/registered_by shows a real name instead of an arbitrary
+    // admin. Falls back to the first active admin/encargado for links issued before
+    // this existed, or sent automatically (webhook.ts's auto-send has no actor).
+    let actorUser = ticket.form_link_sent_by
+      ? await fastify.prisma.user.findFirst({ where: { id: ticket.form_link_sent_by, org_id: ticket.org_id } })
       : null;
     if (!actorUser) {
       actorUser = await fastify.prisma.user.findFirst({
-        where: { org_id: payload.orgId, active: true, role: { in: ['admin', 'encargado'] } },
+        where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
         orderBy: { created_at: 'asc' },
       });
     }
@@ -480,7 +372,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // Fetch product prices from catalog - needed either way (new order or merge)
     const productNames = body.data.items.map(i => i.product_name);
     const catalogProducts = await fastify.prisma.product.findMany({
-      where: { org_id: payload.orgId, name: { in: productNames }, active: true },
+      where: { org_id: ticket.org_id, name: { in: productNames }, active: true },
       select: { name: true, price_per_unit: true },
     });
     const priceMap = new Map(catalogProducts.map(p => [p.name, Number(p.price_per_unit ?? 0)]));
@@ -488,6 +380,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       product_name: item.product_name,
       quantity_label: item.quantity_label,
       price: priceMap.get(item.product_name) ?? 0,
+      added_by_client: item.is_manual === true,
     }));
 
     // ── Merge path: replace this order's items with the client's current full list
@@ -505,7 +398,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // brand-new one instead of just failing loudly. Now it never falls through:
       // not-found is a real 404, and no-longer-editable is a real 409 explaining why.
       const target = await fastify.prisma.order.findFirst({
-        where: { id: body.data.merge_order_id, ticket_id: ticket.id, org_id: payload.orgId },
+        where: { id: body.data.merge_order_id, ticket_id: ticket.id, org_id: ticket.org_id },
         include: { items: true },
       });
 
@@ -597,7 +490,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const historyEntries: any[] = [];
         for (const ri of target.items.filter(i => !submittedNames.has(i.product_name))) {
           historyEntries.push({
-            org_id: payload.orgId, order_id: target.id, actor_id: actorUser.id,
+            org_id: ticket.org_id, order_id: target.id, actor_id: actorUser.id,
             action_type: 'producto_eliminado', field: 'Producto eliminado',
             value_before: `${ri.quantity_label ? ri.quantity_label + ' ' : ''}${ri.product_name} - $${Number(ri.price).toLocaleString('es-CO')}`,
             value_after: 'Eliminado',
@@ -608,7 +501,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           const prior = priorByName.get(item.product_name);
           if (!prior) {
             historyEntries.push({
-              org_id: payload.orgId, order_id: target.id, actor_id: actorUser.id,
+              org_id: ticket.org_id, order_id: target.id, actor_id: actorUser.id,
               action_type: 'producto_agregado', field: 'Producto agregado',
               value_before: '',
               value_after: `${item.quantity_label ? item.quantity_label + ' ' : ''}${item.product_name} - $${item.price}`,
@@ -619,7 +512,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             const priceChanged = Number(prior.price) !== Number(item.price);
             if (qtyChanged || priceChanged) {
               historyEntries.push({
-                org_id: payload.orgId, order_id: target.id, actor_id: actorUser.id,
+                org_id: ticket.org_id, order_id: target.id, actor_id: actorUser.id,
                 action_type: 'producto_modificado', field: 'Producto modificado',
                 value_before: `${prior.quantity_label ? prior.quantity_label + ' ' : ''}${prior.product_name} - $${Number(prior.price).toLocaleString('es-CO')}`,
                 value_after: `${item.quantity_label ? item.quantity_label + ' ' : ''}${item.product_name} - $${Number(item.price).toLocaleString('es-CO')}`,
@@ -630,7 +523,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         }
         if (addressChanged) {
           historyEntries.push({
-            org_id: payload.orgId, order_id: target.id, actor_id: actorUser.id,
+            org_id: ticket.org_id, order_id: target.id, actor_id: actorUser.id,
             action_type: 'edit', field: 'Dirección',
             value_before: target.address, value_after: body.data.address,
             notes: histNotes,
@@ -638,7 +531,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         }
         if (paymentChanged) {
           historyEntries.push({
-            org_id: payload.orgId, order_id: target.id, actor_id: actorUser.id,
+            org_id: ticket.org_id, order_id: target.id, actor_id: actorUser.id,
             action_type: 'edit', field: 'Método de pago',
             value_before: PAYMENT_LABEL_CLIENT[target.payment_method] ?? target.payment_method,
             value_after: PAYMENT_LABEL_CLIENT[body.data.payment_method!] ?? body.data.payment_method,
@@ -659,32 +552,46 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { last_message_at: new Date() } });
 
         const provider = MetaCloudProvider.fromOrg(ticket.org);
+        let wppMessageId: string | null = null;
+        let failedReason: string | null = null;
         if (provider) {
           try {
-            await provider.sendText(ticket.phone, msgText);
+            // Saved onto the message below - webhook.ts's ingestStatus matches every
+            // later delivered/read/failed status update by this id. Without it, this
+            // confirmation's check mark stays stuck on "sent" forever, never a real
+            // failure either (see inbox.ts's /reply for the same fix, same reasoning).
+            const sent = await provider.sendText(ticket.phone, msgText);
+            wppMessageId = sent.messageId;
           } catch (err: any) {
+            failedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
             fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando confirmación de items agregados');
           }
         } else {
           fastify.log.warn({ ticketId: ticket.id }, 'WPP: org sin credenciales Meta, confirmación solo guardada en BD');
+        }
+        if (wppMessageId || failedReason) {
+          await fastify.prisma.ticketMessage.update({
+            where: { id: message.id },
+            data: { wpp_message_id: wppMessageId, failed_reason: failedReason },
+          });
         }
 
         // Same as staff editing the order (orders.ts's PATCH /:id) - the client just
         // changed something real about this order via the form, so any factura
         // already sent for it is now a stale snapshot.
         await fastify.prisma.invoiceLink.updateMany({
-          where: { order_id: updated.id, org_id: payload.orgId, revoked_at: null },
+          where: { order_id: updated.id, org_id: ticket.org_id, revoked_at: null },
           data: { revoked_at: new Date() },
         });
 
-        fastify.io.to(`org:${payload.orgId}`).emit('order:updated', updated as any);
-        fastify.io.to(`org:${payload.orgId}`).emit('ticket:message', {
+        fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updated as any);
+        fastify.io.to(`org:${ticket.org_id}`).emit('ticket:message', {
           ticketId: ticket.id,
           message: {
             id: message.id, ticket_id: ticket.id, direction: 'out' as const, text: message.text,
             media_url: null, media_type: null, media_caption: null,
-            sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: null,
-            sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: null,
+            sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
+            sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: failedReason,
           },
         });
 
@@ -713,10 +620,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
     const orderItems = newItemsData.map((item, idx) => ({ ...item, sort_order: idx }));
 
-    const order = await createOrderWithRetryNum(fastify.prisma, payload.orgId, todayLocal, (num) =>
+    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (num) =>
       fastify.prisma.order.create({
         data: {
-          org_id: payload.orgId,
+          org_id: ticket.org_id,
           ticket_id: ticket.id,
           num,
           customer_name: ticket.customer_name ?? '',
@@ -766,14 +673,26 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // wrote the message to the DB and broadcast it to staff views, so staff saw a
     // "recibido" message in the chat but the client's phone never got anything.
     const provider = MetaCloudProvider.fromOrg(ticket.org);
+    let wppMessageId: string | null = null;
+    let failedReason: string | null = null;
     if (provider) {
       try {
-        await provider.sendText(ticket.phone, msgText);
+        // Saved onto the message below - see the merge path's identical fix above
+        // (same file) for why this id has to be captured, not just discarded.
+        const sent = await provider.sendText(ticket.phone, msgText);
+        wppMessageId = sent.messageId;
       } catch (err: any) {
+        failedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
         fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando confirmación de pedido desde formulario');
       }
     } else {
       fastify.log.warn({ ticketId: ticket.id }, 'WPP: org sin credenciales Meta, confirmación de formulario solo guardada en BD');
+    }
+    if (wppMessageId || failedReason) {
+      await fastify.prisma.ticketMessage.update({
+        where: { id: message.id },
+        data: { wpp_message_id: wppMessageId, failed_reason: failedReason },
+      });
     }
 
     // Historial del pedido - una entrada 'create' del pedido, más un
@@ -781,7 +700,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // para que se vea qué productos/precios trajo desde el inicio, no solo en ediciones.
     await fastify.prisma.orderHistory.create({
       data: {
-        org_id: payload.orgId,
+        org_id: ticket.org_id,
         order_id: order.id,
         actor_id: actorUser.id,
         action_type: 'create',
@@ -791,7 +710,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     if (order.items.length > 0) {
       await fastify.prisma.orderHistory.createMany({
         data: order.items.map((i) => ({
-          org_id: payload.orgId, order_id: order.id, actor_id: actorUser.id,
+          org_id: ticket.org_id, order_id: order.id, actor_id: actorUser.id,
           action_type: 'producto_agregado', field: 'Producto agregado',
           value_before: '',
           value_after: `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name} - $${Number(i.price).toLocaleString('es-CO')}`,
@@ -801,8 +720,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
 
     // Socket events
-    fastify.io.to(`org:${payload.orgId}`).emit('order:created', order as any);
-    fastify.io.to(`org:${payload.orgId}`).emit('ticket:message', {
+    fastify.io.to(`org:${ticket.org_id}`).emit('order:created', order as any);
+    fastify.io.to(`org:${ticket.org_id}`).emit('ticket:message', {
       ticketId: ticket.id,
       message: {
         id: message.id,
@@ -810,9 +729,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         direction: 'out' as const,
         text: message.text,
         media_url: null, media_type: null, media_caption: null,
-        sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: null,
+        sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
         sent_at: message.sent_at.toISOString(),
-        delivered: false, read_by_client: false, failed_reason: null,
+        delivered: false, read_by_client: false, failed_reason: failedReason,
       },
     });
 

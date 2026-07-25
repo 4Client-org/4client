@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
-import { isWithinFormHours } from '../src/routes/public.js';
+import { generateFormLinkUrl } from '../src/lib/formLink.js';
 
 const ADMIN_PASS = 'PublicFormAdmin1!';
 const DEVICE = 'device-token-001';
@@ -12,32 +12,26 @@ async function login(app: FastifyInstance, email: string, password: string): Pro
   return res.json().data.accessToken as string;
 }
 
-// Pure function of an explicit `now`, not the real clock - the route wiring itself
-// (`if (shouldBlockForHours()) return sendFormClosed(reply)`, public.ts) is disabled
-// under NODE_ENV=test specifically so the rest of this file's app.inject calls don't
-// pass or fail depending on what hour it happens to be when the suite runs. This is
-// what actually verifies the 8pm Colombia boundary is correct.
-describe('isWithinFormHours - form links only work between 4am and 8pm Colombia time', () => {
-  it('7:59pm Colombia -> still within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T19:59:00-05:00').getTime())).toBe(true);
-  });
-  it('exactly 8:00pm Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T20:00:00-05:00').getTime())).toBe(false);
-  });
-  it('11:59pm Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T23:59:00-05:00').getTime())).toBe(false);
-  });
-  it('midnight / pre-4am Colombia -> closed', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T00:00:00-05:00').getTime())).toBe(false);
-    expect(isWithinFormHours(new Date('2026-01-15T03:59:00-05:00').getTime())).toBe(false);
-  });
-  it('exactly 4:00am Colombia -> within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T04:00:00-05:00').getTime())).toBe(true);
-  });
-  it('mid-morning Colombia -> within hours', () => {
-    expect(isWithinFormHours(new Date('2026-01-15T07:00:00-05:00').getTime())).toBe(true);
-  });
-});
+// Mints a real form_link_token the exact same way inbox.ts's GET /form-link does
+// (calls the same production function) - there's no JWT to hand-sign anymore, the
+// token is just an opaque DB-backed lookup key (see formLink.ts/public.ts).
+async function issueFormToken(app: FastifyInstance, ticketId: string, orgId: string, sentByUserId?: string): Promise<string> {
+  const url = await generateFormLinkUrl(app as any, ticketId, orgId, sentByUserId);
+  return new URL(url).searchParams.get('t')!;
+}
+
+// For TTL-boundary tests only - backdates the CURRENT token's issued-at (and
+// optionally its opened-at) after a real issueFormToken() call, to simulate time
+// having passed without needing the test to actually wait.
+async function backdateFormToken(app: FastifyInstance, ticketId: string, issuedAt: Date, openedAt: Date | null = null) {
+  await app.prisma.ticket.update({ where: { id: ticketId }, data: { form_token_min_iat: issuedAt, form_link_opened_at: openedAt } });
+}
+
+// The 4am-8pm form-hours restriction (isWithinFormHours/shouldBlockForHours) was
+// removed - customers writing late at night to get first-in-line tomorrow need the
+// form to work right then, not be told to come back in the morning. The link's own
+// TTL (4h unopened, 24h once opened - see formLink.ts) is the only time boundary
+// left; there's nothing to unit-test here anymore.
 
 describe('public form routes', () => {
   let app: FastifyInstance;
@@ -70,12 +64,7 @@ describe('public form routes', () => {
       data: { org_id: orgId, phone, customer_name: 'Cliente Formulario' },
     });
     ticketId = ticket.id;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    token = (app.jwt.sign as any)(
-      { type: 'form_link', ticketId, orgId, clientName: 'Cliente Formulario', clientPhone: phone, orgName: org.name },
-      { expiresIn: '7d' },
-    );
+    token = await issueFormToken(app, ticketId, orgId);
   });
 
   afterAll(async () => {
@@ -118,6 +107,31 @@ describe('public form routes', () => {
     expect(order.items.every(i => i.added_by_client === false)).toBe(true);
   });
 
+  it('a manually-typed product (not picked from the catalog) is flagged added_by_client on the very first submission - the one exception to the rule above', async () => {
+    const manualTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001117788', customer_name: 'Cliente Manual' } });
+    const manualToken = await issueFormToken(app, manualTicket.id, orgId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/public/submit',
+      payload: {
+        token: manualToken, device_token: 'device-manual', address: 'Calle Manual 1',
+        items: [
+          { product_name: 'Mango', quantity_label: '2 kg' },
+          { product_name: 'Producto raro que no está en el catálogo', quantity_label: '1 unidad', is_manual: true },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId }, include: { items: true } });
+    const catalogItem = order.items.find(i => i.product_name === 'Mango')!;
+    const manualItem = order.items.find(i => i.product_name === 'Producto raro que no está en el catálogo')!;
+    expect(catalogItem.added_by_client).toBe(false);
+    expect(manualItem.added_by_client).toBe(true);
+    expect(Number(manualItem.price)).toBe(0); // unknown to the catalog - staff prices it afterward
+  });
+
   it('GET /form-info now lists that order, editable (status nuevo), with its item', async () => {
     const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=${PHONE4}` });
     const orders = res.json().data.orders;
@@ -153,19 +167,14 @@ describe('public form routes', () => {
     expect(stillOk.statusCode).toBe(200);
   });
 
-  it('wrong phone_last4 is rejected with its own distinct error, not the generic "link inválido" - the right digits still work', async () => {
+  it('phone_last4 is no longer checked at all - a wrong value in the querystring is silently ignored, not rejected', async () => {
     const wrong = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=9999` });
-    expect(wrong.statusCode).toBe(401);
-    expect(wrong.json().code).toBe('PHONE_MISMATCH');
-
-    const right = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=${PHONE4}` });
-    expect(right.statusCode).toBe(200);
+    expect(wrong.statusCode).toBe(200);
   });
 
   it('GET /link-status answers "is this link alive" with no phone_last4 at all - a revoked link is caught here before the visitor ever sees the digit-entry screen', async () => {
     const statusTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001117700', customer_name: 'Cliente Status' } });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const statusToken = (app.jwt.sign as any)({ type: 'form_link', ticketId: statusTicket.id, orgId }, { expiresIn: '7d' });
+    const statusToken = await issueFormToken(app, statusTicket.id, orgId);
 
     const alive = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${statusToken}` });
     expect(alive.statusCode).toBe(200);
@@ -184,23 +193,18 @@ describe('public form routes', () => {
     expect(dead.json().code).toBe('INVALID_TOKEN');
   });
 
-  it('a link nobody opens within 10 minutes of being issued dies on its own - one opened in time keeps working past that mark', async () => {
+  it('a link nobody opens within 4 hours of being issued dies on its own - one opened in time keeps working past that mark', async () => {
     const staleTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112233', customer_name: 'Cliente Nunca Abrio' } });
     const openedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112234', customer_name: 'Cliente Si Abrio' } });
-    const oldIat = Math.floor(Date.now() / 1000) - 700; // 11m40s ago
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sign = (tId: string) => (app.jwt.sign as any)(
-      { type: 'form_link', ticketId: tId, orgId, iat: oldIat },
-      { expiresIn: '7d' },
-    );
-    const staleToken = sign(staleTicket.id);
-    const openedToken = sign(openedTicket.id);
-
+    const oldIssuedAt = new Date(Date.now() - 14500 * 1000); // 4h1m40s ago
+    const staleToken = await issueFormToken(app, staleTicket.id, orgId);
+    const openedToken = await issueFormToken(app, openedTicket.id, orgId);
+    await backdateFormToken(app, staleTicket.id, oldIssuedAt);
     // Simulates openedTicket's link having been opened (a real form-info call) well
-    // within its first 10 minutes, before this old `iat` would otherwise matter -
-    // once form_link_opened_at is set, assertLinkStillValid never re-checks the
-    // 10-minute window for this link again, no matter how stale `iat` gets from here.
-    await app.prisma.ticket.update({ where: { id: openedTicket.id }, data: { form_link_opened_at: new Date(oldIat * 1000 + 60_000) } });
+    // within its first 4 hours, before this old issued-at would otherwise matter -
+    // once form_link_opened_at is set, loadTicketByFormToken never re-checks the
+    // 4-hour window for this link again, no matter how stale it gets from here.
+    await backdateFormToken(app, openedTicket.id, oldIssuedAt, new Date(oldIssuedAt.getTime() + 60_000));
 
     const staleRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=stale-device&phone_last4=2233` });
     expect(staleRes.statusCode).toBe(401);
@@ -321,11 +325,7 @@ describe('public form routes', () => {
     // (MAX_FORM_ORDERS_PER_TICKET), which later tests below still rely on being unspent.
     const caminoPhone = '573001112288';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: caminoPhone, customer_name: 'Cliente Camino' } });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const caminoToken = (app.jwt.sign as any)(
-      { type: 'form_link', ticketId: ticket.id, orgId, clientName: 'Cliente Camino', clientPhone: caminoPhone, orgName: 'org' },
-      { expiresIn: '7d' },
-    );
+    const caminoToken = await issueFormToken(app, ticket.id, orgId);
     const create = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
       payload: { token: caminoToken, device_token: 'device-camino', phone_last4: '2288', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
@@ -355,11 +355,7 @@ describe('public form routes', () => {
   it('a pedido an encargado typed up manually (source !== "form") can never be merged into via the client form, even while it\'s otherwise in an editable status', async () => {
     const staffPhone = '573001112260';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: staffPhone, customer_name: 'Cliente Pedido Encargado' } });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const staffOrderToken = (app.jwt.sign as any)(
-      { type: 'form_link', ticketId: ticket.id, orgId },
-      { expiresIn: '7d' },
-    );
+    const staffOrderToken = await issueFormToken(app, ticket.id, orgId);
     // Created the way an encargado would - directly via POST /orders, not the form.
     const staffOrder = await app.prisma.order.create({
       data: {
@@ -391,16 +387,20 @@ describe('public form routes', () => {
   it('GET /form-info marks a pedido an encargado typed up manually as not editable, even while it\'s in an editable status - the client can only view it', async () => {
     const staffPhone2 = '573001112261';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: staffPhone2, customer_name: 'Cliente Ver Pedido Encargado' } });
+    // Colombia-local "today" (UTC-5), same formula GET /form-info itself uses to
+    // filter - a bare `new Date()` is the real UTC date, which drifts a calendar day
+    // behind Colombia's between 00:00-05:00 UTC (7pm-midnight Colombia), making this
+    // order invisible to the very query being tested during exactly that window.
+    const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
     await app.prisma.order.create({
       data: {
         org_id: orgId, ticket_id: ticket.id, num: '901', customer_name: 'Cliente Ver Pedido Encargado',
         customer_phone: staffPhone2, address: 'Calle Encargado 2', payment_method: 'cash',
-        registered_by: adminId, fecha: new Date(), source: 'encargado', status: 'nuevo',
+        registered_by: adminId, fecha: todayLocal, source: 'encargado', status: 'nuevo',
         items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
       },
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const viewToken = (app.jwt.sign as any)({ type: 'form_link', ticketId: ticket.id, orgId }, { expiresIn: '7d' });
+    const viewToken = await issueFormToken(app, ticket.id, orgId);
 
     const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${viewToken}&device_token=device-view&phone_last4=2261` });
     expect(res.statusCode).toBe(200);
@@ -434,11 +434,7 @@ describe('public form routes', () => {
   it('GET /form-info still lists a "camino" order, read-only', async () => {
     const caminoPhone2 = '573001112266';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: caminoPhone2, customer_name: 'Cliente Camino 2' } });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const caminoToken2 = (app.jwt.sign as any)(
-      { type: 'form_link', ticketId: ticket.id, orgId, clientName: 'Cliente Camino 2', clientPhone: caminoPhone2, orgName: 'org' },
-      { expiresIn: '7d' },
-    );
+    const caminoToken2 = await issueFormToken(app, ticket.id, orgId);
     const create = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
       payload: { token: caminoToken2, device_token: 'device-camino-2', phone_last4: '2266', address: 'Calle Camino 2', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
@@ -454,7 +450,7 @@ describe('public form routes', () => {
     expect(found.status).toBe('camino');
   });
 
-  it('GET /inbox/:ticketId/form-link embeds who sent it and expires by end of the current Colombia day, not 7 days out', async () => {
+  it('GET /inbox/:ticketId/form-link embeds who sent it and is a short opaque token, not a long JWT', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/v1/inbox/${ticketId}/form-link`,
@@ -464,17 +460,22 @@ describe('public form routes', () => {
     const url = res.json().data.url as string;
     const sentToken = new URL(url).searchParams.get('t')!;
 
-    const decoded = app.jwt.decode(sentToken) as any;
-    expect(decoded.sentByUserId).toBe(adminId);
-    // clientName/clientPhone/orgName/sentByName used to be embedded here too - now
-    // dropped to keep the token (and the WhatsApp link built from it) shorter; every
-    // route that needs them reads the current value off the ticket/org instead.
-    expect(decoded.clientName).toBeUndefined();
-    expect(decoded.sentByName).toBeUndefined();
-    // Bounded well under the old 7-day expiry, and never more than ~24h out.
-    const secondsUntilExpiry = decoded.exp - Math.floor(Date.now() / 1000);
-    expect(secondsUntilExpiry).toBeGreaterThan(0);
-    expect(secondsUntilExpiry).toBeLessThanOrEqual(24 * 3600);
+    // Plain [0-9a-f], no JWT dots/base64url punctuation - a long self-contained JWT
+    // (~280 chars) is exactly what got silently truncated by a real customer's
+    // mobile keyboard/clipboard, corrupting the signature and showing "link
+    // inválido" for a link that was actually fine. 40 hex chars is short enough to
+    // survive that and still 160 bits of entropy - unguessable either way.
+    expect(sentToken).toMatch(/^[0-9a-f]{40}$/);
+
+    // There's no token payload to decode anymore - who sent it and when live on the
+    // ticket row itself (public.ts's loadTicketByFormToken reads them from there).
+    const ticket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticketId } });
+    expect(ticket.form_link_token).toBe(sentToken);
+    expect(ticket.form_link_sent_by).toBe(adminId);
+    expect(ticket.form_token_min_iat).not.toBeNull();
+    const msSinceIssued = Date.now() - ticket.form_token_min_iat!.getTime();
+    expect(msSinceIssued).toBeGreaterThanOrEqual(0);
+    expect(msSinceIssued).toBeLessThan(10_000);
   });
 
   it('an order created through a real /form-link token is attributed to (registered_by) the staff member who sent it, and the history note names them', async () => {
@@ -513,11 +514,7 @@ describe('public form routes', () => {
         data: { org_id: orgId, phone: revokedPhone, customer_name: 'Cliente Revocado' },
       });
       revokedTicketId = ticket.id;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      revokedToken = (app.jwt.sign as any)(
-        { type: 'form_link', ticketId: revokedTicketId, orgId, clientName: 'Cliente Revocado', clientPhone: revokedPhone, orgName: 'org' },
-        { expiresIn: '7d' },
-      );
+      revokedToken = await issueFormToken(app, revokedTicketId, orgId);
     });
 
     it('POST /inbox/:ticketId/form-link/revoke requires auth', async () => {
@@ -575,12 +572,6 @@ describe('public form routes', () => {
       const firstWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${firstToken}&device_token=resend-device&phone_last4=2255` });
       expect(firstWorks.statusCode).toBe(200);
 
-      // The supersede check compares `iat` at whole-second resolution - wait past the
-      // second boundary so the second link genuinely gets a later `iat` than the
-      // first, otherwise two links minted in the same clock second would (correctly)
-      // both remain valid, which isn't the scenario this test is exercising.
-      await new Promise(r => setTimeout(r, 1100));
-
       // Staff sends a second link for the same ticket (e.g. a reminder) - the first
       // one must die automatically, with no separate revoke call.
       const second = await app.inject({
@@ -602,52 +593,15 @@ describe('public form routes', () => {
   // several links sent over time for the same ticket all embed the same ticketId,
   // and revocation is keyed purely by ticketId, so one block call must invalidate
   // every one of them at once, not just whichever was issued last.
-  describe('blocking a link blocks every link ever issued for that ticket, not just the latest', () => {
-    const multiPhone = '573001112277';
-    let multiTicketId: string;
-    let oldToken: string;
-    let newToken: string;
-
-    beforeAll(async () => {
-      const ticket = await app.prisma.ticket.create({
-        data: { org_id: orgId, phone: multiPhone, customer_name: 'Cliente Multi Link' },
-      });
-      multiTicketId = ticket.id;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sign = (extra: Record<string, unknown> = {}) => (app.jwt.sign as any)(
-        { type: 'form_link', ticketId: multiTicketId, orgId, clientName: 'Cliente Multi Link', clientPhone: multiPhone, orgName: 'org', ...extra },
-        { expiresIn: '7d' },
-      );
-      oldToken = sign();
-      // A later link, issued as if staff sent a second "Formulario" message afterward
-      // (e.g. reminding the client) - same ticket, different JWT.
-      newToken = sign();
-    });
-
-    it('both an old and a newer link for the same ticket are rejected after a single block call', async () => {
-      // Same device_token for both - the device lock is scoped to the TICKET (public.ts's
-      // FormLinkSession), not to any one specific link/JWT, so this is the same customer's
-      // same phone using two different links sent for the same conversation over time.
-      const device = 'multi-device';
-      const oldWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${oldToken}&device_token=${device}&phone_last4=2277` });
-      expect(oldWorks.statusCode).toBe(200);
-      const newWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${newToken}&device_token=${device}&phone_last4=2277` });
-      expect(newWorks.statusCode).toBe(200);
-
-      const block = await app.inject({
-        method: 'POST',
-        url: `/api/v1/inbox/${multiTicketId}/form-link/revoke`,
-        headers: { authorization: `Bearer ${adminToken}` },
-        payload: {},
-      });
-      expect(block.statusCode).toBe(200);
-
-      const oldBlocked = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${oldToken}&device_token=${device}&phone_last4=2277` });
-      expect(oldBlocked.statusCode).toBe(401);
-      const newBlocked = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${newToken}&device_token=${device}&phone_last4=2277` });
-      expect(newBlocked.statusCode).toBe(401);
-    });
-  });
+  // There used to be a separate "blocking a link blocks every link ever issued for
+  // that ticket, not just the latest" test here, from back when a form link was a
+  // self-contained JWT: multiple independently-signed tokens could all be
+  // simultaneously "valid" for one ticket (each checked only against its own
+  // supersession state), so revoke had to be proven to catch all of them at once.
+  // Now the token is a single opaque value stored directly on the ticket row
+  // (form_link_token) - there is only ever ONE live link per ticket by construction,
+  // so that scenario can no longer happen at all; the revocation test above already
+  // covers "the current link dies when revoked".
 
   // A ticket is now one row per phone FOREVER (schema.prisma), not per day - so the
   // per-link new-order cap (MAX_FORM_ORDERS_PER_TICKET=3, public.ts) must be scoped
@@ -656,11 +610,7 @@ describe('public form routes', () => {
   it('the per-link new-order cap only counts TODAY\'s form orders - old-day orders never count against it, and a fresh day resets it', async () => {
     const capPhone = '573001112244';
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: capPhone, customer_name: 'Cliente Limite Diario' } });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const capToken = (app.jwt.sign as any)(
-      { type: 'form_link', ticketId: ticket.id, orgId, clientName: 'Cliente Limite Diario', clientPhone: capPhone, orgName: 'org' },
-      { expiresIn: '7d' },
-    );
+    const capToken = await issueFormToken(app, ticket.id, orgId);
     const admin = await app.prisma.user.findFirstOrThrow({ where: { org_id: orgId, role: 'admin' } });
 
     // 5 old form orders from a past day - well over the cap of 3, but none of them
@@ -718,23 +668,13 @@ describe('public form routes', () => {
       const phoneB = '573001112222';
       const ticketA = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneA, customer_name: 'Cliente Block A' } });
       const ticketB = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneB, customer_name: 'Cliente Block B' } });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sign = (ticketId: string, orgName: string, clientName: string, clientPhone: string) => (app.jwt.sign as any)(
-        { type: 'form_link', ticketId, orgId, clientName, clientPhone, orgName },
-        { expiresIn: '7d' },
-      );
-      const tokenA = sign(ticketA.id, 'org', 'Cliente Block A', phoneA);
-      const tokenB = sign(ticketB.id, 'org', 'Cliente Block B', phoneB);
+      const tokenA = await issueFormToken(app, ticketA.id, orgId);
+      const tokenB = await issueFormToken(app, ticketB.id, orgId);
 
       const aWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenA}&device_token=block-a&phone_last4=2211` });
       expect(aWorks.statusCode).toBe(200);
       const bWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenB}&device_token=block-b&phone_last4=2222` });
       expect(bWorks.statusCode).toBe(200);
-
-      // Past the second boundary so the block timestamp is genuinely later than
-      // either token's `iat` (whole-second comparison, same reasoning as the
-      // supersede test above).
-      await new Promise(r => setTimeout(r, 1100));
 
       const block = await app.inject({
         method: 'POST',
@@ -748,145 +688,118 @@ describe('public form routes', () => {
       const bBlocked = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${tokenB}&device_token=block-b&phone_last4=2222` });
       expect(bBlocked.statusCode).toBe(401);
 
-      await new Promise(r => setTimeout(r, 1100));
-      const freshToken = sign(ticketA.id, 'org', 'Cliente Block A', phoneA);
-      // Same device_token as before - ticketA's FormLinkSession is still claimed by
-      // "block-a" (only inbox.ts's real GET /form-link clears it on a fresh send,
-      // which this test bypasses by signing the JWT directly); a different
-      // device_token here would 401 on the device-lock check, not proving anything
-      // about the org-block feature this test is actually about.
+      // A link issued AFTER the org-wide block still works - issueFormToken calls
+      // the real generateFormLinkUrl, which also clears ticketA's FormLinkSession,
+      // so the same device_token claiming it again here is fine too.
+      const freshToken = await issueFormToken(app, ticketA.id, orgId);
       const freshWorks = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=block-a&phone_last4=2211` });
       expect(freshWorks.statusCode).toBe(200);
     });
   });
 });
 
-describe('link abuse lockout - repeated wrong PIN guesses', () => {
+// The wrong-PIN lockout ladder itself (registerFailedLinkAttempt / MAX_ATTEMPTS_SOFT
+// / MAX_ATTEMPTS_HARD in lib/linkSecurity.ts) is left in place as dormant infra, but
+// nothing calls it anymore now that phone_last4 isn't checked - so there is no
+// remaining code path to exercise here. Covered instead by the TTL/revocation/
+// supersession tests above, which are the security boundary now.
+
+describe('public /submit - Meta WhatsApp delivery tracking on the order confirmation message', () => {
   let app: FastifyInstance;
   let orgId: string;
-  let adminId: string;
+  let originalFetch: typeof fetch;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    // No WPP_TOKEN_ENC_KEY in the test env - crypto.ts treats an unprefixed value as
+    // legacy plaintext, so a plain string round-trips fine without real encryption.
+    await app.prisma.organization.update({
+      where: { id: orgId },
+      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+    });
+    await createTestUser(app.prisma, orgId, 'admin', 'SubmitWppAdmin1!');
+    originalFetch = global.fetch;
+  });
+
+  afterAll(async () => {
+    global.fetch = originalFetch;
+    await app.close();
+  });
+
+  it('the "pedido recibido" confirmation sent to the client stores the real Meta message id, not the hardcoded null it used to send', async () => {
+    const phone = '573001119920';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Submit WPP' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    // Unique per test run, not a fixed literal - wpp_message_id is globally unique,
+    // and a hardcoded value would collide with a leftover row from a previous run
+    // against the same (not wiped between runs) test database.
+    const fakeWamid = `wamid.SUBMITOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { token, device_token: 'device-wpp-submit', phone_last4: '9920', address: 'Calle WPP 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const message = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: ticket.id, direction: 'out' } });
+    expect(message!.wpp_message_id).toBe(fakeWamid);
+  });
+});
+
+describe('public /submit - cobro en casa chosen by the client on the form', () => {
+  let app: FastifyInstance;
+  let orgId: string;
   let adminToken: string;
 
   beforeAll(async () => {
     app = await buildTestServer();
     const org = await createTestOrg(app.prisma);
     orgId = org.id;
-    const admin = await createTestUser(app.prisma, orgId, 'admin', 'LockoutAdmin1!');
-    adminId = admin.id;
-    adminToken = await login(app, admin.email, 'LockoutAdmin1!');
+    const admin = await createTestUser(app.prisma, orgId, 'admin', 'CodFormAdmin1!');
+    const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { email: admin.email, password: 'CodFormAdmin1!' } });
+    adminToken = login.json().data.accessToken;
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  function sign(ticketId: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (app.jwt.sign as any)({ type: 'form_link', ticketId, orgId }, { expiresIn: '7d' });
-  }
+  it('a client picking "Cobro en casa" on the public form never decides completo/vuelta themselves - the order lands with it unset, and staff can set it afterward from the app', async () => {
+    const phone = '573001119930';
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Cod Form' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
 
-  it('10 wrong phone_last4 guesses against the same link kill it - even the correct digits stop working afterward', async () => {
-    const phone = '573001119900';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Link' } });
-    const token = sign(ticket.id);
-
-    for (let i = 0; i < 10; i++) {
-      const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=lockout-link&phone_last4=0000` });
-      expect(res.statusCode).toBe(401);
-      expect(res.json().code).toBe('PHONE_MISMATCH');
-    }
-
-    // 11th try, this time with the RIGHT digits - the link itself is already dead.
-    const afterLimit = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=lockout-link&phone_last4=9900` });
-    expect(afterLimit.statusCode).toBe(403);
-    expect(afterLimit.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-
-    // GET /link-status - checked BEFORE the digit-entry screen even shows - must
-    // surface this SAME specific reason, not the generic "Link inválido o expirado"
-    // (that was the bug: the PDF's equivalent /status route already showed the
-    // specific reason, this one didn't).
-    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${token}` });
-    expect(status.statusCode).toBe(403);
-    expect(status.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-  });
-
-  it('a freshly-issued link resets the per-link count, so it works again even after the old one got exhausted', async () => {
-    const phone = '573001119901';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Reset' } });
-    const staleToken = sign(ticket.id);
-
-    for (let i = 0; i < 10; i++) {
-      await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=lockout-reset&phone_last4=0000` });
-    }
-    const dead = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=lockout-reset&phone_last4=9901` });
-    expect(dead.statusCode).toBe(403);
-    expect(dead.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
-
-    const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-    const freshToken = new URL(linkRes.json().data.url).searchParams.get('t')!;
-    const works = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=lockout-reset&phone_last4=9901` });
-    expect(works.statusCode).toBe(200);
-  });
-
-  it('30 cumulative wrong guesses across re-issued links blocks the WHOLE ticket for 24h, even a link issued after the block started', async () => {
-    const phone = '573001119902';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Lockout Ticket' } });
-
-    // Burn through 3 links' worth of wrong guesses (10 each = 30 total) - each
-    // fresh link resets ITS OWN per-link count, but the ticket-wide cumulative
-    // count (what actually matters here) is never reset by issuing a new link.
-    for (let link = 0; link < 3; link++) {
-      const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-      const t = new URL(linkRes.json().data.url).searchParams.get('t')!;
-      for (let i = 0; i < 10; i++) {
-        await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${t}&device_token=lockout-ticket-${link}&phone_last4=0000` });
-      }
-    }
-
-    // A brand-new link, issued AFTER the block was triggered, is still blocked -
-    // it's the ticket that's locked out, not any one token.
-    const linkRes = await app.inject({ method: 'GET', url: `/api/v1/inbox/${ticket.id}/form-link`, headers: { authorization: `Bearer ${adminToken}` } });
-    const freshToken = new URL(linkRes.json().data.url).searchParams.get('t')!;
-    const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${freshToken}&device_token=lockout-ticket-final&phone_last4=9902` });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().code).toBe('TICKET_BLOCKED');
-
-    // Same check via /link-status, the pre-digit-entry precheck a fresh page load
-    // actually hits first - must show TICKET_BLOCKED there too, not a generic error.
-    const status = await app.inject({ method: 'GET', url: `/api/v1/public/link-status?t=${freshToken}` });
-    expect(status.statusCode).toBe(403);
-    expect(status.json().code).toBe('TICKET_BLOCKED');
-  });
-
-  it('10 wrong guesses on the FORM link also block that ticket\'s already-outstanding factura link, not just the form link - the soft block is shared, not per-token', async () => {
-    const phone = '573001119903';
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Cross Lockout Form' } });
-
-    // Factura sent BEFORE the wrong guesses below - sending a NEW one afterward
-    // would itself clear the soft block (it's the "give another chance" action),
-    // which would hide the exact bug this test guards against.
-    const order = await app.prisma.order.create({
-      data: {
-        org_id: orgId, ticket_id: ticket.id, num: '920', customer_name: 'Cliente Cross Lockout Form',
-        customer_phone: phone, address: 'Calle Cross Form 1',
-        payment_method: 'cash', registered_by: adminId, fecha: new Date(),
+    const submit = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: {
+        token, device_token: 'device-cod-form', phone_last4: '9930', address: 'Calle Cod Form 1',
+        payment_method: 'cod', items: [{ product_name: 'Mango', quantity_label: '1 kg' }],
       },
     });
-    const tinyPdfBase64 = Buffer.from('%PDF-1.4 fake content for test').toString('base64');
-    const upload = await app.inject({
-      method: 'POST', url: '/api/v1/files/invoice', headers: { authorization: `Bearer ${adminToken}` },
-      payload: { data: tinyPdfBase64, num: '920', order_id: order.id },
+    expect(submit.statusCode).toBe(201);
+    const orderId = submit.json().data.orderId;
+
+    // Nothing about completo/vuelta was ever asked of the client - the public
+    // /submit schema has no cod_choice/amount_received field at all, so the order
+    // lands exactly the same way an encargado-created cod order does before anyone
+    // has decided: both null.
+    const created = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(created.payment_method).toBe('cod');
+    expect(created.cod_choice).toBeNull();
+    expect(created.amount_received).toBeNull();
+
+    // Staff opens the order in the app and sets it - same PATCH any encargado-made
+    // cod order goes through, no special-casing needed for a form-created one.
+    await app.prisma.orderItem.updateMany({ where: { order_id: orderId }, data: { price: 3000 } });
+    const patch = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { amount_received: 3000, cod_choice: 'completo' },
     });
-    const filename = new URL(upload.json().url).searchParams.get('f')!;
-
-    const token = sign(ticket.id);
-    for (let i = 0; i < 10; i++) {
-      await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=cross-lockout-form&phone_last4=0000` });
-    }
-
-    // The factura, never touched by any of the wrong guesses above, is dead too.
-    const res = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=9903` });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().code).toBe('LINK_ATTEMPTS_EXCEEDED');
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().data.cod_choice).toBe('completo');
   });
 });

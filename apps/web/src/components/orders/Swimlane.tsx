@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell } from 'lucide-react';
-import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr } from '../../lib/format';
+import { Siren, MessageSquare, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Eye, Plus, AlertTriangle, Lock, Bell, Bike, Banknote, ArrowLeftRight, Wallet } from 'lucide-react';
+import { STATUS_LABEL, STATUS_ORDER, fmtCOP, todayStr, PAYMENT_LABEL } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useMoveOrder } from '../../hooks/useOrders';
+import { useAuthStore } from '../../store/auth';
 import { toast } from '../ui/Toast';
 import DetallePedidoModal from '../modals/DetallePedidoModal';
 
@@ -80,23 +81,64 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
   return Math.floor((Date.now() - firstActiveMs) / 60000);
 }
 
+// Urgent (ZONA ROJA) the moment a real pedido exists and isn't closed yet - not
+// after sitting 20 minutes. A new pedido needing attention IS the alert now, not a
+// pedido that's been neglected for a while; staff wants every open order visible
+// up top right away, not just the stale ones. A ticket with no pedido at all keeps
+// the old 20-minute "been waiting for a response" threshold below (isTicketUrg) -
+// that's a different concern (an unanswered customer, not an unworked order) and
+// wasn't part of this ask.
 function isOrderUrg(order: Order): boolean {
-  if (order.paid || order.status === 'cerrado') return false;
-  return minsSinceDate(order.created_at) > 20;
+  return !order.paid && order.status !== 'cerrado';
 }
 
 function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
-  return ticketElapsedMins(ticket, ticketOrders) > 20;
+  if (ticketOrders.length === 0) return minsSinceDate(ticket.created_at) > 20;
+  return ticketOrders.some(isOrderUrg);
 }
 
 export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, onOpenTicket, onCreateFromTicket }: Props) {
+  const user = useAuthStore((s) => s.user);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [cobroDirectId, setCobroDirectId] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
-  const [collapsedTickets, setCollapsedTickets] = useState<Set<string>>(new Set());
+  // Persisted across reloads/navigation - a ticket collapsed to save scroll space
+  // was silently re-expanding on every refresh, since this was plain component
+  // state with nothing backing it. Scoped per logged-in user (not a flat key) - a
+  // shared browser/device between staff (or an admin checking in) was otherwise
+  // inheriting whatever a DIFFERENT person had collapsed, which made no sense for
+  // someone seeing the board for the first time that session.
+  const collapsedKey = `4client_collapsed_tickets_${user?.userId ?? 'anon'}`;
+  const [collapsedTickets, setCollapsedTickets] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(collapsedKey);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(collapsedKey, JSON.stringify([...collapsedTickets]));
+    } catch { /* localStorage unavailable - just won't persist, not fatal */ }
+  }, [collapsedKey, collapsedTickets]);
   const [, setTick] = useState(0);
   const moveOrder = useMoveOrder();
   const drag = useRef<{ orderId: string; ticketId: string | null } | null>(null);
+  // Height of the zona roja block (0 when there isn't one) - the status header row
+  // sticks directly below it, and that block's own height varies (wraps to more
+  // lines depending on how many urgent tickets there are and the viewport width),
+  // so it's measured rather than guessed.
+  const [redZoneHeight, setRedZoneHeight] = useState(0);
+  const redZoneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = redZoneRef.current;
+    if (!el) { setRedZoneHeight(0); return; }
+    const ro = new ResizeObserver(() => setRedZoneHeight(el.offsetHeight));
+    ro.observe(el);
+    setRedZoneHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  });
   // Red-zone only means something for what's happening right now - looking at a past
   // day shouldn't paint everything on it as urgent forever.
   const isToday = fecha === todayStr();
@@ -142,12 +184,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     if (nextStatus === 'cerrado') {
       // 'cerrado' isn't a plain status move - the backend only allows reaching it
       // through the guarded /cobro flow (amount received + password). Same path the
-      // drag-and-drop-onto-"cerrado" column already uses below.
-      const total = order.items.reduce((s, i) => s + Number(i.price), 0);
-      if (total <= 0) {
-        toast('No es posible cerrar el pedido porque no tiene un total calculado', true);
-        return;
-      }
+      // drag-and-drop-onto-"cerrado" column already uses below. A $0 total (every
+      // item agotado) is legitimate and closeable - no pre-check blocking it here.
       setCobroDirectId(order.id);
       return;
     }
@@ -183,12 +221,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     if (!order || order.status === targetStatus) { drag.current = null; return; }
     if (order.locked) { toast('Pedido bloqueado', true); drag.current = null; return; }
     if (targetStatus === 'cerrado') {
-      const total = order.items.reduce((s, i) => s + Number(i.price), 0);
-      if (total <= 0) {
-        toast('No es posible cerrar el pedido porque no tiene un total calculado', true);
-        drag.current = null;
-        return;
-      }
+      // A $0 total (every item agotado) is legitimate and closeable - no pre-check
+      // blocking it here, same as moveNext above.
       setCobroDirectId(drag.current.orderId);
       drag.current = null;
       return;
@@ -314,10 +348,34 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             </span>
           )}
         </div>
+        {/* Domiciliario shown right on the card - staff shouldn't have to open the
+            order just to see who's carrying it. Nothing new needed for orders
+            created before this - GET /orders already returns `employee` for every
+            order that has one assigned (orders.ts's buildOrderSelect), this is a
+            display-only addition that applies to old and new orders alike. */}
+        {ord.employee?.name && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--gt)', marginBottom: 4, fontWeight: 600 }}>
+            <Bike size={11} style={{ flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ord.employee.name}</span>
+          </div>
+        )}
+        {/* Payment method shown right on the card too, same reasoning as domiciliario
+            above - staff shouldn't have to open the order just to see efectivo vs
+            transferencia vs cobro en casa. */}
+        {ord.payment_method && ord.payment_method !== 'sin_asignar' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--gt)', marginBottom: 4, fontWeight: 600 }}>
+            {ord.payment_method === 'transfer'
+              ? <ArrowLeftRight size={11} style={{ flexShrink: 0 }} />
+              : ord.payment_method === 'cod'
+                ? <Wallet size={11} style={{ flexShrink: 0 }} />
+                : <Banknote size={11} style={{ flexShrink: 0 }} />}
+            <span>{PAYMENT_LABEL[ord.payment_method] ?? ord.payment_method}</span>
+          </div>
+        )}
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
-            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0}
+            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); movePrev(ord); }}>
             <ChevronLeft size={14} />
           </button>
@@ -325,7 +383,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />Ver
           </button>
           <button className="dc-btn" title={ord.status === 'entregado' ? 'Cerrar pedido' : 'Avanzar'}
-            disabled={ord.locked || frozen || ord.status === 'cerrado'}
+            disabled={ord.locked || frozen || ord.status === 'cerrado' || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); moveNext(ord); }}>
             <ChevronRight size={14} />
           </button>
@@ -337,9 +395,22 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
   return (
     <>
       {urgTickets.length > 0 && (
-        <div style={{
-          background: '#FEE2E2', border: '2px solid #F87171', borderRadius: 'var(--rad)',
-          padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        <div ref={redZoneRef} style={{
+          background: '#FEE2E2', border: '2px solid #F87171',
+          padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          position: 'sticky', top: 0, zIndex: 160,
+          // Bleeds through .ac's LEFT/RIGHT padding only, so the bar reaches the
+          // true left/right edges of the scroll area once stuck (that inset never
+          // scrolls away, so it always needs closing). NOT the top - .khead (the
+          // "X pedidos - Y pendientes" line) sits right above this in the DOM, and
+          // a negative top margin doesn't know or care whether the element is
+          // actually stuck yet: it always pulls this up by that amount, which
+          // covered khead's text even before any scrolling happened. Top padding
+          // scrolls away naturally with khead, so top:0 alone is already flush.
+          marginTop: 0, marginBottom: 0,
+          marginLeft: 'calc(var(--ac-pad) * -1)', marginRight: 'calc(var(--ac-pad) * -1)',
+          paddingLeft: 'var(--ac-pad)', paddingRight: 'var(--ac-pad)',
+          borderLeft: 'none', borderRight: 'none', borderRadius: 0,
         }}>
           <Siren size={18} color="#991B1B" />
           <span style={{ fontSize: 13, fontWeight: 800, color: '#991B1B' }}>
@@ -353,7 +424,11 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                   style={{
                     background: '#DC2626', color: '#fff', border: 'none',
                     padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700,
-                    cursor: 'pointer', animation: 'pulse 1.5s infinite',
+                    cursor: 'pointer',
+                    // Once caja is cerrada these are no longer "still happening right
+                    // now" alerts - they're a static record that a chat went unanswered
+                    // that day. Selecting one still works exactly the same either way.
+                    animation: diaCerrado ? undefined : 'pulse 1.5s infinite',
                     display: 'inline-flex', alignItems: 'center', gap: 5,
                   }}>
                   <AlertTriangle size={11} />
@@ -378,9 +453,17 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
       )}
 
       <div className="slane-wrap">
-        <div className="slane">
+        {/* top = zona roja's own rendered height (0 when there isn't one), so this
+            sticks flush right below it with no gap and no overlap. Zona roja no
+            longer bleeds vertically (see its own comment above), so this no longer
+            needs to compensate for that either - when there's no zona roja this is
+            just top:0, flush under .khead once scrolled. */}
+        <div className="slane slane-header" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
           <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
+            <span style={{ marginLeft: 'auto', background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+              {filteredTickets.length}
+            </span>
           </div>
           {STATUS_ORDER.map((s) => (
             <div key={s} className="slane-hcell" style={{ background: COL_BG[s] }}>
@@ -391,7 +474,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
               </span>
             </div>
           ))}
-
+        </div>
+        <div className="slane slane-body">
           {filteredTickets.map((ticket) => {
             // Match by ticket_id on the flat orders list, NOT by intersecting with
             // ticket.orders (GET /tickets' nested include, strictly `fecha`-scoped with
@@ -448,18 +532,25 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                 <div className={`slane-tcell${urg ? ' urg' : ''}`} onClick={() => onOpenTicket(ticket.id)}
                   style={{ opacity: isTicketGhost ? 0.72 : 1 }}>
                   {ticket.unread_count > 0 && <div className="tk-new-dot">{ticket.unread_count}</div>}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                  {/* Button sits right next to tk-num on the LEFT, not the top-right
+                      corner - that corner is where tk-new-dot (absolute, top:5
+                      right:5) lands, and used to cover this button whenever a new
+                      message arrived. Kept out of that corner regardless of
+                      whether the urgency badge (still right-aligned via its own
+                      marginLeft:auto) is present or not. */}
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
                     <span className="tk-num">{tNum}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {urg && <span className="tk-urg"><AlertTriangle size={10} />{formatElapsed(ticketElapsedMins(ticket, ticketOrders))}</span>}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gt)', display: 'flex', alignItems: 'center' }}
-                        title="Contraer fila"
-                      >
-                        <ChevronUp size={14} />
-                      </button>
-                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 2, marginLeft: 4,
+                        color: 'var(--gt)', display: 'flex', alignItems: 'center', flexShrink: 0,
+                      }}
+                      title="Contraer fila"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    {urg && <span className="tk-urg" style={{ marginLeft: 'auto' }}><AlertTriangle size={10} />{formatElapsed(ticketElapsedMins(ticket, ticketOrders))}</span>}
                   </div>
                   {(isTicketGhost || isTicketArrived) && (
                     <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--az)', background: 'var(--azc)', padding: '2px 7px', borderRadius: 20, marginBottom: 4, display: 'inline-block' }}>
