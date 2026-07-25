@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { ShoppingCart, CheckCircle, XCircle, Check, Plus, Trash2, ChevronDown, ChevronUp, ArrowLeft, Lock } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
+import { normalizeSearch } from '../lib/normalize';
 
 const API = resolveApiBase();
 
@@ -17,7 +18,7 @@ const STATUS_LABEL_CLIENT: Record<string, string> = {
   camino: 'En camino', cerrado: 'Entregado',
 };
 
-const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta'];
+const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta', 'Pesos $'];
 const DEFAULT_UNIT = 'Kilo';
 
 function groupByCategory(products: Product[]) {
@@ -60,6 +61,7 @@ export default function ClientFormPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [dayOrders, setDayOrders] = useState<DayOrder[]>([]);
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
   // null = not decided yet (only matters while dayOrders.length > 0); 'new' = a
   // separate order; any other value = the id of the existing order being edited.
   const [mergeTarget, setMergeTarget] = useState<string | 'new' | null>(null);
@@ -142,6 +144,10 @@ export default function ClientFormPage() {
   useEffect(() => {
     if (!token) { setState('invalid'); setErrorMsg('Link inválido. Pide un nuevo link al negocio.'); return; }
 
+    // Read synchronously (not via state, which wouldn't be committed yet in this
+    // same effect) so the orders.length branch below can tell whether there's an
+    // in-progress draft to resume straight back into.
+    let restoredMergeTarget: string | null = null;
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
@@ -150,6 +156,16 @@ export default function ClientFormPage() {
           setSelected(draft.items);
           if (typeof draft.address === 'string') setAddress(draft.address);
           if (typeof draft.paymentMethod === 'string') setPaymentMethod(draft.paymentMethod);
+          // A refresh mid-order must not dump the client back at a "choose which
+          // order" menu with their picks silently sitting unreachable behind it -
+          // that menu's own chooseTarget() throws away `selected` (after a confirm
+          // dialog) the moment ANY option is picked, including resuming the same
+          // one. Restoring mergeTarget too means this effect can skip straight
+          // back into 'catalog' below, same as a first-ever visit does.
+          if (draft.items.length > 0 && typeof draft.mergeTarget === 'string') {
+            restoredMergeTarget = draft.mergeTarget;
+            setMergeTarget(draft.mergeTarget as any);
+          }
         } else {
           localStorage.removeItem(draftKey);
         }
@@ -165,13 +181,14 @@ export default function ClientFormPage() {
         if (!ok) { setState('invalid'); setErrorMsg(body.error ?? 'Link inválido o expirado.'); return; }
         return loadFormInfo().then(orders => {
           if (orders === null) return;
-          // First-ever visit today (no orders yet) - straight to the catalog, nothing
-          // to choose between. Any later visit (an order already exists) - the menu,
-          // with that order to resume plus the option to start a separate new one.
-          if (orders.length > 0) {
+          // First-ever visit today (no orders yet), OR a refresh mid-order with a
+          // resumable draft - straight to the catalog, no menu to interrupt into.
+          // Any OTHER later visit (an order exists, nothing pending to resume) -
+          // the menu, with that order to resume plus the option to start a new one.
+          if (orders.length > 0 && !restoredMergeTarget) {
             setState('choose');
           } else {
-            setMergeTarget('new');
+            if (!restoredMergeTarget) setMergeTarget('new');
             setState('catalog');
             setTimeout(() => searchRef.current?.focus(), 100);
           }
@@ -198,10 +215,13 @@ export default function ClientFormPage() {
       if (selected.length === 0) {
         localStorage.removeItem(draftKey);
       } else {
-        localStorage.setItem(draftKey, JSON.stringify({ items: selected, address, paymentMethod, savedAt: Date.now() }));
+        // mergeTarget travels with the draft too - restoring items without it
+        // left a refresh mid-order with no way to resume straight back into
+        // 'catalog' (see the mount effect above).
+        localStorage.setItem(draftKey, JSON.stringify({ items: selected, address, paymentMethod, mergeTarget, savedAt: Date.now() }));
       }
     } catch { /* localStorage unavailable - ignore, form still works without persistence */ }
-  }, [selected, address, paymentMethod, hydrated, token]);
+  }, [selected, address, paymentMethod, mergeTarget, hydrated, token]);
 
   // Live-update: poll for status changes on the client's order(s) - both while
   // choosing which one to edit and while actively editing one - so a board change
@@ -241,15 +261,15 @@ export default function ClientFormPage() {
   }, [state, token, deviceToken, mergeTarget]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
-  const searchLower = search.toLowerCase().trim();
+  const searchLower = normalizeSearch(search);
   const visibleGroups = useMemo(() => {
     if (!searchLower) return grouped;
     return grouped
       .map(g => ({
         category: g.category,
         products: g.products.filter(p =>
-          p.name.toLowerCase().includes(searchLower) ||
-          p.category.toLowerCase().includes(searchLower)
+          normalizeSearch(p.name).includes(searchLower) ||
+          normalizeSearch(p.category).includes(searchLower)
         ),
       }))
       .filter(g => g.products.length > 0);
@@ -383,6 +403,39 @@ export default function ClientFormPage() {
     }
     setState('catalog');
     setTimeout(() => searchRef.current?.focus(), 100);
+  }
+
+  // Cancels the client's own order entirely (not an edit) - only ever offered on
+  // an `editable` order (same gate the backend re-checks itself). On success,
+  // re-fetches the day's orders; if none are left, drops straight into the fresh
+  // catalog form immediately, same as a first-ever visit - matching what a NEW
+  // visit to this link would already do via form-info's own notIn:
+  // ['cerrado','papelera'] filter, without waiting for a reload.
+  async function deleteOrder(orderId: string) {
+    if (!window.confirm('¿Eliminar este pedido por completo? Esta acción no se puede deshacer.')) return;
+    setDeletingOrderId(orderId);
+    try {
+      const res = await fetch(`${API}/api/v1/public/order/${orderId}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, device_token: deviceToken }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({} as { error?: string }));
+        alert(err.error ?? 'No se pudo eliminar el pedido.');
+        return;
+      }
+      const orders = await loadFormInfo();
+      if (orders !== null && orders.length === 0) {
+        setMergeTarget('new');
+        setState('catalog');
+        setTimeout(() => searchRef.current?.focus(), 100);
+      }
+    } catch {
+      alert('No se pudo conectar. Verifica tu internet e intenta de nuevo.');
+    } finally {
+      setDeletingOrderId(null);
+    }
   }
 
   function backToChoose() {
@@ -590,7 +643,7 @@ export default function ClientFormPage() {
               );
             }
             return (
-              <button key={o.id} onClick={() => chooseTarget(o.id)}
+              <div key={o.id} onClick={() => chooseTarget(o.id)}
                 style={{
                   width: '100%', textAlign: 'left', background: '#fff', border: '2px solid #ddd',
                   borderRadius: 14, padding: '14px 16px', marginBottom: 10, cursor: 'pointer',
@@ -599,13 +652,28 @@ export default function ClientFormPage() {
                   <div style={{ fontSize: 15, fontWeight: 800, color: GREEN }}>
                     Pedido #{o.num} · {o.items.length} producto{o.items.length !== 1 ? 's' : ''}
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: GREEN, background: '#f0fdf4', padding: '3px 9px', borderRadius: 20 }}>
-                    {STATUS_LABEL_CLIENT[o.status] ?? o.status}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: GREEN, background: '#f0fdf4', padding: '3px 9px', borderRadius: 20 }}>
+                      {STATUS_LABEL_CLIENT[o.status] ?? o.status}
+                    </div>
+                    {/* stopPropagation - this card's own onClick opens it for
+                        editing (chooseTarget); deleting must not also trigger that. */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteOrder(o.id); }}
+                      disabled={deletingOrderId === o.id}
+                      title="Eliminar este pedido"
+                      style={{
+                        background: 'none', border: 'none', cursor: deletingOrderId === o.id ? 'default' : 'pointer',
+                        color: '#c0392b', padding: 4, display: 'flex', alignItems: 'center',
+                        opacity: deletingOrderId === o.id ? 0.5 : 1,
+                      }}>
+                      <Trash2 size={15} />
+                    </button>
                   </div>
                 </div>
                 {o.address && <div style={{ fontSize: 13, color: '#555' }}>{o.address}</div>}
                 {o.paymentMethod && <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{PAYMENT_LABEL[o.paymentMethod] ?? o.paymentMethod}</div>}
-              </button>
+              </div>
             );
           })}
 

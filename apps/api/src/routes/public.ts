@@ -108,20 +108,16 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // needed; (2) explicitly revoked via POST /inbox/:ticketId/form-link/revoke;
   // (3) org-wide blocked - admin hit "Bloquear todos los links" (POST /inbox/
   // form-links/block-all), which stamps Organization.form_links_blocked_at after
-  // this token was issued; (4) never opened within UNOPENED_LINK_TTL_SECONDS, or
-  // (opened or not) more than 24h since issuance. All fail the same generic way on
-  // every public endpoint below - never reveals which of them it was.
-  // 4 hours - a link nobody opens within this window dies on its own. Was 10
-  // minutes (then 2h), both too short for real WhatsApp usage: a customer who
-  // doesn't see the notification right away (very common) came back to a dead link
-  // and a generic "Link inválido" with no clue that asking for a new one would fix
-  // it - reported as "the link doesn't open" even though nothing was actually
-  // broken. Four hours still bounds how long a link sent to the wrong number stays
-  // usable, just realistically instead of aggressively.
-  const UNOPENED_LINK_TTL_SECONDS = 4 * 60 * 60;
-  // Absolute cap regardless of opened state - used to be the JWT's own `exp` claim
-  // (enforced automatically by jwt.verify before any of this ran); now enforced
-  // here since there's no token payload carrying its own expiry anymore.
+  // this token was issued; (4) more than 24h since issuance, regardless of
+  // whether it was ever opened. All fail the same generic way on every public
+  // endpoint below - never reveals which of them it was.
+  // Flat 24h - simpler than the previous two-tier scheme (4h unopened / 24h once
+  // opened), which reportedly read as "the link doesn't open" to a customer who
+  // didn't see the WhatsApp notification right away and came back to find it
+  // already dead. Absolute cap, not renewed by opening it - used to be the JWT's
+  // own `exp` claim (enforced automatically by jwt.verify before any of this
+  // ran); now enforced here since there's no token payload carrying its own
+  // expiry anymore.
   const FORM_LINK_ABSOLUTE_TTL_SECONDS = 24 * 60 * 60;
 
   // The link itself (an unguessable random token, DB-backed, time-limited,
@@ -160,12 +156,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     if (ticket.form_token_min_iat) {
       const ageSeconds = (Date.now() - ticket.form_token_min_iat.getTime()) / 1000;
       if (ageSeconds > FORM_LINK_ABSOLUTE_TTL_SECONDS) throw new Error('expired');
-      // Only matters while it's still unopened - once form-info's handler stamps
-      // form_link_opened_at (below), this never fires again for this link, no
-      // matter how much later a later call comes in.
-      if (!ticket.form_link_opened_at && ageSeconds > UNOPENED_LINK_TTL_SECONDS) {
-        throw new Error('never opened in time');
-      }
     }
     return ticket;
   }
@@ -207,6 +197,27 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // change too: once an order is 'camino' or 'cerrado', only staff can touch it from
   // here on, the client's copy becomes view-only.
   const EDITABLE_STATUSES = ['nuevo', 'preparando', 'listo'] as const;
+
+  // Attribute an action taken via the client's form link to whichever staff
+  // member actually sent that specific link (form_link_sent_by, stamped when it
+  // was generated - see inbox.ts's /form-link route), so history/registered_by
+  // shows a real name instead of an arbitrary admin. Falls back to the first
+  // active admin/encargado for links issued before this existed, or sent
+  // automatically (webhook.ts's auto-send has no actor). Shared by /submit and
+  // the order-delete route below - both need a real User row for OrderHistory's
+  // required actor_id, since the client itself has no User account.
+  async function resolveActorUser(ticket: { org_id: string; form_link_sent_by: string | null }) {
+    let actorUser = ticket.form_link_sent_by
+      ? await fastify.prisma.user.findFirst({ where: { id: ticket.form_link_sent_by, org_id: ticket.org_id } })
+      : null;
+    if (!actorUser) {
+      actorUser = await fastify.prisma.user.findFirst({
+        where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
+        orderBy: { created_at: 'asc' },
+      });
+    }
+    return actorUser;
+  }
 
   // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever sees the
   // catalog, so a dead link (blocked/expired/revoked) shows the same "Link inválido"
@@ -354,20 +365,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       return sendInvalidToken(err, reply);
     }
 
-    // Attribute the order to whichever staff member actually sent this specific link
-    // (form_link_sent_by, stamped when it was generated - see inbox.ts's /form-link
-    // route), so history/registered_by shows a real name instead of an arbitrary
-    // admin. Falls back to the first active admin/encargado for links issued before
-    // this existed, or sent automatically (webhook.ts's auto-send has no actor).
-    let actorUser = ticket.form_link_sent_by
-      ? await fastify.prisma.user.findFirst({ where: { id: ticket.form_link_sent_by, org_id: ticket.org_id } })
-      : null;
-    if (!actorUser) {
-      actorUser = await fastify.prisma.user.findFirst({
-        where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
-        orderBy: { created_at: 'asc' },
-      });
-    }
+    const actorUser = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
     // Fetch product prices from catalog - needed either way (new order or merge)
@@ -738,6 +736,75 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     });
 
     return reply.status(201).send({ data: { ok: true, orderId: order.id, num: order.num } });
+  });
+
+  // POST /api/v1/public/order/:orderId/delete - client cancels their OWN order
+  // entirely (not an edit) via the form link. Same eligibility gate as everything
+  // else the client can touch here (source==='form', still nuevo/preparando/listo,
+  // not locked) - can't cancel an order staff typed up manually, or one already
+  // past the point of no return. Soft-deletes via the same 'papelera' status
+  // staff's own trash already uses (not a hard DELETE) - keeps the order/history
+  // for the audit trail. form-info's own `notIn: ['cerrado','papelera']` filter
+  // means the client's NEXT visit to this same link sees no active order for
+  // today and lands straight back in the fresh catalog form, same as a brand new
+  // customer - no special-casing needed there.
+  fastify.post('/order/:orderId/delete', {
+    config: {
+      rateLimit: {
+        max: 15,
+        timeWindow: '1 minute',
+        hook: 'preHandler',
+        keyGenerator: (req) => (req.body as { token?: string } | undefined)?.token || req.ip,
+      },
+    },
+  }, async (req, reply) => {
+    const { orderId } = req.params as { orderId: string };
+    const body = z.object({ token: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    let ticket: Awaited<ReturnType<typeof loadTicketByFormToken>>;
+    try {
+      ticket = await loadTicketByFormToken(body.data.token);
+      await assertDeviceOk(ticket.id, body.data.device_token);
+    } catch (err) {
+      return sendInvalidToken(err, reply);
+    }
+
+    const order = await fastify.prisma.order.findFirst({
+      where: { id: orderId, ticket_id: ticket.id, org_id: ticket.org_id },
+    });
+    if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+
+    const isEditable = order.source === 'form' && (EDITABLE_STATUSES as readonly string[]).includes(order.status) && !order.locked;
+    if (!isEditable) {
+      return reply.status(400).send({
+        error: 'Este pedido ya no se puede eliminar - contáctanos directamente si necesitas cambiar algo.',
+        code: 'NOT_EDITABLE',
+      });
+    }
+
+    const actorUser = await resolveActorUser(ticket);
+    if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
+
+    await fastify.prisma.$transaction([
+      fastify.prisma.order.update({ where: { id: order.id }, data: { status: 'papelera', client_modified: true } }),
+      fastify.prisma.orderHistory.create({
+        data: {
+          org_id: ticket.org_id, order_id: order.id, actor_id: actorUser.id,
+          action_type: 'papelera', field: 'Estado',
+          value_before: order.status,
+          value_after: 'Eliminado por el cliente',
+          notes: 'Vía formulario del cliente',
+        },
+      }),
+    ]);
+
+    // Same event the board/staff swimlane already listens for on any status move
+    // (orders.ts's PATCH /:id/status) - the card disappears from the active
+    // columns into papelera live, no different from a staff-initiated delete.
+    fastify.io.to(`org:${ticket.org_id}`).emit('order:moved', { orderId: order.id, newStatus: 'papelera' });
+
+    return reply.send({ data: { ok: true } });
   });
 
   // Legacy: GET /api/v1/public/org/:slug - kept for backward compat

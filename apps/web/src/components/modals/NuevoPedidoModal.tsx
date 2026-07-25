@@ -3,7 +3,7 @@ import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'luci
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import ChatImage from '../ui/ChatImage';
-import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -245,10 +245,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                       url = res.data.url;
                     } catch { toast('No se pudo generar el link', true); return; }
                     try {
-                      // Two separate messages, in order (awaited, not fire-and-
-                      // forget - the notice must arrive before the link).
+                      // Three separate messages, in order (awaited, not fire-and-
+                      // forget - each must arrive in this exact sequence).
                       await replyMut.mutateAsync(buildFormLinkWarningMessage());
                       await replyMut.mutateAsync(url);
+                      await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
                     } catch {
                       // replyMut's own onError already toasted the specific reason.
                     }

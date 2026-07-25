@@ -5,7 +5,7 @@ import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -162,10 +162,11 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
       return;
     }
     try {
-      // Two separate messages, in order (awaited, not fire-and-forget - the whole
-      // point is the notice arrives before the link, see formLinkMessage.ts).
+      // Three separate messages, in order (awaited, not fire-and-forget - the
+      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
       await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
       await formLinkMut.mutateAsync(url);
+      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.

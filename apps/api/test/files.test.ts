@@ -211,45 +211,37 @@ describe('files routes (invoice PDF)', () => {
     expect(afterEdit.json().code).toBe('INVOICE_EXPIRED');
   });
 
-  it('a link nobody opens within 4 hours of being issued dies on its own, even though it\'s well under the 24h absolute cap', async () => {
-    const upload = await app.inject({
+  it('a link survives past the old 4-hour unopened mark whether or not it was ever opened - flat 24h cap either way', async () => {
+    const neverOpenedUpload = await app.inject({
       method: 'POST',
       url: '/api/v1/files/invoice',
       headers: { authorization: `Bearer ${adminToken}` },
       payload: { data: tinyPdfBase64, num: '003', order_id: orderId },
     });
-    const filename = new URL(upload.json().url).searchParams.get('f')!;
-    // Back-date creation past the 4-hour unopened window, well within 24h.
+    const neverOpenedFilename = new URL(neverOpenedUpload.json().url).searchParams.get('f')!;
+    // Back-dated past 4h, still well within 24h, never opened - used to die here.
     await app.prisma.invoiceLink.update({
-      where: { filename },
+      where: { filename: neverOpenedFilename },
       data: { created_at: new Date(Date.now() - 241 * 60 * 1000) },
     });
+    const neverOpenedRes = await app.inject({ method: 'GET', url: `/api/v1/files/${neverOpenedFilename}?phone_last4=4400` });
+    expect(neverOpenedRes.statusCode).toBe(200);
 
-    const res = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=4400` });
-    expect(res.statusCode).toBe(410);
-    expect(res.json().code).toBe('INVOICE_EXPIRED');
-  });
-
-  it('a link opened in time keeps working past the 4-hour mark - only ever-unopened links die from that rule', async () => {
-    const upload = await app.inject({
+    const openedUpload = await app.inject({
       method: 'POST',
       url: '/api/v1/files/invoice',
       headers: { authorization: `Bearer ${adminToken}` },
       payload: { data: tinyPdfBase64, num: '004', order_id: orderId },
     });
-    const filename = new URL(upload.json().url).searchParams.get('f')!;
-
+    const openedFilename = new URL(openedUpload.json().url).searchParams.get('f')!;
     // Opened right away, same as a customer who taps the link promptly.
-    const firstOpen = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=4400` });
+    const firstOpen = await app.inject({ method: 'GET', url: `/api/v1/files/${openedFilename}?phone_last4=4400` });
     expect(firstOpen.statusCode).toBe(200);
-
-    // Backdate creation past 4 hours - opened_at is already set, so the
-    // unopened-dies rule must not fire even though `created_at` looks stale now.
     await app.prisma.invoiceLink.update({
-      where: { filename },
+      where: { filename: openedFilename },
       data: { created_at: new Date(Date.now() - 241 * 60 * 1000) },
     });
-    const secondOpen = await app.inject({ method: 'GET', url: `/api/v1/files/${filename}?phone_last4=4400` });
+    const secondOpen = await app.inject({ method: 'GET', url: `/api/v1/files/${openedFilename}?phone_last4=4400` });
     expect(secondOpen.statusCode).toBe(200);
   });
 

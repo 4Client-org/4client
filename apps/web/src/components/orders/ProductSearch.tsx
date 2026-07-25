@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef, KeyboardEvent } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
 import { toast } from '../ui/Toast';
+import { normalizeSearch } from '../../lib/normalize';
 
 // A negative price must never make it into `items` at all - not just get blocked
 // downstream at Guardar/Copiar/PDF/Enviar factura (defense-in-depth, still in place
@@ -54,6 +55,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
   const factboxSearchRef = useRef<HTMLInputElement>(null);
+  // Per-row refs for the CATALOG list (before adding) - unlike the Factbox below,
+  // every catalog row is always "live" at once (no single editingRow), so this
+  // needs a ref per product id, not one shared pair.
+  const catalogQtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const catalogPriceRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string }>>({});
   // Which committed item (by product_name) is being edited inline in the Factbox
   // table below - editing never touches the catalog's collapsed state anymore, so
@@ -83,7 +89,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   }, [clearKey]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
-  const searchLower = search.toLowerCase().trim();
+  const searchLower = normalizeSearch(search);
 
   const visibleGroups = useMemo(() => {
     if (!searchLower) return grouped;
@@ -91,8 +97,8 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       .map(g => ({
         category: g.category,
         products: g.products.filter(p =>
-          p.name.toLowerCase().includes(searchLower) ||
-          p.category.toLowerCase().includes(searchLower)
+          normalizeSearch(p.name).includes(searchLower) ||
+          normalizeSearch(p.category).includes(searchLower)
         ),
       }))
       .filter(g => g.products.length > 0);
@@ -175,6 +181,50 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     }
   }
 
+  // Flat, visible-order list of catalog products (grouped by category above,
+  // this flattens across group boundaries) - drives Up/Down navigation the same
+  // way the Factbox's own moveToRow does against visibleItems.
+  const flatVisibleProducts = useMemo(() => visibleGroups.flatMap(g => g.products), [visibleGroups]);
+
+  // Shared by both inputs of a CATALOG row (not yet added - every row is "live"
+  // at once here, unlike the Factbox's single editingRow). Left/Right toggle
+  // qty<->price on the same row; Up/Down move to the row above/below in the same
+  // column, landing in the top search bar at the very top boundary.
+  function handleCatalogArrowKeys(e: KeyboardEvent<HTMLInputElement>, product: Product, field: 'qty' | 'price') {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const idx = flatVisibleProducts.findIndex(p => p.id === product.id);
+      if (idx < 0) return;
+      if (e.key === 'ArrowUp' && idx === 0) {
+        searchRef.current?.focus();
+        return;
+      }
+      const next = flatVisibleProducts[e.key === 'ArrowUp' ? idx - 1 : idx + 1];
+      if (!next) return;
+      const ref = field === 'qty' ? catalogQtyRefs : catalogPriceRefs;
+      ref.current[next.id]?.focus();
+      ref.current[next.id]?.select();
+      return;
+    }
+    if (e.key === 'ArrowRight' && field === 'qty') {
+      // Boundary-aware - qty is type="text", so selectionStart is reliable: only
+      // jump to price once the cursor has nowhere further right to go within qty.
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      catalogPriceRefs.current[product.id]?.focus();
+      catalogPriceRefs.current[product.id]?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && field === 'price') {
+      // Unconditional, same reasoning as the Factbox's own price->qty jump -
+      // type="number" doesn't reliably expose selectionStart across browsers.
+      e.preventDefault();
+      catalogQtyRefs.current[product.id]?.focus();
+      catalogQtyRefs.current[product.id]?.select();
+    }
+  }
+
   function removeItem(productName: string) {
     onChange(items.filter(i => i.product_name !== productName));
   }
@@ -234,10 +284,17 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // editingRow changes, so opening the next row is all this needs to do.
   function advanceToNextRow(productName: string) {
     if (!commitEditField(productName)) return;
-    const idx = items.findIndex(i => i.product_name === productName);
-    const next = idx >= 0 ? items[idx + 1] : undefined;
-    if (next) editItem(next);
-    else setEditingRow(null); // last row - nothing further to advance to
+    // visibleItems (the factbox-search-filtered list), not the full unfiltered
+    // items - matches moveToRow's own arrow-key navigation below, which already
+    // gets this right; Enter didn't, and disagreeing about which row is "next"
+    // depending on whether Enter or an arrow key was pressed made no sense.
+    const idx = visibleItems.findIndex(i => i.product_name === productName);
+    const next = idx >= 0 ? visibleItems[idx + 1] : undefined;
+    if (next) { editItem(next); return; }
+    // Last row - nothing to advance to, but editingRow is left exactly as it
+    // was (still this row) instead of closing to null. Closing it used to kill
+    // keyboard nav dead: the input unmounts, focus falls to nowhere, and arrow
+    // keys stop doing anything until the person clicks something again.
   }
 
   // Up/Down between rows, same column: commits whatever's typed in the row being
@@ -356,9 +413,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   }, [editingRow]);
 
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
-  const factboxSearchLower = factboxSearch.toLowerCase().trim();
+  const factboxSearchLower = normalizeSearch(factboxSearch);
   const visibleItems = useMemo(
-    () => factboxSearchLower ? items.filter(i => i.product_name.toLowerCase().includes(factboxSearchLower)) : items,
+    () => factboxSearchLower ? items.filter(i => normalizeSearch(i.product_name).includes(factboxSearchLower)) : items,
     [items, factboxSearchLower],
   );
 
@@ -430,7 +487,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" strokeWidth="2.5">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input ref={searchRef} type="text" placeholder="Filtrar catálogo..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input ref={searchRef} type="text" placeholder="Filtrar catálogo..." value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown' && flatVisibleProducts.length > 0) {
+                  e.preventDefault();
+                  const first = flatVisibleProducts[0];
+                  catalogQtyRefs.current[first.id]?.focus();
+                }
+              }} />
             {search && (
               <button onClick={() => setSearch('')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 18, color: 'var(--gt)', lineHeight: 1 }}>
@@ -478,21 +542,23 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         {isCommitted && <Check size={11} color="var(--v)" style={{ marginLeft: 5, display: 'inline', verticalAlign: 'middle' }} />}
                       </div>
                       <input
+                        ref={el => { catalogQtyRefs.current[p.id] = el; }}
                         className="iinput"
                         placeholder="Ej: 2 kg"
                         value={local.qty}
                         onChange={e => setLocal(p.name, 'qty', e.target.value)}
-                        onKeyDown={e => handleKey(e, p.name)}
+                        onKeyDown={e => { handleKey(e, p.name); handleCatalogArrowKeys(e, p, 'qty'); }}
                         style={{ fontSize: 13 }}
                       />
                       <input
+                        ref={el => { catalogPriceRefs.current[p.id] = el; }}
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
                         min="0"
                         value={local.price}
                         onChange={e => setLocal(p.name, 'price', e.target.value)}
-                        onKeyDown={e => handleKey(e, p.name)}
+                        onKeyDown={e => { handleKey(e, p.name); handleCatalogArrowKeys(e, p, 'price'); }}
                         style={{ fontSize: 13 }}
                       />
                       {/* Confirm button */}

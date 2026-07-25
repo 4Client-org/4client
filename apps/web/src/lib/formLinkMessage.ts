@@ -12,8 +12,12 @@
 export function buildFormLinkWarningMessage(): string {
   return '*ESTE LINK ES SOLO PARA HACER TU PEDIDO Y HACER SEGUIMIENTO DE TUS PEDIDOS. '
     + 'NUNCA TE PEDIREMOS DINERO NI DATOS BANCARIOS NI INFORMACIÓN CONFIDENCIAL.*'
-    + '\n\n*Este link estará activo por 4 horas. Si lo abres dentro de ese tiempo, '
-    + 'quedará activo por 24 horas. Si no lo abres en las primeras 4 horas, quedará '
-    + 'inactivo y deberás pedir uno nuevo.*'
+    + '\n\n*Este link estará activo por 24 horas.*'
     + '\n\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
+}
+
+// Sent as a THIRD message, right after the link itself (see callers). Mirrors
+// apps/api/src/lib/formLink.ts's buildFormLinkFollowUpMessage - keep both in sync.
+export function buildFormLinkFollowUpMessage(): string {
+  return 'Diligencia por favor el pedido por medio del link. Cualquier duda con gusto.';
 }

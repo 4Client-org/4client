@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -447,10 +447,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       return;
     }
     try {
-      // Two separate messages, in order (awaited, not fire-and-forget - the whole
-      // point is the notice arrives before the link, see formLinkMessage.ts).
+      // Three separate messages, in order (awaited, not fire-and-forget - the
+      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
       await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
       await formLinkMut.mutateAsync(url);
+      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.

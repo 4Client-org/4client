@@ -6,6 +6,7 @@ import { useMoveOrder } from '../../hooks/useOrders';
 import { useAuthStore } from '../../store/auth';
 import { toast } from '../ui/Toast';
 import DetallePedidoModal from '../modals/DetallePedidoModal';
+import { normalizeSearch } from '../../lib/normalize';
 
 interface Ticket {
   id: string; phone: string; customer_name: string;
@@ -164,17 +165,28 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     return () => clearInterval(id);
   }, []);
 
+  const searchNorm = normalizeSearch(search);
+
   const filteredTickets = tickets.filter((t) =>
-    !search || t.customer_name.toLowerCase().includes(search.toLowerCase()) || t.phone.includes(search)
+    !searchNorm || normalizeSearch(t.customer_name).includes(searchNorm) || t.phone.includes(search)
   );
 
-  const filteredOrders = orders.filter((o) =>
-    o.status !== 'papelera' &&
-    (!search ||
-      o.customer_name.toLowerCase().includes(search.toLowerCase()) ||
-      o.num.includes(search) ||
-      o.address?.toLowerCase().includes(search.toLowerCase()))
-  );
+  // Matches every field staff might actually search by, not just name/order#/
+  // address - domiciliario, payment method (by its Spanish label, not the raw
+  // 'cod'/'transfer' value), the linked ticket's phone, and the order's total.
+  const filteredOrders = orders.filter((o) => {
+    if (o.status === 'papelera') return false;
+    if (!searchNorm) return true;
+    const total = o.items.reduce((sum, i) => sum + Number(i.price), 0);
+    const linkedTicket = tickets.find((t) => t.id === o.ticket_id);
+    return normalizeSearch(o.customer_name).includes(searchNorm)
+      || o.num.includes(search)
+      || normalizeSearch(o.address ?? '').includes(searchNorm)
+      || normalizeSearch(PAYMENT_LABEL[o.payment_method] ?? o.payment_method ?? '').includes(searchNorm)
+      || normalizeSearch(o.employee?.name ?? '').includes(searchNorm)
+      || String(total).includes(search)
+      || (linkedTicket?.phone.includes(search) ?? false);
+  });
 
   function moveNext(order: Order) {
     if (diaCerrado) return;

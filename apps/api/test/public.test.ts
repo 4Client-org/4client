@@ -30,8 +30,8 @@ async function backdateFormToken(app: FastifyInstance, ticketId: string, issuedA
 // The 4am-8pm form-hours restriction (isWithinFormHours/shouldBlockForHours) was
 // removed - customers writing late at night to get first-in-line tomorrow need the
 // form to work right then, not be told to come back in the morning. The link's own
-// TTL (4h unopened, 24h once opened - see formLink.ts) is the only time boundary
-// left; there's nothing to unit-test here anymore.
+// TTL (flat 24h regardless of whether it was ever opened - see formLink.ts) is the
+// only time boundary left; there's nothing to unit-test here anymore.
 
 describe('public form routes', () => {
   let app: FastifyInstance;
@@ -193,25 +193,38 @@ describe('public form routes', () => {
     expect(dead.json().code).toBe('INVALID_TOKEN');
   });
 
-  it('a link nobody opens within 4 hours of being issued dies on its own - one opened in time keeps working past that mark', async () => {
-    const staleTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112233', customer_name: 'Cliente Nunca Abrio' } });
+  it('a link survives past 4 hours whether or not it was ever opened - flat 24h cap either way', async () => {
+    const neverOpenedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112233', customer_name: 'Cliente Nunca Abrio' } });
     const openedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112234', customer_name: 'Cliente Si Abrio' } });
-    const oldIssuedAt = new Date(Date.now() - 14500 * 1000); // 4h1m40s ago
-    const staleToken = await issueFormToken(app, staleTicket.id, orgId);
+    const past4h = new Date(Date.now() - 14500 * 1000); // 4h1m40s ago - used to kill an unopened link
+    const neverOpenedToken = await issueFormToken(app, neverOpenedTicket.id, orgId);
     const openedToken = await issueFormToken(app, openedTicket.id, orgId);
-    await backdateFormToken(app, staleTicket.id, oldIssuedAt);
-    // Simulates openedTicket's link having been opened (a real form-info call) well
-    // within its first 4 hours, before this old issued-at would otherwise matter -
-    // once form_link_opened_at is set, loadTicketByFormToken never re-checks the
-    // 4-hour window for this link again, no matter how stale it gets from here.
-    await backdateFormToken(app, openedTicket.id, oldIssuedAt, new Date(oldIssuedAt.getTime() + 60_000));
+    await backdateFormToken(app, neverOpenedTicket.id, past4h);
+    await backdateFormToken(app, openedTicket.id, past4h, new Date(past4h.getTime() + 60_000));
 
-    const staleRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${staleToken}&device_token=stale-device&phone_last4=2233` });
-    expect(staleRes.statusCode).toBe(401);
-    expect(staleRes.json().code).toBe('INVALID_TOKEN');
+    const neverOpenedRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${neverOpenedToken}&device_token=stale-device&phone_last4=2233` });
+    expect(neverOpenedRes.statusCode).toBe(200);
 
     const openedRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${openedToken}&device_token=opened-device&phone_last4=2234` });
     expect(openedRes.statusCode).toBe(200);
+  });
+
+  it('a link dies past the flat 24h cap, whether or not it was ever opened', async () => {
+    const neverOpenedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112235', customer_name: 'Cliente Nunca Abrio 24h' } });
+    const openedTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001112236', customer_name: 'Cliente Si Abrio 24h' } });
+    const past24h = new Date(Date.now() - (24 * 3600 + 60) * 1000); // 24h1m ago
+    const neverOpenedToken = await issueFormToken(app, neverOpenedTicket.id, orgId);
+    const openedToken = await issueFormToken(app, openedTicket.id, orgId);
+    await backdateFormToken(app, neverOpenedTicket.id, past24h);
+    await backdateFormToken(app, openedTicket.id, past24h, new Date(past24h.getTime() + 60_000));
+
+    const neverOpenedRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${neverOpenedToken}&device_token=stale-device&phone_last4=2235` });
+    expect(neverOpenedRes.statusCode).toBe(401);
+    expect(neverOpenedRes.json().code).toBe('INVALID_TOKEN');
+
+    const openedRes = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${openedToken}&device_token=opened-device&phone_last4=2236` });
+    expect(openedRes.statusCode).toBe(401);
+    expect(openedRes.json().code).toBe('INVALID_TOKEN');
   });
 
   it('POST /submit with merge_order_id replaces the order\'s items with the full submitted list (not append-only), flags only the new/changed line, and sets client_modified', async () => {
@@ -502,6 +515,126 @@ describe('public form routes', () => {
     const createEntry = order.history.find(h => h.action_type === 'create');
     expect(createEntry?.notes).toContain(adminName);
     expect(createEntry?.actor_id).toBe(adminId);
+  });
+
+  describe('POST /public/order/:orderId/delete - client cancels their own order', () => {
+    it('deletes (papelera) an editable order the client submitted, and it disappears from form-info afterward', async () => {
+      const phone = '573001112270';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Elimina Pedido' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token, device_token: 'device-delete-1', address: 'Calle Elimina 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      expect(create.statusCode).toBe(201);
+      const orderId = create.json().data.orderId;
+
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-delete-1' },
+      });
+      expect(del.statusCode).toBe(200);
+
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(after.status).toBe('papelera');
+
+      const info = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=device-delete-1` });
+      expect(info.json().data.orders).toHaveLength(0);
+
+      const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
+      expect(history.some(h => h.action_type === 'papelera' && h.notes?.includes('formulario'))).toBe(true);
+    });
+
+    it('rejects deleting an order that already moved past listo (e.g. camino) - 400 NOT_EDITABLE, order untouched', async () => {
+      const phone = '573001112271';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Pedido En Camino' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token, device_token: 'device-delete-2', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      const orderId = create.json().data.orderId;
+      await app.prisma.order.update({ where: { id: orderId }, data: { status: 'camino' } });
+
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-delete-2' },
+      });
+      expect(del.statusCode).toBe(400);
+      expect(del.json().code).toBe('NOT_EDITABLE');
+
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(after.status).toBe('camino');
+    });
+
+    it('rejects deleting a pedido an encargado typed up manually (source !== "form"), even while still nuevo', async () => {
+      const phone = '573001112272';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Pedido Encargado Del' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const staffOrder = await app.prisma.order.create({
+        data: {
+          // Not a small fixed number like the other manual-order fixtures here - this
+          // file's growing pile of /submit calls auto-assigns sequential nums (MAX+1
+          // per org+fecha) that can collide with any hardcoded low number by the time
+          // this test runs, depending on execution order.
+          org_id: orgId, ticket_id: ticket.id, num: `E${Date.now() % 1000000}`, customer_name: 'Cliente Pedido Encargado Del',
+          customer_phone: phone, address: 'Calle Encargado 3', payment_method: 'cash',
+          registered_by: adminId, fecha: new Date(), source: 'encargado', status: 'nuevo',
+          items: { create: [{ product_name: 'Mango', price: 3000, sort_order: 0 }] },
+        },
+      });
+
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${staffOrder.id}/delete`,
+        payload: { token, device_token: 'device-delete-3' },
+      });
+      expect(del.statusCode).toBe(400);
+      expect(del.json().code).toBe('NOT_EDITABLE');
+    });
+
+    it('rejects a device_token that does not match the one already locked to this ticket', async () => {
+      const phone = '573001112273';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Delete Device Mismatch' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token, device_token: 'device-real', address: 'Calle Mismatch 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      const orderId = create.json().data.orderId;
+
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-impostor' },
+      });
+      expect(del.statusCode).toBe(401);
+
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(after.status).toBe('nuevo');
+    });
+
+    it('rejects an order belonging to a different ticket than the one the token was issued for', async () => {
+      const phoneA = '573001112274';
+      const phoneB = '573001112275';
+      const ticketA = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneA, customer_name: 'Cliente A' } });
+      const ticketB = await app.prisma.ticket.create({ data: { org_id: orgId, phone: phoneB, customer_name: 'Cliente B' } });
+      const tokenA = await issueFormToken(app, ticketA.id, orgId);
+      const tokenB = await issueFormToken(app, ticketB.id, orgId);
+      const createB = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token: tokenB, device_token: 'device-b', address: 'Calle B 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      const orderBId = createB.json().data.orderId;
+
+      // ticketA's own token/device trying to delete ticketB's order.
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderBId}/delete`,
+        payload: { token: tokenA, device_token: 'device-a' },
+      });
+      expect(del.statusCode).toBe(404);
+
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderBId } });
+      expect(after.status).toBe('nuevo');
+    });
   });
 
   describe('form-link revocation', () => {
