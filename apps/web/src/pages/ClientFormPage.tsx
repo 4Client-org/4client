@@ -17,7 +17,7 @@ const STATUS_LABEL_CLIENT: Record<string, string> = {
   camino: 'En camino', cerrado: 'Entregado',
 };
 
-const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja'];
+const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta'];
 const DEFAULT_UNIT = 'Kilo';
 
 function groupByCategory(products: Product[]) {
