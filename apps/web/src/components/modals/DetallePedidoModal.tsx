@@ -1003,8 +1003,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   Método de pago
                   {pagoFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
                 </label>
+                {/* Color goes on the SELECTED <option>, not the <select> itself - a
+                    color set directly on the select cascades to every option in the
+                    open dropdown list too (browsers render <option> text using the
+                    parent select's color unless the option has its own), which was
+                    turning all four choices red instead of just the current one. */}
                 <select className="fi2" disabled={readOnly} value={pago}
-                  style={pagoFromClient ? { color: '#DC2626', fontWeight: 700 } : undefined}
                   onChange={(e) => {
                     setPago(e.target.value);
                     // Same reset as NuevoPedidoModal - switching away from (or back
@@ -1012,10 +1016,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                     setCodChoice(null); setCodCash('');
                     markDirty();
                   }}>
-                  <option value="sin_asignar">Sin asignar</option>
-                  <option value="transfer">Transferencia</option>
-                  <option value="cash">Pagado en tienda</option>
-                  <option value="cod">Cobro en casa</option>
+                  <option value="sin_asignar" style={pagoFromClient && pago === 'sin_asignar' ? { color: '#DC2626', fontWeight: 700 } : undefined}>Sin asignar</option>
+                  <option value="transfer" style={pagoFromClient && pago === 'transfer' ? { color: '#DC2626', fontWeight: 700 } : undefined}>Transferencia</option>
+                  <option value="cash" style={pagoFromClient && pago === 'cash' ? { color: '#DC2626', fontWeight: 700 } : undefined}>Pagado en tienda</option>
+                  <option value="cod" style={pagoFromClient && pago === 'cod' ? { color: '#DC2626', fontWeight: 700 } : undefined}>Cobro en casa</option>
                 </select>
               </div>
               <div className="fg2">
