@@ -77,19 +77,27 @@ input,select,textarea{font-family:var(--f);}
    status header row) need `top:0` to mean truly flush against .ac's visible top
    edge (right under .ah), with zero built-in gap. Each tab's own first child adds
    that same amount back as its own paddingTop instead, which - unlike .ac's
-   padding - doesn't affect where sticky descendants measure "stuck" from. */
-.ac{padding:0 var(--ac-pad) var(--ac-pad);flex:1;min-height:0;overflow-y:auto;}
+   padding - doesn't affect where sticky descendants measure "stuck" from.
+   overflow-x:auto here (not just overflow-y) so THIS is the swimlane's one and
+   only scrolling ancestor - see .slane-wrap below for why it can't own its own
+   horizontal scroll without breaking the sticky status-header row. */
+.ac{padding:0 var(--ac-pad) var(--ac-pad);flex:1;min-height:0;overflow:auto;}
 .ac.inbox-mode{overflow:hidden;display:flex;flex-direction:column;padding-bottom:0;}
 .ac.wm{background-image:url('/fruver-san-gabriel-watermark.png');background-repeat:no-repeat;background-position:center 120px;background-size:520px auto;}
 
 /* SWIMLANE */
-/* overflow-y is explicit (not left to default) - CSS computes an unset overflow-y
-   to `auto` too whenever overflow-x is anything other than visible, which would
-   silently make THIS element (not .ac) the nearest scrolling ancestor for the
-   sticky header/zona-roja inside it - a completely different stickiness reference
-   than intended, which is what caused the status row to stick relative to the
-   wrong box and overlap the ticket cards. */
-.slane-wrap{overflow-x:auto;overflow-y:visible;margin-bottom:20px;}
+/* No overflow-x:auto here - horizontal scroll now lives on .ac instead (see its
+   own comment). Setting overflow-x without overflow-y here doesn't just add a
+   horizontal scrollbar: per the CSS Overflow spec, a plain (unset) overflow-y
+   computes to `auto` too whenever overflow-x isn't `visible` - EVEN if overflow-y
+   is explicitly written as `visible` (verified: that override still applies to an
+   explicit declaration, not just the default). That silently made this element
+   the nearest scrolling ancestor for the sticky status-header row instead of .ac,
+   which broke its stickiness outright past a certain scroll depth (confirmed with
+   an isolated repro: the header stopped sticking at all and scrolled off-screen
+   like ordinary content, which is what let it drift down over the ticket cards
+   instead of stopping flush under zona roja). */
+.slane-wrap{margin-bottom:20px;}
 .slane{display:grid;grid-template-columns:260px repeat(6,minmax(120px,1fr));min-width:1050px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
 /* Header row is its OWN grid (a sibling of the body grid, not a row inside it) -
    position:sticky on a grid item only sticks within its own grid AREA, so a
@@ -395,7 +403,7 @@ input,select,textarea{font-family:var(--f);}
    RESPONSIVE
    Targets: tablet landscape + phone landscape for the swimlane
    board (portrait/narrow-phone swimlane is explicitly out of
-   scope - too many columns to ever look good narrow; .slane-wrap
+   scope - too many columns to ever look good narrow; .ac
    already has overflow-x:auto as the fallback safety net).
    Modals stay usable down to phone portrait.
    Ordered widest -> narrowest so later blocks override earlier
@@ -422,7 +430,7 @@ input,select,textarea{font-family:var(--f);}
   .khead{gap:8px;}
 }
 
-/* PHONE LANDSCAPE (~560px-900px): narrowest realistic target; .slane-wrap horizontal scroll is the safety net when content doesn't perfectly fit */
+/* PHONE LANDSCAPE (~560px-900px): narrowest realistic target; .ac's horizontal scroll is the safety net when content doesn't perfectly fit */
 @media (max-width:900px){
   .slane{grid-template-columns:148px repeat(6,minmax(108px,1fr));min-width:796px;}
   .slane-hcell{padding:6px 6px;font-size:9px;letter-spacing:.3px;}

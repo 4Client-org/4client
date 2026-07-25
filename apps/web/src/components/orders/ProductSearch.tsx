@@ -135,7 +135,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     const newItem: Item = {
       product_name: productName,
       quantity_label: local.qty.trim(),
-      price: local.price.trim(),
+      // Left blank -> 0, same reasoning as commitEditField below: a blank price
+      // must never be what actually blocks saving the order.
+      price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
     };
 
@@ -204,7 +206,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     const newItem: Item = {
       product_name: productName,
       quantity_label: local.qty.trim(),
-      price: local.price.trim(),
+      // Left blank -> 0 immediately, not just at save time - staff shouldn't have
+      // to type a price to move on, and a blank value must never be what blocks
+      // saving the order.
+      price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
     };
     onChange(items.map(i => i.product_name === productName ? newItem : i));
@@ -536,12 +541,18 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
         </div>
       )}
       <div style={{ border: '1px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden', marginBottom: 14 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        {/* table-layout:fixed + explicit column widths - without this, a very long
+            quantity_label (free text is allowed now, not just "10 Kilo") makes
+            auto layout grow that COLUMN (and the whole table) to fit it, eating
+            into the Producto column's space. With fixed layout, a long value wraps
+            to more LINES within its own column instead - same trade the invoice
+            PDF already makes (splitTextToSize + row height growth). */}
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
           <thead>
             <tr style={{ background: 'var(--bg)' }}>
-              <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Producto</th>
-              <th style={{ textAlign: 'center', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)', whiteSpace: 'nowrap' }}>Cantidad</th>
-              <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Precio</th>
+              <th style={{ width: '44%', textAlign: 'left', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Producto</th>
+              <th style={{ width: '28%', textAlign: 'center', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Cantidad</th>
+              <th style={{ width: '22%', textAlign: 'right', padding: '8px 12px', fontWeight: 800, color: 'var(--gt)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: '2px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>Precio</th>
               <th style={{ padding: '8px 6px', borderBottom: '2px solid var(--brd)', width: 52 }}></th>
             </tr>
           </thead>
@@ -561,7 +572,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               const local = getLocal(i.product_name);
               return (
                 <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined }}>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
                     {i.product_name}
                     {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
                   </td>
@@ -583,7 +594,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                     ) : (
                       // Click the value directly to edit it - no longer required to
                       // hit the pencil icon first (that button still works too).
-                      <span onClick={() => editItem(i, 'qty')} style={{ cursor: 'pointer', display: 'block' }} title="Clic para editar">
+                      <span onClick={() => editItem(i, 'qty')} style={{ cursor: 'pointer', display: 'block', wordBreak: 'break-word' }} title="Clic para editar">
                         {i.quantity_label || '-'}
                       </span>
                     )}

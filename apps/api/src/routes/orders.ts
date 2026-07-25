@@ -40,7 +40,10 @@ async function createOrderWithRetryNum<T>(
 
 const orderItemSchema = z.object({
   product_name:   z.string().min(1).max(200),
-  quantity_label: z.string().max(50).optional(),
+  // Matches the DB column (schema.prisma: quantity_label @db.VarChar(100)) - staff
+  // and the client form both now allow free-text quantities ("una papa mediana",
+  // not just a number+unit), so this needs real room, not just enough for "10 Kilo".
+  quantity_label: z.string().max(100).optional(),
   price:          z.number().min(0).max(9_999_999),
   sort_order:     z.number().default(0),
   // Round-tripped from GET /orders/:id, not staff-settable in practice (the UI never

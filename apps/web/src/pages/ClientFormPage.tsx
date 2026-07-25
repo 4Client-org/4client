@@ -259,7 +259,10 @@ export default function ClientFormPage() {
     const num = (pendingQty[p.id] ?? '').trim();
     if (!num) return;
     const unit = pendingUnit[p.id] ?? DEFAULT_UNIT;
-    const qty = `${num} ${unit}`;
+    // Only append the unit onto an actual NUMBER ("2" -> "2 Kilo") - free-text
+    // quantities ("una papa mediana", "la más gruesa que tengan") already say what
+    // they mean and a unit tacked onto the end would just read wrong.
+    const qty = /^\d/.test(num) ? `${num} ${unit}` : num;
     setSelected(prev => {
       const exists = prev.findIndex(i => i.productId === p.id);
       if (exists >= 0) {
@@ -277,7 +280,7 @@ export default function ClientFormPage() {
     const name = manualName.trim();
     const num = manualQty.trim();
     if (!name || !num) return;
-    const qty = `${num} ${manualUnit}`;
+    const qty = /^\d/.test(num) ? `${num} ${manualUnit}` : num;
     const id = `manual-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
     setSelected(prev => [...prev, { product_name: name, quantity_label: qty, productId: id, isManual: true }]);
     setManualName('');
@@ -786,10 +789,8 @@ export default function ClientFormPage() {
             />
             <div style={{ display: 'flex', gap: 8 }}>
               <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Cantidad"
+                type="text"
+                placeholder="Cantidad (ej: 2, o 'una mediana')"
                 value={manualQty}
                 onChange={e => setManualQty(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addManualProduct(); }}
@@ -859,15 +860,13 @@ export default function ClientFormPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                     <input
                       ref={el => { qtyInputRefs.current[p.id] = el; }}
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
                       placeholder="Cant."
                       value={qty}
                       onChange={e => setPendingQty(prev => ({ ...prev, [p.id]: e.target.value }))}
                       onKeyDown={e => handleCatalogKeyDown(e, p, 'qty')}
                       style={{
-                        width: 64, fontSize: 15, padding: '9px 6px',
+                        width: 92, fontSize: 15, padding: '9px 6px',
                         border: `2px solid ${qty.trim() ? GREEN : '#ddd'}`,
                         borderRadius: 10, outline: 'none', textAlign: 'center',
                         fontFamily: 'inherit', color: '#111', background: '#fff',
