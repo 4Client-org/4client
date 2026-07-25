@@ -218,6 +218,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
       const buf = await storage.download(`invoices/${filename}`);
       reply.header('Content-Type', 'application/pdf');
       reply.header('Content-Disposition', `inline; filename="${filename}"`);
+      reply.header('X-Content-Type-Options', 'nosniff');
       return reply.send(buf);
     }
 
@@ -232,6 +233,7 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     }
     reply.header('Content-Type', 'application/pdf');
     reply.header('Content-Disposition', `inline; filename="${filename}"`);
+    reply.header('X-Content-Type-Options', 'nosniff');
     return reply.send(fs.createReadStream(filepath));
   });
 }

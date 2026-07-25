@@ -24,6 +24,35 @@ export function isSupportedImageMime(mimeType: string): boolean {
   return mimeType in MIME_EXT;
 }
 
+// Never trust a declared mime_type alone - it's just a string the sender's client
+// (staff browser, or WhatsApp on the customer's phone) chose to send, not a fact
+// about the bytes themselves. Checking the real file signature before storing or
+// forwarding anything is what actually stops someone from uploading arbitrary
+// content (an HTML/JS payload, a disguised executable) labeled as a photo - a
+// mismatch here means either a corrupted upload or a deliberately spoofed one, and
+// either way it shouldn't be stored/served as an image, let alone relayed to Meta.
+const MAGIC_BYTES: Array<{ mime: string; check: (buf: Buffer) => boolean }> = [
+  { mime: 'image/jpeg', check: (buf) => buf.length >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF },
+  {
+    mime: 'image/png',
+    check: (buf) => buf.length >= 8
+      && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47
+      && buf[4] === 0x0D && buf[5] === 0x0A && buf[6] === 0x1A && buf[7] === 0x0A,
+  },
+  {
+    mime: 'image/webp',
+    check: (buf) => buf.length >= 12
+      && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP',
+  },
+];
+
+// Returns the REAL mime type detected from the file's own bytes, or null if it
+// doesn't match any supported image signature - regardless of what mime_type the
+// upload claimed to be.
+export function detectImageMime(buffer: Buffer): string | null {
+  return MAGIC_BYTES.find(({ check }) => check(buffer))?.mime ?? null;
+}
+
 export async function storeMedia(buffer: Buffer, mimeType: string): Promise<string> {
   const ext = MIME_EXT[mimeType] ?? 'bin';
   const token = `${crypto.randomBytes(MEDIA_TOKEN_BYTES).toString('hex')}.${ext}`;

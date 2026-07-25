@@ -62,7 +62,8 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInnerRef = useRef<HTMLDivElement>(null);
 
   // Live chat data from API
   const { data: convoData } = useQuery({
@@ -95,9 +96,20 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - scrolling only on message-count change fired too early
+  // for images, leaving the bottom of the photo cut off until manually scrolled.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [liveMessages.length]);
+    const outer = chatScrollRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [ticketId]);
 
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
@@ -258,7 +270,8 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </button>
               )}
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
+             <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number) => (
                 <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
                   {m.media_type === 'image'
@@ -274,7 +287,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   )}
                 </div>
               ))}
-              <div ref={messagesEndRef} />
+             </div>
             </div>
             {/* Reply input */}
             <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>

@@ -214,8 +214,18 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     });
 
     const mediaId = `media-${randomUUID()}`;
-    const tempUrl = `https://mmg.whatsapp.net/fake/${mediaId}`;
-    const fakeBytes = new Uint8Array([1, 2, 3, 4, 5]);
+    // Deliberately NOT ending in `/${mediaId}` - it used to (matching the real
+    // shape of a WhatsApp CDN URL), which made it collide with the media-info
+    // mock branch below (that one also matches on a URL ending in the media id),
+    // so downloadMedia was silently "downloading" the media-INFO JSON response
+    // instead of the actual fake bytes - passed anyway before detectImageMime
+    // existed to notice, since nothing validated the byte content back then.
+    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
+    // Real JPEG magic bytes (FF D8 FF...) - webhook.ts now verifies the actual file
+    // signature before storing/serving anything, regardless of what mime_type Meta
+    // itself reported, so arbitrary bytes here would fail that check and fall
+    // through to the "no se pudo descargar" path instead of the happy path below.
+    const fakeBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
 
     global.fetch = (async (url: string) => {
       if (String(url).endsWith(`/${mediaId}`)) {
@@ -263,5 +273,70 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(inbound.media_url).toMatch(/^[0-9a-f]{40}\.jpg$/);
     expect(inbound.media_url).not.toContain('http');
     expect(inbound.text).toBe('Aquí está mi dirección');
+  });
+
+  it('an inbound "image" whose downloaded bytes don\'t actually match any real image signature is never stored as one - falls back to a visible "no se pudo descargar" note instead, same as a genuine download failure', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-badimg-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    const mediaId = `media-bad-${randomUUID()}`;
+    // Deliberately NOT ending in `/${mediaId}` - it used to (matching the real
+    // shape of a WhatsApp CDN URL), which made it collide with the media-info
+    // mock branch below (that one also matches on a URL ending in the media id),
+    // so downloadMedia was silently "downloading" the media-INFO JSON response
+    // instead of the actual fake bytes - passed anyway before detectImageMime
+    // existed to notice, since nothing validated the byte content back then.
+    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
+
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith(`/${mediaId}`)) {
+        return new Response(JSON.stringify({ url: tempUrl, mime_type: 'image/jpeg' }), { status: 200 });
+      }
+      if (url === tempUrl) {
+        // Claims to be a jpeg but isn't one - no real magic bytes at all.
+        return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-badimg',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: wppPhoneId, display_phone_number: '' },
+            contacts: [{ profile: { name: 'Cliente Foto Falsa' }, wa_id: phone }],
+            messages: [{
+              from: phone, id: `wamid.badimg-${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)),
+              type: 'image', image: { id: mediaId, mime_type: 'image/jpeg' },
+            }],
+          },
+        }],
+      }],
+    };
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
+
+    expect(inbound.media_type).toBeNull();
+    expect(inbound.media_url).toBeNull();
+    expect(inbound.text).toContain('no se pudo descargar');
   });
 });

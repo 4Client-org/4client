@@ -85,7 +85,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const qc = useQueryClient();
   const { data: products = [] } = useProducts();
   const { data: employees = [] } = useEmployees();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['order', orderId],
@@ -232,9 +231,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     };
   }, [accessToken, order?.ticket_id, qc]);
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - scrolling only on message-count change fired too early
+  // for images, leaving the bottom of the photo cut off until manually scrolled.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInnerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatData?.messages?.length]);
+    const outer = chatScrollRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [order?.ticket_id]);
 
   // Takes the FINAL items array as its mutate variable rather than reading `items`
   // state directly - triggerSave (below) commits whatever's still mid-edit in the
@@ -601,15 +613,39 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     }
   }
 
-  function handleClose() {
+  // An unsent new-observation draft, or an observation mid-edit, counts as an
+  // unsaved change too now - closing over either used to silently discard it,
+  // same gap the regular fields already had before isDirty/catalogDirty existed.
+  function hasUnsavedObs() {
+    return !!newObsText.trim() || editingObsId !== null;
+  }
+
+  // Saves whatever's actually pending - an observation (add or edit) first since
+  // it's independent of the rest of the form, then the regular fields if those are
+  // dirty too, only closing once everything that needed saving actually saved.
+  async function saveAllAndClose() {
+    if (editingObsId) {
+      await editObsMut.mutateAsync({ obsId: editingObsId, text: editObsText.trim() });
+    } else if (newObsText.trim()) {
+      await addObsMut.mutateAsync(newObsText.trim());
+    }
     if (isDirty || catalogDirty) {
+      triggerSave({ onSuccess: () => { setConfirmDlg(null); onClose(); } });
+    } else {
+      setConfirmDlg(null);
+      onClose();
+    }
+  }
+
+  function handleClose() {
+    if (isDirty || catalogDirty || hasUnsavedObs()) {
       setConfirmDlg({
         msg: 'Hay cambios sin guardar.',
         onOk: onClose,
         // Unlike a plain "Guardar cambios" click, this save came from trying to
         // CLOSE the modal - so unlike saveMut's own onSuccess (which deliberately
         // no longer closes), finishing this one should actually close it.
-        onSave: () => triggerSave({ onSuccess: () => { setConfirmDlg(null); onClose(); } }),
+        onSave: saveAllAndClose,
       });
       return;
     }
@@ -679,7 +715,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const recibido = pago === 'cod'
     ? (codChoice === 'completo' ? total : codCashNum)
     : total;
-  const vuelto = recibido - total;
   const cobroValido = cierreMissing.length === 0 && cobroPass.trim().length > 0;
   const hasChatPanel = !!order.ticket_id;
 
@@ -735,7 +770,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
 
             {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 6px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 6px' }}>
+             <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {!chatData && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Cargando chat...</div>
               )}
@@ -768,7 +804,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               {chatData && (!chatData.messages || chatData.messages.length === 0) && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
               )}
-              <div ref={messagesEndRef} />
+             </div>
             </div>
 
             {/* Reply bar - visible to all roles */}
@@ -1120,7 +1156,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
           danger={confirmDlg.danger}
           cancelLabel={confirmDlg.onSave ? 'Salir' : 'Cancelar'}
           onSave={confirmDlg.onSave}
-          savePending={saveMut.isPending}
+          savePending={saveMut.isPending || addObsMut.isPending || editObsMut.isPending}
           onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
           onCancel={() => setConfirmDlg(null)}
         />
@@ -1151,25 +1187,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
                 {user?.name ?? 'Usuario actual'}
               </div>
-            </div>
-            <div className="fg2">
-              <label className="fl2">Monto recibido</label>
-              {/* Read-only - derived from "completo/con vuelta" (cod) or simply the
-                  total (any other payment method, where there's no change concept).
-                  Used to be a field staff retyped by hand here, duplicating what was
-                  already decided above. */}
-              <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
-                {fmtCOP(recibido)}
-              </div>
-              {vuelto > 0 && (
-                <div style={{
-                  fontSize: 13, marginTop: 6, fontWeight: 700,
-                  color: 'var(--v)', background: 'var(--vc)',
-                  borderRadius: 8, padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 6,
-                }}>
-                  <CheckCircle size={13} /> Vuelta: {fmtCOP(vuelto)}
-                </div>
-              )}
             </div>
             <div className="fg2" style={{ marginTop: 12 }}>
               <label className="fl2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

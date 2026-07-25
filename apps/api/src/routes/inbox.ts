@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
-import { storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime } from '../lib/media.js';
+import { storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime } from '../lib/media.js';
 
 // 5MB - Meta's own limit for an outbound WhatsApp image message; enforced here too
 // so an oversized upload fails fast with a clear message instead of getting
@@ -189,6 +189,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     if (buffer.length > MAX_IMAGE_BYTES) {
       return reply.status(400).send({ error: 'Imagen demasiado grande (máx 5 MB)', code: 'VALIDATION_ERROR' });
     }
+    // The declared mime_type is just a string the browser sent - never trusted on
+    // its own. Checking the real file signature is what actually stops something
+    // that isn't a genuine image (mislabeled on purpose or corrupted in transit)
+    // from being stored and relayed to Meta as if it were one.
+    const realMime = detectImageMime(buffer);
+    if (!realMime || realMime !== body.data.mime_type) {
+      return reply.status(400).send({ error: 'El archivo no es una imagen válida del tipo indicado', code: 'VALIDATION_ERROR' });
+    }
 
     const token = await storeMedia(buffer, body.data.mime_type);
     const caption = body.data.caption?.trim() || null;
@@ -269,6 +277,13 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       const buffer = await loadMedia(token);
       reply.header('Content-Type', mimeTypeForToken(token));
       reply.header('Cache-Control', 'private, max-age=86400');
+      // Stops a browser from ever second-guessing the Content-Type above and
+      // trying to sniff/render the bytes as something else (e.g. HTML) if this
+      // response is ever opened directly instead of through ChatImage's
+      // fetch-as-blob path - the standard defense against a mislabeled upload
+      // being executed instead of just failing to display as an image.
+      reply.header('X-Content-Type-Options', 'nosniff');
+      reply.header('Content-Disposition', 'inline');
       return reply.send(buffer);
     } catch (err) {
       req.log.error({ err, token }, 'No se pudo leer la imagen del almacenamiento');

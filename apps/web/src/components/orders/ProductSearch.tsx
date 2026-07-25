@@ -53,6 +53,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
+  const factboxSearchRef = useRef<HTMLInputElement>(null);
   const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string }>>({});
   // Which committed item (by product_name) is being edited inline in the Factbox
   // table below - editing never touches the catalog's collapsed state anymore, so
@@ -169,12 +170,20 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     onChange(items.filter(i => i.product_name !== productName));
   }
 
-  function editItem(item: Item) {
+  // Which field to focus once editingRow actually changes (the effect below can't
+  // take a parameter, since it just reacts to state) - defaults to qty (pencil
+  // click, or clicking the quantity value itself), set to 'price' right before
+  // switching rows via an arrow key so landing on the new row lands in the same
+  // column the person was already in.
+  const editFocusField = useRef<'qty' | 'price'>('qty');
+
+  function editItem(item: Item, field: 'qty' | 'price' = 'qty') {
     // A price of "0" (unset) showed literally as "0" in the input, forcing whoever's
     // typing to delete it first - show it empty instead, same as a genuinely unset one.
     const priceVal = parseFloat(item.price) > 0 ? item.price : '';
     setLocalInputs(prev => ({ ...prev, [item.product_name]: { qty: item.quantity_label, price: priceVal } }));
     onLocalDirty?.(true);
+    editFocusField.current = field;
     setEditingRow(item.product_name);
   }
 
@@ -217,6 +226,62 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     const next = idx >= 0 ? items[idx + 1] : undefined;
     if (next) editItem(next);
     else setEditingRow(null); // last row - nothing further to advance to
+  }
+
+  // Up/Down between rows, same column: commits whatever's typed in the row being
+  // left (same as Enter does) - moving away from a row must never silently drop
+  // what was just typed there, and NOT move at all if that commit is blocked
+  // (negative price), matching advanceToPrice/advanceToNextRow's own guard.
+  // Navigates the FILTERED (visibleItems) list, not the full unfiltered one - the
+  // point of the factbox search box is to narrow down which rows arrow-nav even
+  // reaches.
+  function moveToRow(fromProductName: string, direction: 'up' | 'down', field: 'qty' | 'price') {
+    if (!commitEditField(fromProductName)) return;
+    const idx = visibleItems.findIndex(i => i.product_name === fromProductName);
+    if (idx < 0) return;
+    if (direction === 'up' && idx === 0) {
+      factboxSearchRef.current?.focus();
+      return;
+    }
+    const next = visibleItems[direction === 'up' ? idx - 1 : idx + 1];
+    if (next) editItem(next, field);
+  }
+
+  // Shared by both the qty and price inputs of a row being edited. Enter/Escape
+  // behavior is unchanged (still per-field, see advanceToPrice/advanceToNextRow/
+  // cancelEdit); this adds arrow-key movement between editable fields:
+  // Left/Right toggle qty<->price on the SAME row, Up/Down move to the row
+  // above/below in the SAME column.
+  function handleEditArrowKeys(e: KeyboardEvent<HTMLInputElement>, productName: string, field: 'qty' | 'price') {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveToRow(productName, e.key === 'ArrowUp' ? 'up' : 'down', field);
+      return;
+    }
+    if (e.key === 'ArrowRight' && field === 'qty') {
+      // Boundary-aware: a plain ArrowRight while there's still text ahead of the
+      // cursor must move the cursor through the text like normal, same as any
+      // other input - only jump fields once there's nowhere left to move within
+      // this one. (Qty is a text input, so selectionStart is reliable here.)
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      editFocusField.current = 'price';
+      editPriceRef.current?.focus();
+      editPriceRef.current?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && field === 'price') {
+      // Price is type="number" - selectionStart isn't reliably readable on that
+      // input type across browsers, so this jumps unconditionally rather than
+      // risk throwing/silently doing nothing on a boundary check that can't be
+      // trusted here. Prices are short and usually retyped fresh (select() on
+      // focus already selects everything), so this is a fair trade-off.
+      e.preventDefault();
+      editFocusField.current = 'qty';
+      editQtyRef.current?.focus();
+      editQtyRef.current?.select();
+    }
   }
 
   function cancelEdit(productName: string) {
@@ -267,8 +332,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
 
   useEffect(() => {
     if (!editingRow) return;
-    editQtyRef.current?.focus();
-    editQtyRef.current?.select();
+    const ref = editFocusField.current === 'price' ? editPriceRef : editQtyRef;
+    ref.current?.focus();
+    ref.current?.select();
   }, [editingRow]);
 
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
@@ -442,7 +508,19 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" strokeWidth="2.5">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input type="text" placeholder="Buscar entre los productos del pedido..." value={factboxSearch} onChange={e => setFactboxSearch(e.target.value)} />
+          <input
+            ref={factboxSearchRef}
+            type="text"
+            placeholder="Buscar entre los productos del pedido..."
+            value={factboxSearch}
+            onChange={e => setFactboxSearch(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'ArrowDown' && visibleItems.length > 0) {
+                e.preventDefault();
+                editItem(visibleItems[0], 'qty');
+              }
+            }}
+          />
           {factboxSearch && (
             <button onClick={() => setFactboxSearch('')}
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 18, color: 'var(--gt)', lineHeight: 1 }}>
@@ -490,12 +568,19 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         value={local.qty}
                         onChange={e => setLocal(i.product_name, 'qty', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(i.product_name); }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); }
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(i.product_name); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
+                          handleEditArrowKeys(e, i.product_name, 'qty');
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'center' }}
                       />
-                    ) : (i.quantity_label || '-')}
+                    ) : (
+                      // Click the value directly to edit it - no longer required to
+                      // hit the pencil icon first (that button still works too).
+                      <span onClick={() => editItem(i, 'qty')} style={{ cursor: 'pointer', display: 'block' }} title="Clic para editar">
+                        {i.quantity_label || '-'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: !isEditing && i.added_by_client ? '#DC2626' : undefined }}>
                     {isEditing ? (
@@ -508,12 +593,17 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         value={local.price}
                         onChange={e => setLocal(i.product_name, 'price', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(i.product_name); }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); }
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(i.product_name); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
+                          handleEditArrowKeys(e, i.product_name, 'price');
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'right' }}
                       />
-                    ) : (parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-')}
+                    ) : (
+                      <span onClick={() => editItem(i, 'price')} style={{ cursor: 'pointer', display: 'block' }} title="Clic para editar">
+                        {parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: '6px', borderBottom: '1px solid var(--brd)', textAlign: 'center' }}>
                     <span style={{ display: 'inline-flex', gap: 4 }}>

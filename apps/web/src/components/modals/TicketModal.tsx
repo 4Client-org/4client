@@ -79,9 +79,23 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     };
   }, [accessToken, ticketId, qc]);
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - scrolling only on message-count change fired too early
+  // for images, leaving the bottom of the photo cut off until manually scrolled.
+  // ResizeObserver on the inner wrapper (not chatRef itself, whose own size is
+  // fixed by its flex parent) catches both cases the same way.
+  const chatInnerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-  }, [ticket?.messages?.length]);
+    const outer = chatRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [ticketId]);
 
   const sendMut = useMutation({
     mutationFn: () => api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/reply`, { text: reply }),
@@ -225,10 +239,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           </div>
 
           {/* Messages - scrollable */}
-          <div ref={chatRef} style={{
-            flex: 1, overflowY: 'auto', padding: '10px',
-            display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0,
-          }}>
+          <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
+           <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(ticket?.messages ?? []).map((msg: any, i: number) => {
               const isOut = msg.direction === 'out';
               return (
@@ -258,6 +270,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             {!isLoading && (!ticket?.messages || ticket.messages.length === 0) && (
               <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
             )}
+           </div>
           </div>
 
           {/* Reply bar */}

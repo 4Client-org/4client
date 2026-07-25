@@ -9,6 +9,11 @@
   --shf:0 8px 32px rgba(26,122,74,.18);
   --rad:12px; --radb:18px;
   --f:'Inter',system-ui,sans-serif;
+  /* Mirrors .ac's own padding at each breakpoint (see the media queries near the
+     bottom of this file) - the swimlane's sticky bars use this to bleed through
+     .ac's padding so they reach the true top of the scroll area instead of
+     stopping short by exactly this amount. */
+  --ac-pad:22px;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:var(--f);background:var(--bg);color:var(--n);min-height:100vh;font-size:16px;-webkit-font-smoothing:antialiased;}
@@ -68,13 +73,23 @@ input,select,textarea{font-family:var(--f);}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
-.ac{padding:22px;flex:1;min-height:0;overflow-y:auto;}
+.ac{padding:var(--ac-pad);flex:1;min-height:0;overflow-y:auto;}
 .ac.inbox-mode{overflow:hidden;display:flex;flex-direction:column;padding-bottom:0;}
 .ac.wm{background-image:url('/fruver-san-gabriel-watermark.png');background-repeat:no-repeat;background-position:center 120px;background-size:520px auto;}
 
 /* SWIMLANE */
 .slane-wrap{overflow-x:auto;margin-bottom:20px;}
 .slane{display:grid;grid-template-columns:260px repeat(6,minmax(120px,1fr));min-width:1050px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
+/* Header row is its OWN grid (a sibling of the body grid, not a row inside it) -
+   position:sticky on a grid item only sticks within its own grid AREA, so a
+   header cell that's row 1 of a grid whose later rows are the (much taller)
+   scrolling ticket list can never stick past that single row's height once it
+   scrolls by. Splitting them into two separate grids (both still using .slane so
+   they share identical column widths at every breakpoint) is what actually lets
+   the header stick for the full scroll range. Kept inside the same .slane-wrap as
+   the body so both still scroll horizontally in sync on narrow screens. */
+.slane-header{margin-bottom:0;border-radius:var(--rad) var(--rad) 0 0;border-bottom:none;}
+.slane-body{border-radius:0 0 var(--rad) var(--rad);border-top:none;}
 .slane-hcell{padding:10px 12px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--gt);background:var(--b);border-bottom:2px solid var(--brd);border-right:2px solid var(--brd);display:flex;align-items:center;gap:6px;}
 .slane-hcell:last-child{border-right:none;}
 .slane-hcell.wpp-col{background:var(--vc);color:var(--vd);}
@@ -391,7 +406,7 @@ input,select,textarea{font-family:var(--f);}
   .dc-tot{font-size:12px;}
   .dc-btn{width:30px;height:32px;font-size:15px;}
   .dc-det-btn{height:32px;font-size:10px;padding:0 3px;}
-  .ac{padding:16px;}
+  .ac{padding:16px;--ac-pad:16px;}
   .tab{padding:0 13px;font-size:13px;}
   .khead{gap:8px;}
 }
@@ -420,7 +435,7 @@ input,select,textarea{font-family:var(--f);}
   .huser{padding:5px 10px;gap:6px;}
   .un{font-size:12px;}
   .ur2{font-size:10px;}
-  .ac{padding:12px;}
+  .ac{padding:12px;--ac-pad:12px;}
   .khead{margin-bottom:12px;}
   .ktit{font-size:17px;}
 }

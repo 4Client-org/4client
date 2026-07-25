@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl, buildFormLinkWarningMessage } from '../lib/formLink.js';
-import { storeMedia } from '../lib/media.js';
+import { storeMedia, detectImageMime } from '../lib/media.js';
 
 interface MetaWebhookPayload {
   object: string;
@@ -283,7 +283,13 @@ async function ingestImageMessage(
   try {
     const { url, mimeType } = await provider.getMediaUrl(image.id);
     const buffer = await provider.downloadMedia(url);
-    const token = await storeMedia(buffer, mimeType);
+    // Meta's own mime_type is still just a label, not a fact about the downloaded
+    // bytes - checking the real file signature before ever storing/serving this
+    // is the same defense-in-depth the outbound upload path has (inbox.ts's
+    // send-image), applied to content coming FROM WhatsApp instead of TO it.
+    const realMime = detectImageMime(buffer);
+    if (!realMime) throw new Error(`downloaded media does not look like a real image (Meta reported ${mimeType})`);
+    const token = await storeMedia(buffer, realMime);
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       image.caption ? String(image.caption).slice(0, 4096) : null,

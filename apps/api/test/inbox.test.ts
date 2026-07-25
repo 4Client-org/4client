@@ -235,6 +235,28 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     });
     expect(fetched.statusCode).toBe(200);
     expect(fetched.headers['content-type']).toBe('image/png');
+    // Guards against a browser sniffing/re-interpreting the bytes as something
+    // other than what Content-Type says, if this URL is ever opened directly
+    // instead of through the app's own fetch-as-blob rendering path.
+    expect(fetched.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('POST /:ticketId/send-image rejects a file whose real bytes don\'t match the declared mime_type - never trusts the label alone', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230006', customer_name: 'Cliente Foto Falsa' } });
+
+    // Plain text, not a real image, but claiming to be a PNG.
+    const fakeData = Buffer.from('<script>alert(1)</script>').toString('base64');
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-image`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: fakeData, mime_type: 'image/png' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('VALIDATION_ERROR');
+
+    const stored = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id } });
+    expect(stored).toHaveLength(0);
   });
 
   it('GET /media/:token rejects a malformed token and a well-formed but never-issued one', async () => {

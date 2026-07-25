@@ -396,9 +396,16 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     <>
       {urgTickets.length > 0 && (
         <div ref={redZoneRef} style={{
-          background: '#FEE2E2', border: '2px solid #F87171', borderRadius: 'var(--rad)',
-          padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          background: '#FEE2E2', border: '2px solid #F87171',
+          padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
           position: 'sticky', top: 0, zIndex: 160,
+          // Bleeds through .ac's own padding so this reaches the true top of the
+          // scroll area once stuck, instead of stopping short by exactly that
+          // padding amount (the negative margin cancels it, the matching padding
+          // puts the visible content back where it normally sits).
+          margin: 'calc(var(--ac-pad) * -1) calc(var(--ac-pad) * -1) 0',
+          paddingLeft: 'var(--ac-pad)', paddingRight: 'var(--ac-pad)',
+          borderLeft: 'none', borderRight: 'none', borderRadius: 0,
         }}>
           <Siren size={18} color="#991B1B" />
           <span style={{ fontSize: 13, fontWeight: 800, color: '#991B1B' }}>
@@ -441,12 +448,16 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
       )}
 
       <div className="slane-wrap">
-        <div className="slane">
-          <div className="slane-hcell wpp-col" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
+        {/* top matches zona roja's own bled position (see its `margin` above) minus
+            --ac-pad, so this sticks flush right below it - not below where zona
+            roja would sit WITHOUT the bleed, which would leave the same gap this
+            was meant to close, just moved down here instead. */}
+        <div className="slane slane-header" style={{ position: 'sticky', top: `calc(${redZoneHeight}px - var(--ac-pad))`, zIndex: 150 }}>
+          <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
           </div>
           {STATUS_ORDER.map((s) => (
-            <div key={s} className="slane-hcell" style={{ background: COL_BG[s], position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
+            <div key={s} className="slane-hcell" style={{ background: COL_BG[s] }}>
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: COL_COLORS[s], display: 'inline-block', flexShrink: 0 }} />
               {STATUS_LABEL[s]}
               <span style={{ marginLeft: 'auto', background: 'var(--bg)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
@@ -454,7 +465,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
               </span>
             </div>
           ))}
-
+        </div>
+        <div className="slane slane-body">
           {filteredTickets.map((ticket) => {
             // Match by ticket_id on the flat orders list, NOT by intersecting with
             // ticket.orders (GET /tickets' nested include, strictly `fecha`-scoped with

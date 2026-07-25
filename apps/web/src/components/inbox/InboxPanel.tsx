@@ -33,7 +33,6 @@ export default function InboxPanel() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -140,9 +139,24 @@ export default function InboxPanel() {
     sendImageMut.mutate({ data, mime_type: file.type });
   }
 
+  // Keeps the chat pinned to the bottom, not just when a new message arrives but
+  // also when an already-shown row grows AFTER that (an image finishing its async
+  // load, see ChatImage) - a plain "scroll on message count change" fired too early
+  // for images, leaving the bottom of the photo cut off until the person manually
+  // scrolled. ResizeObserver on the inner wrapper (not the outer scroll container,
+  // whose own size is fixed by its flex parent) catches both cases the same way.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInnerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation?.messages?.length, selectedId]);
+    const outer = chatScrollRef.current;
+    const inner = chatInnerRef.current;
+    if (!outer || !inner) return;
+    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    stick();
+    const ro = new ResizeObserver(stick);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -249,7 +263,8 @@ export default function InboxPanel() {
           </div>
 
           {/* Messages */}
-          <div className="inbox-messages">
+          <div className="inbox-messages" ref={chatScrollRef}>
+           <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {loadingConvo && (
               <div style={{ textAlign: 'center', color: '#667781', padding: 20, fontSize: 13 }}>
                 Cargando mensajes...
@@ -286,7 +301,7 @@ export default function InboxPanel() {
                 </div>
               );
             })}
-            <div ref={messagesEndRef} />
+           </div>
           </div>
 
           {/* Reply bar */}
