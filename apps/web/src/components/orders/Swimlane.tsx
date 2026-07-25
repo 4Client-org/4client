@@ -399,11 +399,16 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
           background: '#FEE2E2', border: '2px solid #F87171',
           padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
           position: 'sticky', top: 0, zIndex: 160,
-          // Bleeds through .ac's own padding so this reaches the true top of the
-          // scroll area once stuck, instead of stopping short by exactly that
-          // padding amount (the negative margin cancels it, the matching padding
-          // puts the visible content back where it normally sits).
-          margin: 'calc(var(--ac-pad) * -1) calc(var(--ac-pad) * -1) 0',
+          // Bleeds through .ac's LEFT/RIGHT padding only, so the bar reaches the
+          // true left/right edges of the scroll area once stuck (that inset never
+          // scrolls away, so it always needs closing). NOT the top - .khead (the
+          // "X pedidos - Y pendientes" line) sits right above this in the DOM, and
+          // a negative top margin doesn't know or care whether the element is
+          // actually stuck yet: it always pulls this up by that amount, which
+          // covered khead's text even before any scrolling happened. Top padding
+          // scrolls away naturally with khead, so top:0 alone is already flush.
+          marginTop: 0, marginBottom: 0,
+          marginLeft: 'calc(var(--ac-pad) * -1)', marginRight: 'calc(var(--ac-pad) * -1)',
           paddingLeft: 'var(--ac-pad)', paddingRight: 'var(--ac-pad)',
           borderLeft: 'none', borderRight: 'none', borderRadius: 0,
         }}>
@@ -448,11 +453,12 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
       )}
 
       <div className="slane-wrap">
-        {/* top matches zona roja's own bled position (see its `margin` above) minus
-            --ac-pad, so this sticks flush right below it - not below where zona
-            roja would sit WITHOUT the bleed, which would leave the same gap this
-            was meant to close, just moved down here instead. */}
-        <div className="slane slane-header" style={{ position: 'sticky', top: `calc(${redZoneHeight}px - var(--ac-pad))`, zIndex: 150 }}>
+        {/* top = zona roja's own rendered height (0 when there isn't one), so this
+            sticks flush right below it with no gap and no overlap. Zona roja no
+            longer bleeds vertically (see its own comment above), so this no longer
+            needs to compensate for that either - when there's no zona roja this is
+            just top:0, flush under .khead once scrolled. */}
+        <div className="slane slane-header" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
           <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
           </div>

@@ -240,6 +240,12 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     const idx = visibleItems.findIndex(i => i.product_name === fromProductName);
     if (idx < 0) return;
     if (direction === 'up' && idx === 0) {
+      // Clear editingRow (not just move focus) - if this row was already the one
+      // in edit mode, calling editItem on it again from the search box's ArrowDown
+      // (same product_name) would be a no-op setState, and the effect that focuses
+      // the field only fires when editingRow actually CHANGES. Without this, arrowing
+      // up to the search box then back down landed nowhere.
+      setEditingRow(null);
       factboxSearchRef.current?.focus();
       return;
     }
