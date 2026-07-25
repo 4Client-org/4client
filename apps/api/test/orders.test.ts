@@ -252,7 +252,8 @@ describe('orders routes', () => {
     expect(agregado).toBeDefined();
 
     // The response from GET /:id (what the modal actually renders) must carry these
-    // through too - admin/dev only (buildOrderSelect gates `history` on isAdmin).
+    // through too - available to admin/dev/encargado (buildOrderSelect gates
+    // `history` on canSeeHistory).
     const adminEmail = `hist-admin-${Date.now()}@example.com`;
     const admin = await createTestUser(app.prisma, orgAId, 'admin', 'HistAdminPass1!', { email: adminEmail });
     const adminToken = await login(app, adminEmail, 'HistAdminPass1!');

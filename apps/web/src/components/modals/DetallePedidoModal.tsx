@@ -702,6 +702,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+  // Red text on the CURRENT value, same signal items already give per-row via
+  // added_by_client - the client_modified bell says "something changed" but not
+  // WHERE, so staff had to go dig through the history table just to find out it was
+  // the address. Derived from the field's own most recent history entry rather than
+  // a stored flag (address/payment_method don't have one, unlike items): once staff
+  // saves their own edit, orders.ts logs a NEW entry for that field with no
+  // "formulario" in its notes, which naturally clears this without any reset logic.
+  function lastFieldChangeFromClient(fieldLabel: string): boolean {
+    const entries = (order?.history ?? []).filter((h: any) => h.field === fieldLabel);
+    if (entries.length === 0) return false;
+    const last = entries[entries.length - 1];
+    return typeof last.notes === 'string' && last.notes.includes('formulario');
+  }
+  const direccionFromClient = lastFieldChangeFromClient('Dirección');
+  const pagoFromClient = lastFieldChangeFromClient('Método de pago');
   // A pedido can't be closed with any of these missing - mirrors the same check enforced
   // server-side in POST /orders/:id/cobro, so the UI blocks it before the request even goes out.
   const cierreMissing: string[] = [];
@@ -974,14 +989,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             </div>
             <div className="fg2">
-              <label className="fl2">Dirección</label>
+              <label className="fl2">
+                Dirección
+                {direccionFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
+              </label>
               <input className="fi2" disabled={readOnly} value={direccion}
+                style={direccionFromClient ? { color: '#DC2626', fontWeight: 700 } : undefined}
                 onChange={(e) => { setDireccion(e.target.value); markDirty(); }} />
             </div>
             <div className="frow">
               <div className="fg2">
-                <label className="fl2">Método de pago</label>
+                <label className="fl2">
+                  Método de pago
+                  {pagoFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
+                </label>
                 <select className="fi2" disabled={readOnly} value={pago}
+                  style={pagoFromClient ? { color: '#DC2626', fontWeight: 700 } : undefined}
                   onChange={(e) => {
                     setPago(e.target.value);
                     // Same reset as NuevoPedidoModal - switching away from (or back

@@ -333,11 +333,17 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   // GET /api/v1/orders/:id
   fastify.get('/:id', { preHandler: [authenticate] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'dev';
+    // Matches the frontend's own `canManage` gate (DetallePedidoModal.tsx) exactly -
+    // that gate already shows the "Historial de cambios" toggle to encargado too,
+    // not just admin/dev, so the data itself needs to actually reach them. Was
+    // admin/dev-only before, which meant an encargado saw the toggle but it always
+    // rendered empty - no real reason found for that split, just missed when the
+    // history panel was built.
+    const canSeeHistory = ['admin', 'dev', 'encargado'].includes(req.user.role);
 
     const order = await fastify.prisma.order.findFirst({
       where: { id, org_id: req.user.orgId },
-      select: buildOrderSelect(isAdmin),
+      select: buildOrderSelect(canSeeHistory),
     });
 
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
