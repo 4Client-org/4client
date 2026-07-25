@@ -1142,13 +1142,24 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   <FileText size={13} /> PDF
                 </button>
               )}
-              {items.length > 0 && order.ticket_id && (
-                <button className="bsec" onClick={sendInvoiceToChat}
-                  disabled={invoiceMut.isPending || hasNegativePrice}
-                  style={{ display: 'flex', alignItems: 'center', gap: 5, borderColor: 'var(--v)', color: 'var(--v)' }}>
-                  <Send size={13} /> {invoiceMut.isPending ? 'Enviando...' : 'Enviar factura'}
-                </button>
-              )}
+              {items.length > 0 && order.ticket_id && (() => {
+                // Once the order's already on its way/delivered/closed, sending the
+                // factura again doesn't make sense - but this must re-enable itself
+                // the instant the status goes back to 'listo' (e.g. a mistaken
+                // advance gets reverted) for whoever still has the modal open,
+                // with no refresh. `order.status` is already kept live here via the
+                // order:updated/order:paid socket listener above, so a plain
+                // re-read on every render is all this needs - no separate effect.
+                const enRuta = ['camino', 'entregado', 'cerrado'].includes(order.status);
+                return (
+                  <button className="bsec" onClick={sendInvoiceToChat}
+                    disabled={invoiceMut.isPending || hasNegativePrice || enRuta}
+                    title={enRuta ? 'El pedido ya está en camino, entregado o cerrado' : undefined}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, borderColor: 'var(--v)', color: 'var(--v)' }}>
+                    <Send size={13} /> {invoiceMut.isPending ? 'Enviando...' : 'Enviar factura'}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>
