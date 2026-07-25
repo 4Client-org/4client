@@ -49,7 +49,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data;
 }
 
-async function tryRefresh(): Promise<boolean> {
+// Exported for socket.ts - the socket's own reconnect can carry a long-expired
+// access token (server restarts, e.g. every deploy, drop every open connection;
+// the client auto-reconnects, but only an HTTP 401 ever triggered a refresh
+// before this, and a tab just sitting on an open order makes no HTTP calls on
+// its own) - reusing this instead of a parallel refresh implementation.
+export async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = doRefresh().finally(() => { refreshPromise = null; });
   return refreshPromise;
