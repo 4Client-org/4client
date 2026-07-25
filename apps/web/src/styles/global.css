@@ -73,12 +73,23 @@ input,select,textarea{font-family:var(--f);}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
-.ac{padding:var(--ac-pad);flex:1;min-height:0;overflow-y:auto;}
+/* No top padding here on purpose - the swimlane's sticky bars (zona roja, the
+   status header row) need `top:0` to mean truly flush against .ac's visible top
+   edge (right under .ah), with zero built-in gap. Each tab's own first child adds
+   that same amount back as its own paddingTop instead, which - unlike .ac's
+   padding - doesn't affect where sticky descendants measure "stuck" from. */
+.ac{padding:0 var(--ac-pad) var(--ac-pad);flex:1;min-height:0;overflow-y:auto;}
 .ac.inbox-mode{overflow:hidden;display:flex;flex-direction:column;padding-bottom:0;}
 .ac.wm{background-image:url('/fruver-san-gabriel-watermark.png');background-repeat:no-repeat;background-position:center 120px;background-size:520px auto;}
 
 /* SWIMLANE */
-.slane-wrap{overflow-x:auto;margin-bottom:20px;}
+/* overflow-y is explicit (not left to default) - CSS computes an unset overflow-y
+   to `auto` too whenever overflow-x is anything other than visible, which would
+   silently make THIS element (not .ac) the nearest scrolling ancestor for the
+   sticky header/zona-roja inside it - a completely different stickiness reference
+   than intended, which is what caused the status row to stick relative to the
+   wrong box and overlap the ticket cards. */
+.slane-wrap{overflow-x:auto;overflow-y:visible;margin-bottom:20px;}
 .slane{display:grid;grid-template-columns:260px repeat(6,minmax(120px,1fr));min-width:1050px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
 /* Header row is its OWN grid (a sibling of the body grid, not a row inside it) -
    position:sticky on a grid item only sticks within its own grid AREA, so a
@@ -406,7 +417,7 @@ input,select,textarea{font-family:var(--f);}
   .dc-tot{font-size:12px;}
   .dc-btn{width:30px;height:32px;font-size:15px;}
   .dc-det-btn{height:32px;font-size:10px;padding:0 3px;}
-  .ac{padding:16px;--ac-pad:16px;}
+  .ac{padding:0 16px 16px;--ac-pad:16px;}
   .tab{padding:0 13px;font-size:13px;}
   .khead{gap:8px;}
 }
@@ -435,7 +446,7 @@ input,select,textarea{font-family:var(--f);}
   .huser{padding:5px 10px;gap:6px;}
   .un{font-size:12px;}
   .ur2{font-size:10px;}
-  .ac{padding:12px;--ac-pad:12px;}
+  .ac{padding:0 12px 12px;--ac-pad:12px;}
   .khead{margin-bottom:12px;}
   .ktit{font-size:17px;}
 }
@@ -443,7 +454,7 @@ input,select,textarea{font-family:var(--f);}
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
    but guard against page-level breakage and keep modals usable single-column */
 @media (max-width:560px){
-  .ac{overflow-x:hidden;padding:10px;}
+  .ac{overflow-x:hidden;padding:0 10px 10px;}
   .khead{gap:8px;}
   .ktit{font-size:16px;}
   .agrid{grid-template-columns:1fr;}

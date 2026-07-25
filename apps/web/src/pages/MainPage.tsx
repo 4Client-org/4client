@@ -245,7 +245,7 @@ export default function MainPage() {
       <div className={`ac${tab === 'inbox' ? ' inbox-mode' : ' wm'}`}>
         {tab === 'swimlane' && (
           <>
-            <div className="khead">
+            <div className="khead" style={{ paddingTop: 'var(--ac-pad)' }}>
               <div>
                 <div className="ktit">Tickets & Pedidos de despacho</div>
                 <div className="kmeta">
@@ -277,7 +277,7 @@ export default function MainPage() {
 
         {tab === 'inbox' && isAdmin && (
           <>
-            <div className="khead" style={{ marginBottom: 0, flexShrink: 0 }}>
+            <div className="khead" style={{ marginBottom: 0, flexShrink: 0, paddingTop: 'var(--ac-pad)' }}>
               <div>
                 <div className="ktit">Chats WhatsApp</div>
                 <div className="kmeta">Bandeja de entrada - todas las conversaciones</div>
@@ -288,19 +288,21 @@ export default function MainPage() {
         )}
 
         {tab === 'resumen' && isAdmin && (
-          <ResumenTab
-            fecha={fecha}
-            setFecha={setFecha}
-            dashboard={dashboard}
-            papeleraOrders={papeleraOrders}
-            history={history}
-            orders={orders}
-            onCierreCaja={() => setShowCierre(true)}
-            onOpenOrder={(orderId) => setOpenOrderId(orderId)}
-          />
+          <div style={{ paddingTop: 'var(--ac-pad)' }}>
+            <ResumenTab
+              fecha={fecha}
+              setFecha={setFecha}
+              dashboard={dashboard}
+              papeleraOrders={papeleraOrders}
+              history={history}
+              orders={orders}
+              onCierreCaja={() => setShowCierre(true)}
+              onOpenOrder={(orderId) => setOpenOrderId(orderId)}
+            />
+          </div>
         )}
 
-        {tab === 'config' && isAdmin && <ConfigTab />}
+        {tab === 'config' && isAdmin && <div style={{ paddingTop: 'var(--ac-pad)' }}><ConfigTab /></div>}
       </div>
 
       {fromTicket && (
