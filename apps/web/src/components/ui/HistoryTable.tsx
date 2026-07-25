@@ -44,24 +44,36 @@ interface Props {
   showOrder?: boolean;
 }
 
+// Pure percentages, never px - this table renders in two very different width
+// contexts (the wide desktop ResumenTab, and a narrow column inside
+// DetallePedidoModal's side panel). Mixing fixed px columns with % columns made
+// table-layout:fixed declare MORE total width than the narrow modal actually had
+// (e.g. 100+90+130px alone already exceeded it before the two 22% columns were
+// even added), which is what was squeezing/overlapping rows instead of cleanly
+// wrapping their content - percentages always sum to exactly 100% of whatever
+// width is actually available, in either context.
+const WIDTHS_WITH_ORDER = { fecha: '14%', pedido: '15%', quien: '13%', campo: '20%', antes: '19%', despues: '19%' };
+const WIDTHS_NO_ORDER = { fecha: '18%', quien: '16%', campo: '24%', antes: '21%', despues: '21%' };
+
 export default function HistoryTable({ history, showOrder }: Props) {
+  const w = showOrder ? WIDTHS_WITH_ORDER : WIDTHS_NO_ORDER;
   return (
     <div style={{ border: '1px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
       {/* table-layout:fixed - without it, a long value_before/value_after (e.g. a
           long free-text quantity baked into the change description) grows that
           COLUMN (and the whole table) to fit it instead of wrapping, pushing the
           table wider than its container and hiding content off to the right.
-          Fixed widths + wordBreak on td (above) make it wrap to more lines within
-          its own column instead - same trade-off the invoice/factbox make. */}
+          Fixed (%) widths + wordBreak on td (above) make it wrap to more lines
+          within its own column instead - same trade-off the invoice/factbox make. */}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
         <thead>
           <tr style={{ background: 'var(--bg)' }}>
-            <th style={{ ...th, whiteSpace: 'nowrap', width: 100 }}>Fecha / Hora</th>
-            {showOrder && <th style={{ ...th, width: 110 }}>Pedido</th>}
-            <th style={{ ...th, width: 90 }}>Quién</th>
-            <th style={{ ...th, width: 130 }}>Campo / Acción</th>
-            <th style={{ ...th, width: '22%' }}>Antes</th>
-            <th style={{ ...thLast, width: '22%' }}>Después</th>
+            <th style={{ ...th, width: w.fecha }}>Fecha / Hora</th>
+            {showOrder && <th style={{ ...th, width: (w as typeof WIDTHS_WITH_ORDER).pedido }}>Pedido</th>}
+            <th style={{ ...th, width: w.quien }}>Quién</th>
+            <th style={{ ...th, width: w.campo }}>Campo / Acción</th>
+            <th style={{ ...th, width: w.antes }}>Antes</th>
+            <th style={{ ...thLast, width: w.despues }}>Después</th>
           </tr>
         </thead>
         <tbody>
@@ -72,7 +84,7 @@ export default function HistoryTable({ history, showOrder }: Props) {
             const rowBg = isRemove ? '#FEF2F2' : isAdd ? '#F0FDF4' : i % 2 === 0 ? 'var(--b)' : 'var(--bg)';
             return (
               <tr key={i} style={{ background: rowBg }}>
-                <td style={{ ...td, whiteSpace: 'nowrap', color: 'var(--gt)' }}>
+                <td style={{ ...td, color: 'var(--gt)' }}>
                   {new Date(h.created_at).toLocaleString('es-CO', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                 </td>
                 {showOrder && (
@@ -100,7 +112,7 @@ export default function HistoryTable({ history, showOrder }: Props) {
                 <td style={{ ...td, color: '#DC2626' }}>
                   {fmtHistVal(h.value_before) || (isCobro ? h.notes : '') || '-'}
                 </td>
-                <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--brd)', color: 'var(--v)' }}>
+                <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--brd)', color: 'var(--v)', wordBreak: 'break-word' }}>
                   {fmtHistVal(h.value_after) || '-'}
                 </td>
               </tr>
