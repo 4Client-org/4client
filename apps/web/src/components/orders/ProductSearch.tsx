@@ -126,7 +126,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       toast('El precio no puede ser negativo', true);
       return null;
     }
-    if (!local?.qty.trim() && !local?.price.trim()) return items;
+    // Nothing typed at all is only a no-op for a brand-new catalog row (nothing to
+    // add yet). An EXISTING factbox item being edited must still commit even if
+    // both fields end up cleared - otherwise the edit (e.g. clearing a stale price
+    // down to nothing, meaning to leave it at 0) is silently discarded instead of
+    // saved, and the row keeps showing its old value with no way to tell why.
+    if (!local?.qty.trim() && !local?.price.trim() && !items.some(i => i.product_name === productName)) {
+      return items;
+    }
 
     // Preserve provenance - staff editing qty/price on a line the client added
     // (typically filling in the price, which the client's form never sets) must not

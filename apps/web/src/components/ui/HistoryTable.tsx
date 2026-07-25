@@ -35,6 +35,7 @@ const thLast: CSSProperties = {
 };
 const td: CSSProperties = {
   padding: '8px 10px', borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)',
+  wordBreak: 'break-word',
 };
 
 interface Props {
@@ -46,15 +47,21 @@ interface Props {
 export default function HistoryTable({ history, showOrder }: Props) {
   return (
     <div style={{ border: '1px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      {/* table-layout:fixed - without it, a long value_before/value_after (e.g. a
+          long free-text quantity baked into the change description) grows that
+          COLUMN (and the whole table) to fit it instead of wrapping, pushing the
+          table wider than its container and hiding content off to the right.
+          Fixed widths + wordBreak on td (above) make it wrap to more lines within
+          its own column instead - same trade-off the invoice/factbox make. */}
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
         <thead>
           <tr style={{ background: 'var(--bg)' }}>
-            <th style={{ ...th, whiteSpace: 'nowrap' }}>Fecha / Hora</th>
-            {showOrder && <th style={th}>Pedido</th>}
-            <th style={th}>Quién</th>
-            <th style={th}>Campo / Acción</th>
-            <th style={th}>Antes</th>
-            <th style={thLast}>Después</th>
+            <th style={{ ...th, whiteSpace: 'nowrap', width: 100 }}>Fecha / Hora</th>
+            {showOrder && <th style={{ ...th, width: 110 }}>Pedido</th>}
+            <th style={{ ...th, width: 90 }}>Quién</th>
+            <th style={{ ...th, width: 130 }}>Campo / Acción</th>
+            <th style={{ ...th, width: '22%' }}>Antes</th>
+            <th style={{ ...thLast, width: '22%' }}>Después</th>
           </tr>
         </thead>
         <tbody>

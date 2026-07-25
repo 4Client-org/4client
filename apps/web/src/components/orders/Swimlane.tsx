@@ -461,6 +461,9 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="slane slane-header" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
           <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
+            <span style={{ marginLeft: 'auto', background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+              {filteredTickets.length}
+            </span>
           </div>
           {STATUS_ORDER.map((s) => (
             <div key={s} className="slane-hcell" style={{ background: COL_BG[s] }}>

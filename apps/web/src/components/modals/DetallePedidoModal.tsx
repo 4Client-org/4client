@@ -630,6 +630,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       await addObsMut.mutateAsync(newObsText.trim());
     }
     if (isDirty || catalogDirty) {
+      // Same checks the main Guardar button enforces (it's the only other place
+      // triggerSave gets called) - this path must not be able to silently save
+      // something the button itself would refuse to.
+      if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de guardar', true); return; }
+      if (pago === 'cod' && !codValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
       triggerSave({ onSuccess: () => { setConfirmDlg(null); onClose(); } });
     } else {
       setConfirmDlg(null);
