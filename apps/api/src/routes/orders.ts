@@ -62,7 +62,11 @@ const createOrderSchema = z.object({
   // confirmed and only has to be filled in before it's actually closed.
   address:        z.string().max(500).optional(),
   channel:        z.enum(['whatsapp', 'call']).default('whatsapp'),
-  payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod']).default('sin_asignar'),
+  // 'credito' is staff-only - never exposed on the client form's own schema
+  // (public.ts keeps its own separate enum without it). Closing a crédito order
+  // (POST /:id/cobro) deliberately does NOT set paid:true the way every other
+  // method does - see that route - it's settled later from the Créditos tab.
+  payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod', 'credito']).default('sin_asignar'),
   employee_id:    z.string().uuid().optional(),
   notes:          z.string().max(1000).optional(),
   fecha:          z.string().optional(),
@@ -89,7 +93,7 @@ const updateOrderSchema = z.object({
   // case (checked against `existing.ticket_id`, not a client-supplied flag).
   customer_phone: z.string().max(20).optional(),
   address:        z.string().max(500).optional(),
-  payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod']).optional(),
+  payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod', 'credito']).optional(),
   employee_id:    z.string().uuid().nullable().optional(),
   notes:          z.string().max(1000).optional(),
   items:          z.array(orderItemSchema).min(1).max(100).optional(),
@@ -187,12 +191,12 @@ function codDisplay(choice: string | null | undefined, amount: any, total: numbe
 function buildOrderSelect(includeHistory = false) {
   return {
     id: true, org_id: true, ticket_id: true, num: true,
-    customer_name: true, customer_phone: true, address: true,
+    customer_name: true, client_contact_name: true, customer_phone: true, address: true,
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
     change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
-    client_modified: true,
+    client_modified: true, client_deleted: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
     registeredBy: { select: { id: true, name: true } },
@@ -250,13 +254,19 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // are globally-unique ids, not scoped per org). Without this, a crafted id
     // belonging to a different organization would still satisfy the foreign key and
     // silently attach this order to another tenant's ticket/employee.
+    // Snapshot of the ticket's contact name at creation time, for orders WITH a
+    // ticket - see schema.prisma's own comment on client_contact_name. A
+    // ticket-less order (channel 'call') falls back to whatever customer_name
+    // staff typed in below (createFn), same as before this field existed.
+    let clientContactName: string | undefined;
     if (rest.ticket_id) {
-      const ticket = await fastify.prisma.ticket.findFirst({ where: { id: rest.ticket_id, org_id: req.user.orgId }, select: { phone: true } });
+      const ticket = await fastify.prisma.ticket.findFirst({ where: { id: rest.ticket_id, org_id: req.user.orgId }, select: { phone: true, customer_name: true } });
       if (!ticket) return reply.status(400).send({ error: 'Ticket no encontrado', code: 'VALIDATION_ERROR' });
       // The customer's phone is always the WhatsApp number the conversation is
       // actually on, never a value typed into a form - whatever customer_phone the
       // request sent gets overridden here rather than trusted.
       rest.customer_phone = ticket.phone;
+      clientContactName = ticket.customer_name ?? rest.customer_name;
     }
     if (rest.employee_id) {
       const employee = await fastify.prisma.employee.findFirst({ where: { id: rest.employee_id, org_id: req.user.orgId }, select: { id: true } });
@@ -283,6 +293,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           num,
           registered_by: req.user.userId,
           fecha: fechaDate,
+          client_contact_name: clientContactName ?? rest.customer_name,
           items: { create: items },
         },
         select: buildOrderSelect(false),
@@ -407,6 +418,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const PAYMENT_LABELS: Record<string, string> = {
       cod: 'Cobro en casa', cash: 'Efectivo', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
+      credito: 'Crédito',
     };
 
     // Registrar cambios en historial
@@ -437,6 +449,15 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return String(val);
     }
 
+    // A field edit that lands on an already-LOCKED order only ever gets here
+    // because it's admin/dev (see the guard above - anyone else was already
+    // rejected) - flagged in `notes` so it's visibly distinguishable in the
+    // Historial from a normal pre-close edit, not silently indistinguishable.
+    // Item add/remove/modify entries below already reveal this indirectly via
+    // their own "Estado al ... :" notes; this brings the same visibility to
+    // Nombre/Dirección/Método de pago/Domiciliario/Notas edits, which had none.
+    const postLockNote = existing.locked ? `Editado después de cerrado (estado: ${existing.status})` : undefined;
+
     for (const [key, label] of Object.entries(trackFields)) {
       const newVal = (fields as any)[key];
       const oldVal = (existing as any)[key];
@@ -446,6 +467,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           action_type: 'edit', field: label,
           value_before: displayVal(key, oldVal),
           value_after: displayVal(key, newVal),
+          notes: postLockNote,
         });
       }
     }
@@ -468,6 +490,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
           action_type: 'edit', field: 'Pago en efectivo',
           value_before: before, value_after: after,
+          notes: postLockNote,
         });
       }
     }
@@ -659,6 +682,39 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     return reply.send({ data: updated });
   });
 
+  // PATCH /api/v1/orders/:id/restore - clears `client_deleted` on an order the
+  // CLIENT deleted themselves via their form link (public.ts's own POST
+  // /order/:orderId/delete) - status is untouched by that route in the first
+  // place, so restoring is just clearing the flag, nothing to "put back" status-
+  // wise. Not for staff's own separate papelera trash action (status:'papelera',
+  // a different, unrelated concern - see PATCH /:id/status).
+  fastify.patch('/:id/restore', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    if (!existing.client_deleted) return reply.status(400).send({ error: 'Este pedido no fue eliminado por el cliente', code: 'NOT_CLIENT_DELETED' });
+
+    const updated = await fastify.prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id },
+        data: { client_deleted: false, updated_at: new Date() },
+        select: buildOrderSelect(false),
+      });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'restaurado', field: 'Estado',
+          value_before: 'Eliminado por el cliente', value_after: 'Activo',
+          notes: 'Restaurado por staff',
+        },
+      });
+      return order;
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updated as any);
+    return reply.send({ data: updated });
+  });
+
   // POST /api/v1/orders/:id/cobro
   fastify.post('/:id/cobro', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -732,12 +788,18 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const change = body.data.amount_received - total;
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
+      // Crédito is the one payment method that doesn't actually receive money at
+      // this exact moment - closing it goes through the exact same password+
+      // amount dialog as everyone else (so staff has one flow to learn, not a
+      // special case to remember), but must NOT come out of it marked paid - that
+      // only happens later, when it's actually settled from the Créditos tab
+      // (PATCH /:id/credito-pagado below).
+      const isCredito = existing.payment_method === 'credito';
       const order = await tx.order.update({
         where: { id },
         data: {
-          status: 'cerrado', paid: true, locked: true,
-          paid_at: new Date(),
-          paid_by: req.user.userId,   // always from authenticated user, never from body
+          status: 'cerrado', paid: !isCredito, locked: true,
+          ...(isCredito ? {} : { paid_at: new Date(), paid_by: req.user.userId }),
           amount_received: body.data.amount_received,
           change_amount: change,
           updated_at: new Date(),
@@ -747,7 +809,48 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       await tx.orderHistory.create({
         data: {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
-          action_type: 'cobro', notes: `Pago confirmado. Recibido: $${body.data.amount_received}. Cambio: $${change}`,
+          action_type: 'cobro',
+          notes: isCredito
+            ? `Pedido cerrado a crédito. Monto acordado: $${body.data.amount_received}. Pendiente de pago.`
+            : `Pago confirmado. Recibido: $${body.data.amount_received}. Cambio: $${change}`,
+        },
+      });
+      return order;
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:paid', { orderId: id });
+    return reply.send({ data: updated });
+  });
+
+  // PATCH /api/v1/orders/:id/credito-pagado - settles a crédito order sometime
+  // after it already closed unpaid (see POST /:id/cobro above) - a separate,
+  // deliberately simple action (no password/amount re-entry) since the actual
+  // "how much, confirmed by whom" already happened at cobro time; this just
+  // records that the money that was owed has now actually come in.
+  // admin/dev only, deliberately narrower than most order-management actions
+  // (which allow encargado too) - marking a debt as settled needs the tighter
+  // trust level, per explicit business direction.
+  fastify.patch('/:id/credito-pagado', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    if (existing.payment_method !== 'credito') {
+      return reply.status(400).send({ error: 'Este pedido no es a crédito', code: 'VALIDATION_ERROR' });
+    }
+    if (existing.paid) {
+      return reply.status(400).send({ error: 'Este pedido ya está marcado como pagado', code: 'VALIDATION_ERROR' });
+    }
+
+    const updated = await fastify.prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id },
+        data: { paid: true, paid_at: new Date(), paid_by: req.user.userId },
+        select: buildOrderSelect(false),
+      });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'cobro', notes: 'Crédito pagado.',
         },
       });
       return order;

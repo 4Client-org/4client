@@ -6,6 +6,7 @@ import { useMoveOrder } from '../../hooks/useOrders';
 import { useAuthStore } from '../../store/auth';
 import { toast } from '../ui/Toast';
 import DetallePedidoModal from '../modals/DetallePedidoModal';
+import { normalizeSearch } from '../../lib/normalize';
 
 interface Ticket {
   id: string; phone: string; customer_name: string;
@@ -22,6 +23,7 @@ interface Order {
   ticket_id?: string; order_hour?: string; source?: string;
   created_at: string; paid_at?: string | null;
   client_modified?: boolean;
+  client_deleted?: boolean;
 }
 
 interface Props {
@@ -72,7 +74,7 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
     return minsSinceDate(ticket.created_at);
   }
 
-  const activeOrders = ticketOrders.filter(o => !(o.paid && o.status === 'cerrado'));
+  const activeOrders = ticketOrders.filter(o => !o.client_deleted && !(o.paid && o.status === 'cerrado'));
   if (activeOrders.length === 0) return 0;
   const firstActiveMs = activeOrders.reduce(
     (min, o) => Math.min(min, new Date(o.created_at).getTime()),
@@ -89,7 +91,10 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
 // that's a different concern (an unanswered customer, not an unworked order) and
 // wasn't part of this ask.
 function isOrderUrg(order: Order): boolean {
-  return !order.paid && order.status !== 'cerrado';
+  // client_deleted excluded - "se hace de cuenta que no existe" for urgency too;
+  // it gets its own distinct red "Eliminado por el cliente" treatment instead
+  // (see renderCard), not the zona-roja pulse.
+  return !order.client_deleted && !order.paid && order.status !== 'cerrado';
 }
 
 function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
@@ -164,17 +169,36 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     return () => clearInterval(id);
   }, []);
 
-  const filteredTickets = tickets.filter((t) =>
-    !search || t.customer_name.toLowerCase().includes(search.toLowerCase()) || t.phone.includes(search)
-  );
+  const searchNorm = normalizeSearch(search);
 
-  const filteredOrders = orders.filter((o) =>
-    o.status !== 'papelera' &&
-    (!search ||
-      o.customer_name.toLowerCase().includes(search.toLowerCase()) ||
-      o.num.includes(search) ||
-      o.address?.toLowerCase().includes(search.toLowerCase()))
-  );
+  // Matches every field staff might actually search by, not just name/order#/
+  // address - domiciliario, payment method (by its Spanish label, not the raw
+  // 'cod'/'transfer' value), the linked ticket's phone, and the order's total.
+  function orderMatchesSearch(o: Order): boolean {
+    if (!searchNorm) return true;
+    const total = o.items.reduce((sum, i) => sum + Number(i.price), 0);
+    const linkedTicket = tickets.find((t) => t.id === o.ticket_id);
+    return normalizeSearch(o.customer_name).includes(searchNorm)
+      || o.num.includes(search)
+      || normalizeSearch(o.address ?? '').includes(searchNorm)
+      || normalizeSearch(PAYMENT_LABEL[o.payment_method] ?? o.payment_method ?? '').includes(searchNorm)
+      || normalizeSearch(o.employee?.name ?? '').includes(searchNorm)
+      || String(total).includes(search)
+      || (linkedTicket?.phone.includes(search) ?? false);
+  }
+
+  const filteredOrders = orders.filter((o) => o.status !== 'papelera' && orderMatchesSearch(o));
+
+  // A ticket shows if IT matches (name/phone) OR any of its own orders match
+  // (domiciliario, pago, dirección, monto, etc.) - previously these were two
+  // independent filters, so searching "julio" (a domiciliario) matched his
+  // orders fine but the ticket row itself never passed its own name/phone-only
+  // check, so the ticket (and its matching order) never rendered at all.
+  const filteredTickets = tickets.filter((t) => {
+    if (!searchNorm) return true;
+    if (normalizeSearch(t.customer_name).includes(searchNorm) || t.phone.includes(search)) return true;
+    return orders.some((o) => o.ticket_id === t.id && o.status !== 'papelera' && orderMatchesSearch(o));
+  });
 
   function moveNext(order: Order) {
     if (diaCerrado) return;
@@ -220,6 +244,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     const order = orders.find((o) => o.id === drag.current!.orderId);
     if (!order || order.status === targetStatus) { drag.current = null; return; }
     if (order.locked) { toast('Pedido bloqueado', true); drag.current = null; return; }
+    if (order.client_deleted) { toast('El cliente eliminó este pedido - restáuralo primero', true); drag.current = null; return; }
     if (targetStatus === 'cerrado') {
       // A $0 total (every item agotado) is legitimate and closeable - no pre-check
       // blocking it here, same as moveNext above.
@@ -276,19 +301,25 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     // so a "dejar_activo" order left open at close time doesn't stay silently
     // draggable/editable forever on a day that's supposed to be closed history.
     const frozen = diaCerrado || isGhost;
+    // The client deleted this order themselves (public.ts's POST /order/:orderId/
+    // delete) - status is untouched (it stays in its normal column), so it's not
+    // "removed from the board" the way papelera is - just flagged red and frozen
+    // pending a staff decision (Restaurar / Mantener eliminado), opened via the
+    // same detail modal, which pops the decision dialog automatically.
+    const clientDeleted = !!ord.client_deleted;
 
     return (
       <div
         className="dc-card"
         style={{
           position: 'relative',
-          borderLeftColor: COL_COLORS[ord.status],
-          cursor: (ord.locked || frozen) ? 'default' : 'grab',
+          borderLeftColor: clientDeleted ? '#DC2626' : COL_COLORS[ord.status],
+          cursor: (ord.locked || frozen || clientDeleted) ? 'default' : 'grab',
           opacity: frozen ? 0.72 : 1,
-          ...(urg ? { background: '#FFF5F5', borderColor: '#FECACA' } : {}),
+          ...(clientDeleted ? { background: '#FEF2F2', borderColor: '#FECACA' } : {}),
         }}
-        draggable={!ord.locked && !frozen}
-        onDragStart={(e) => !frozen && handleDragStart(e, ord, ticketId)}
+        draggable={!ord.locked && !frozen && !clientDeleted}
+        onDragStart={(e) => !frozen && !clientDeleted && handleDragStart(e, ord, ticketId)}
         onClick={() => setDetailId(ord.id)}
       >
         {ord.client_modified && (
@@ -335,6 +366,15 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             )}
           </div>
         </div>
+        {clientDeleted && (
+          <div style={{
+            fontSize: 10, fontWeight: 800, color: '#DC2626', background: '#FEE2E2',
+            padding: '3px 7px', borderRadius: 20, marginBottom: 5,
+            display: 'flex', alignItems: 'center', gap: 4, width: 'fit-content',
+          }}>
+            <AlertTriangle size={10} /> Eliminado por el cliente
+          </div>
+        )}
         <div className="dc-prod">
           {visibleItems.map((i) => `${i.product_name ?? ''} ${i.quantity_label ?? ''}`.trim()).join(', ')}
           {hasMore && (
@@ -375,7 +415,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
-            disabled={ord.locked || frozen || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
+            disabled={ord.locked || frozen || clientDeleted || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); movePrev(ord); }}>
             <ChevronLeft size={14} />
           </button>
@@ -383,7 +423,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />Ver
           </button>
           <button className="dc-btn" title={ord.status === 'entregado' ? 'Cerrar pedido' : 'Avanzar'}
-            disabled={ord.locked || frozen || ord.status === 'cerrado' || moveOrder.isPending}
+            disabled={ord.locked || frozen || clientDeleted || ord.status === 'cerrado' || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); moveNext(ord); }}>
             <ChevronRight size={14} />
           </button>
@@ -461,7 +501,20 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="slane slane-header" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
           <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
-            <span style={{ marginLeft: 'auto', background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+            {/* Single button, direction flips based on current state - if ANY
+                ticket is collapsed, it expands all; only once every ticket is
+                already expanded does it switch to collapsing all. */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const anyCollapsed = tickets.some((t) => collapsedTickets.has(t.id));
+                setCollapsedTickets(anyCollapsed ? new Set() : new Set(tickets.map((t) => t.id)));
+              }}
+              title={tickets.some((t) => collapsedTickets.has(t.id)) ? 'Expandir todos los tickets' : 'Contraer todos los tickets'}
+              style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--vd)', display: 'flex', alignItems: 'center', padding: 3 }}>
+              {tickets.some((t) => collapsedTickets.has(t.id)) ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            </button>
+            <span style={{ background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
               {filteredTickets.length}
             </span>
           </div>
@@ -487,6 +540,27 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             // even though the same order rendered fine once "today" became tomorrow.
             const ticketOrders = filteredOrders.filter((o) => o.ticket_id === ticket.id);
             const urg = isToday && isTicketUrg(ticket, ticketOrders);
+            // Furthest-BEHIND status among this ticket's still-open orders (lowest
+            // STATUS_ORDER index) - two orders on the same chat, one "en camino" and
+            // one still "preparando", tint the row for preparando: that's the one
+            // that still needs work, not the one that's basically done. Urgency
+            // (red, isTicketUrg above) always wins when both apply - it's a "needs
+            // attention right now" signal, not just a progress indicator.
+            const activeOrderStatuses = ticketOrders
+              .filter((o) => o.status !== 'cerrado' && o.status !== 'papelera' && !o.client_deleted)
+              .map((o) => o.status);
+            const furthestBehindStatus = activeOrderStatuses.length > 0
+              ? activeOrderStatuses.reduce((furthest, s) =>
+                  STATUS_ORDER.indexOf(s) < STATUS_ORDER.indexOf(furthest) ? s : furthest)
+              : null;
+            // Urgency no longer paints the row red - the ZONA ROJA banner up top is
+            // the one place that alert lives now (a T-xx button that jumps straight
+            // to the chat); painting every urgent row red too just drowned out the
+            // per-status color underneath it, which is what actually helps at a
+            // glance ("this one's still preparando", "this one's ya listo").
+            const statusTintStyle = furthestBehindStatus
+              ? { background: COL_BG[furthestBehindStatus], borderRightColor: COL_COLORS[furthestBehindStatus] }
+              : undefined;
             const isCollapsed = collapsedTickets.has(ticket.id);
             const tNum = `T-${String(filteredTickets.indexOf(ticket) + 1).padStart(2, '0')}`;
 
@@ -508,8 +582,8 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
               return (
                 <div key={ticket.id} style={{ display: 'contents' }}>
                   <div
-                    className={`slane-tcell${urg ? ' urg' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 0, padding: '7px 12px', cursor: 'pointer' }}
+                    className="slane-tcell"
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 0, padding: '7px 12px', cursor: 'pointer', ...statusTintStyle }}
                     onClick={() => toggleCollapseTicket(ticket.id)}
                   >
                     <ChevronDown size={14} color="var(--gt)" />
@@ -529,16 +603,21 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
 
             return (
               <div key={ticket.id} style={{ display: 'contents' }}>
-                <div className={`slane-tcell${urg ? ' urg' : ''}`} onClick={() => onOpenTicket(ticket.id)}
-                  style={{ opacity: isTicketGhost ? 0.72 : 1 }}>
+                <div className="slane-tcell" onClick={() => onOpenTicket(ticket.id)}
+                  style={{ opacity: isTicketGhost ? 0.72 : 1, ...statusTintStyle }}>
                   {ticket.unread_count > 0 && <div className="tk-new-dot">{ticket.unread_count}</div>}
                   {/* Button sits right next to tk-num on the LEFT, not the top-right
                       corner - that corner is where tk-new-dot (absolute, top:5
                       right:5) lands, and used to cover this button whenever a new
                       message arrived. Kept out of that corner regardless of
-                      whether the urgency badge (still right-aligned via its own
-                      marginLeft:auto) is present or not. */}
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
+                      whether the urgency badge is present or not.
+                      tk-urg itself (marginLeft:auto, so it's right-aligned in this
+                      row) gets extra right padding whenever tk-new-dot is actually
+                      showing - tk-new-dot is position:absolute (takes no flow
+                      space), so without this, tk-urg's own right edge lands
+                      exactly where the dot floats and the time text renders
+                      underneath/behind it, unreadable. */}
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3, paddingRight: ticket.unread_count > 0 ? 26 : 0 }}>
                     <span className="tk-num">{tNum}</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { generateFormLinkUrl, buildFormLinkWarningMessage } from '../lib/formLink.js';
+import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../lib/formLink.js';
 import { storeMedia, detectImageMime } from '../lib/media.js';
 
 interface MetaWebhookPayload {
@@ -220,6 +220,7 @@ async function ingestMessage(
           };
           await sendAndRecord(buildFormLinkWarningMessage());
           await sendAndRecord(url);
+          await sendAndRecord(buildFormLinkFollowUpMessage());
         })
         .catch(async (err) => {
           fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando formulario automático');

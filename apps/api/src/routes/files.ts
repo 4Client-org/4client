@@ -10,12 +10,6 @@ import { clearSoftLinkBlock, MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
-// 4 hours - same reasoning and same value as the form link's UNOPENED_LINK_TTL_SECONDS
-// (public.ts): a factura URL nobody opens promptly dies on its own, shrinking how long a
-// misdirected one (wrong number, forwarded by mistake) stays usable. Was 10 minutes then
-// 2h, raised for the same reason as the form link - too short for real WhatsApp usage.
-const UNOPENED_INVOICE_TTL_SECONDS = 4 * 60 * 60;
-
 export default async function fileRoutes(fastify: FastifyInstance) {
   const MAX_BASE64_BYTES = 28_000_000; // ~20 MB decoded
 
@@ -173,9 +167,6 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     }
     if (Date.now() - link.created_at.getTime() > 24 * 3600 * 1000) {
       throw { status: 410, error: 'Este link de factura ya expiró (válido 24 horas). Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
-    }
-    if (!link.opened_at && Date.now() - link.created_at.getTime() > UNOPENED_INVOICE_TTL_SECONDS * 1000) {
-      throw { status: 410, error: 'Este link de factura expiró por no abrirse a tiempo. Pide que te reenvíen la factura.', code: 'INVOICE_EXPIRED' };
     }
     return link;
   }

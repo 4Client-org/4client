@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef, KeyboardEvent } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
 import { toast } from '../ui/Toast';
+import { normalizeSearch } from '../../lib/normalize';
 
 // A negative price must never make it into `items` at all - not just get blocked
 // downstream at Guardar/Copiar/PDF/Enviar factura (defense-in-depth, still in place
@@ -22,6 +23,15 @@ interface Props {
   onChange: (items: Item[]) => void;
   onLocalDirty?: (dirty: boolean) => void;
   clearKey?: number;
+  // ArrowUp from the catalog search box - the top of this component's own nav
+  // graph - hands focus back OUT to whatever the parent modal has above it
+  // (Método de pago, in DetallePedidoModal). Optional since not every caller
+  // wires this whole-form nav graph (e.g. NuevoPedidoModal).
+  onArrowUpFromSearch?: () => void;
+  // Down from the LAST manual-product field (Precio) - hands focus OUT to
+  // whatever the parent form has below this whole component (Observaciones, in
+  // DetallePedidoModal). Same optionality reasoning as onArrowUpFromSearch.
+  onArrowDownFromManual?: () => void;
 }
 
 // Exposed so a parent (NuevoPedidoModal/DetallePedidoModal) can force-commit
@@ -35,6 +45,19 @@ interface Props {
 // only visible on the next render, too late for a save already about to happen.
 export interface ProductSearchHandle {
   commitPendingEdit: () => Item[];
+  // Lets the parent modal (DetallePedidoModal) hand focus INTO this component as
+  // part of a keyboard-nav graph that spans the whole order form, not just what's
+  // inside here - e.g. arrowing down from "Domiciliario" needs to land here.
+  focusSearch: () => void;
+  // The actual entry point from the parent form's nav graph now - lands on the
+  // collapse/expand toggle header itself (not straight into the search box or a
+  // row), so Enter there can collapse/expand and Down can branch: into the
+  // catalog when expanded, or into the already-added items list when collapsed.
+  focusToggle: () => void;
+  // Symmetric re-entry point for a parent field below this component (e.g.
+  // Observaciones) arrowing back UP into it - lands on the LAST manual-product
+  // field (Precio), the natural "bottom" of this whole component's nav graph.
+  focusManualLast: () => void;
 }
 
 function groupByCategory(products: Product[]) {
@@ -48,12 +71,18 @@ function groupByCategory(products: Product[]) {
 }
 
 const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
-  { products, items, locked, onChange, onLocalDirty, clearKey }, ref,
+  { products, items, locked, onChange, onLocalDirty, clearKey, onArrowUpFromSearch, onArrowDownFromManual }, ref,
 ) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
   const factboxSearchRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLDivElement>(null);
+  // Per-row refs for the CATALOG list (before adding) - unlike the Factbox below,
+  // every catalog row is always "live" at once (no single editingRow), so this
+  // needs a ref per product id, not one shared pair.
+  const catalogQtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const catalogPriceRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string }>>({});
   // Which committed item (by product_name) is being edited inline in the Factbox
   // table below - editing never touches the catalog's collapsed state anymore, so
@@ -69,6 +98,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [manualQty, setManualQty] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualError, setManualError] = useState('');
+  const manualNameRef = useRef<HTMLInputElement | null>(null);
+  const manualQtyRef = useRef<HTMLInputElement | null>(null);
+  const manualPriceRef = useRef<HTMLInputElement | null>(null);
   // Filters the Factbox table below (already-selected items), separate from the
   // catalog search above - lets staff quickly find one line to price on an order
   // with many items, instead of scrolling the whole committed list.
@@ -83,7 +115,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   }, [clearKey]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
-  const searchLower = search.toLowerCase().trim();
+  const searchLower = normalizeSearch(search);
 
   const visibleGroups = useMemo(() => {
     if (!searchLower) return grouped;
@@ -91,8 +123,8 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       .map(g => ({
         category: g.category,
         products: g.products.filter(p =>
-          p.name.toLowerCase().includes(searchLower) ||
-          p.category.toLowerCase().includes(searchLower)
+          normalizeSearch(p.name).includes(searchLower) ||
+          normalizeSearch(p.category).includes(searchLower)
         ),
       }))
       .filter(g => g.products.length > 0);
@@ -104,8 +136,18 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     onLocalDirty?.(hasLocal);
   }, [localInputs, onLocalDirty]);
 
+  // Falls back to the item's OWN committed values (not blank) when there's no
+  // in-progress local edit - previously an already-added catalog row always
+  // showed an empty qty/price box (just the checkmark), so re-finding a product
+  // to tweak it meant retyping its quantity AND price from scratch instead of
+  // just editing what's already there. Only used for DISPLAY - commitProduct's
+  // own no-op guard still reads localInputs directly, so a truly-untouched new
+  // catalog row is unaffected.
   function getLocal(name: string) {
-    return localInputs[name] ?? { qty: '', price: '' };
+    if (localInputs[name]) return localInputs[name];
+    const committed = items.find(i => i.product_name === name);
+    if (committed) return { qty: committed.quantity_label, price: parseFloat(committed.price) > 0 ? committed.price : '' };
+    return { qty: '', price: '' };
   }
 
   function setLocal(name: string, field: 'qty' | 'price', val: string) {
@@ -175,6 +217,59 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     }
   }
 
+  // Flat, visible-order list of catalog products (grouped by category above,
+  // this flattens across group boundaries) - drives Up/Down navigation the same
+  // way the Factbox's own moveToRow does against visibleItems.
+  const flatVisibleProducts = useMemo(() => visibleGroups.flatMap(g => g.products), [visibleGroups]);
+
+  // Shared by both inputs of a CATALOG row (not yet added - every row is "live"
+  // at once here, unlike the Factbox's single editingRow). Left/Right toggle
+  // qty<->price on the same row; Up/Down move to the row above/below in the same
+  // column, landing in the top search bar at the very top boundary.
+  function handleCatalogArrowKeys(e: KeyboardEvent<HTMLInputElement>, product: Product, field: 'qty' | 'price') {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const idx = flatVisibleProducts.findIndex(p => p.id === product.id);
+      if (idx < 0) return;
+      if (e.key === 'ArrowUp' && idx === 0) {
+        searchRef.current?.focus();
+        return;
+      }
+      const next = flatVisibleProducts[e.key === 'ArrowUp' ? idx - 1 : idx + 1];
+      if (next) {
+        const ref = field === 'qty' ? catalogQtyRefs : catalogPriceRefs;
+        ref.current[next.id]?.focus();
+        ref.current[next.id]?.select();
+        return;
+      }
+      // Down past the LAST catalog row - continues into the Factbox's own
+      // search box (if there's anything to search), instead of dead-ending.
+      // Previously this just did nothing at the last product.
+      if (e.key === 'ArrowDown') {
+        if (items.length > 0) { factboxSearchRef.current?.focus(); return; }
+        manualNameRef.current?.focus();
+      }
+      return;
+    }
+    if (e.key === 'ArrowRight' && field === 'qty') {
+      // Boundary-aware - qty is type="text", so selectionStart is reliable: only
+      // jump to price once the cursor has nowhere further right to go within qty.
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      catalogPriceRefs.current[product.id]?.focus();
+      catalogPriceRefs.current[product.id]?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && field === 'price') {
+      // Unconditional, same reasoning as the Factbox's own price->qty jump -
+      // type="number" doesn't reliably expose selectionStart across browsers.
+      e.preventDefault();
+      catalogQtyRefs.current[product.id]?.focus();
+      catalogQtyRefs.current[product.id]?.select();
+    }
+  }
+
   function removeItem(productName: string) {
     onChange(items.filter(i => i.product_name !== productName));
   }
@@ -234,10 +329,17 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // editingRow changes, so opening the next row is all this needs to do.
   function advanceToNextRow(productName: string) {
     if (!commitEditField(productName)) return;
-    const idx = items.findIndex(i => i.product_name === productName);
-    const next = idx >= 0 ? items[idx + 1] : undefined;
-    if (next) editItem(next);
-    else setEditingRow(null); // last row - nothing further to advance to
+    // visibleItems (the factbox-search-filtered list), not the full unfiltered
+    // items - matches moveToRow's own arrow-key navigation below, which already
+    // gets this right; Enter didn't, and disagreeing about which row is "next"
+    // depending on whether Enter or an arrow key was pressed made no sense.
+    const idx = visibleItems.findIndex(i => i.product_name === productName);
+    const next = idx >= 0 ? visibleItems[idx + 1] : undefined;
+    if (next) { editItem(next); return; }
+    // Last row - nothing to advance to, but editingRow is left exactly as it
+    // was (still this row) instead of closing to null. Closing it used to kill
+    // keyboard nav dead: the input unmounts, focus falls to nowhere, and arrow
+    // keys stop doing anything until the person clicks something again.
   }
 
   // Up/Down between rows, same column: commits whatever's typed in the row being
@@ -262,7 +364,12 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       return;
     }
     const next = visibleItems[direction === 'up' ? idx - 1 : idx + 1];
-    if (next) editItem(next, field);
+    if (next) { editItem(next, field); return; }
+    // Down past the LAST row - hands off to the manual/off-catalog row right
+    // below the Factbox, instead of silently doing nothing (the previous dead
+    // end here - "el último producto... si le doy abajo me debe llevar a nombre
+    // del producto cuando no está en el catálogo porque no lo hace").
+    if (direction === 'down') { setEditingRow(null); manualNameRef.current?.focus(); }
   }
 
   // Shared by both the qty and price inputs of a row being edited. Enter/Escape
@@ -327,7 +434,35 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     // the person already saw the "no puede ser negativo" toast and the row stayed
     // open with their bad value still in it for them to fix.
     commitPendingEdit: () => (editingRow ? saveEdit(editingRow) : items) ?? items,
+    focusSearch: () => searchRef.current?.focus(),
+    focusToggle: () => toggleRef.current?.focus(),
+    focusManualLast: () => manualPriceRef.current?.focus(),
   }));
+
+  // Toggle header is itself a stop in the whole-form nav graph, not just a click
+  // target - Enter collapses/expands it in place; Up bubbles back out to whatever
+  // the parent form has above (Método de pago); Down branches depending on state:
+  // expanded -> into the catalog's first row, collapsed -> into the already-added
+  // items list (Factbox) instead, since there's no catalog visible to land in.
+  function handleToggleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); setCollapsed(c => !c); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); onArrowUpFromSearch?.(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!collapsed) {
+        // Search box is its own stop in between - going toggle -> search ->
+        // product (not straight to the first product) matches the rest of this
+        // list's own nav (search's ArrowDown already lands on the first product).
+        searchRef.current?.focus();
+        return;
+      }
+      // Same "search box in between" rule as the expanded branch above - the
+      // Factbox's OWN search box ("Buscar entre los productos del pedido...")
+      // is a stop before its first row, not skipped straight into.
+      if (items.length > 0) { factboxSearchRef.current?.focus(); return; }
+      manualNameRef.current?.focus();
+    }
+  }
 
   function addManualProduct() {
     const name = manualName.trim();
@@ -348,6 +483,43 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     setManualName(''); setManualQty(''); setManualPrice('');
   }
 
+  // The manual/off-catalog row was previously NOT wired into keyboard nav at all
+  // (only Enter-to-submit on each field) - Left/Right chain the three fields,
+  // Up goes back to the last Factbox row (or the toggle if there are no items
+  // yet), Down bubbles OUT to whatever the parent form has below this whole
+  // component (Observaciones, in DetallePedidoModal).
+  function handleManualKeyDown(e: KeyboardEvent<HTMLInputElement>, field: 'name' | 'qty' | 'price') {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length > 0) { editItem(visibleItems[visibleItems.length - 1], 'qty'); return; }
+      toggleRef.current?.focus();
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); onArrowDownFromManual?.(); return; }
+    if (e.key === 'ArrowRight' && (field === 'name' || field === 'qty')) {
+      // Boundary-aware for name/qty (both type="text", selectionStart reliable) -
+      // only jump fields once the cursor has nowhere further right to go.
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      (field === 'name' ? manualQtyRef : manualPriceRef).current?.focus();
+      (field === 'name' ? manualQtyRef : manualPriceRef).current?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && (field === 'qty' || field === 'price')) {
+      // qty is boundary-aware (text input); price is type="number" so this jumps
+      // unconditionally, same trade-off as everywhere else in this file that
+      // handles a price field's ArrowLeft.
+      if (field === 'qty') {
+        const input = e.currentTarget;
+        if (input.selectionStart !== 0) return;
+      }
+      e.preventDefault();
+      (field === 'qty' ? manualNameRef : manualQtyRef).current?.focus();
+      (field === 'qty' ? manualNameRef : manualQtyRef).current?.select();
+    }
+  }
+
   useEffect(() => {
     if (!editingRow) return;
     const ref = editFocusField.current === 'price' ? editPriceRef : editQtyRef;
@@ -356,9 +528,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   }, [editingRow]);
 
   const total = items.reduce((s, i) => s + (parseFloat(i.price) || 0), 0);
-  const factboxSearchLower = factboxSearch.toLowerCase().trim();
+  const factboxSearchLower = normalizeSearch(factboxSearch);
   const visibleItems = useMemo(
-    () => factboxSearchLower ? items.filter(i => i.product_name.toLowerCase().includes(factboxSearchLower)) : items,
+    () => factboxSearchLower ? items.filter(i => normalizeSearch(i.product_name).includes(factboxSearchLower)) : items,
     [items, factboxSearchLower],
   );
 
@@ -404,7 +576,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     <>
       {/* Catalog toggle header */}
       <div
+        ref={toggleRef}
+        tabIndex={0}
         onClick={() => setCollapsed(c => !c)}
+        onKeyDown={handleToggleKeyDown}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
           padding: '8px 12px', background: 'var(--bg)', borderRadius: 'var(--rad)',
@@ -430,7 +605,19 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--gt)" strokeWidth="2.5">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input ref={searchRef} type="text" placeholder="Filtrar catálogo..." value={search} onChange={e => setSearch(e.target.value)} />
+            <input ref={searchRef} type="text" placeholder="Filtrar catálogo..." value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown' && flatVisibleProducts.length > 0) {
+                  e.preventDefault();
+                  const first = flatVisibleProducts[0];
+                  catalogQtyRefs.current[first.id]?.focus();
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  toggleRef.current?.focus();
+                }
+              }} />
             {search && (
               <button onClick={() => setSearch('')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 18, color: 'var(--gt)', lineHeight: 1 }}>
@@ -478,21 +665,23 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         {isCommitted && <Check size={11} color="var(--v)" style={{ marginLeft: 5, display: 'inline', verticalAlign: 'middle' }} />}
                       </div>
                       <input
+                        ref={el => { catalogQtyRefs.current[p.id] = el; }}
                         className="iinput"
                         placeholder="Ej: 2 kg"
                         value={local.qty}
                         onChange={e => setLocal(p.name, 'qty', e.target.value)}
-                        onKeyDown={e => handleKey(e, p.name)}
+                        onKeyDown={e => { handleKey(e, p.name); handleCatalogArrowKeys(e, p, 'qty'); }}
                         style={{ fontSize: 13 }}
                       />
                       <input
+                        ref={el => { catalogPriceRefs.current[p.id] = el; }}
                         className="iinput no-spin"
                         placeholder="$0"
                         type="number"
                         min="0"
                         value={local.price}
                         onChange={e => setLocal(p.name, 'price', e.target.value)}
-                        onKeyDown={e => handleKey(e, p.name)}
+                        onKeyDown={e => { handleKey(e, p.name); handleCatalogArrowKeys(e, p, 'price'); }}
                         style={{ fontSize: 13 }}
                       />
                       {/* Confirm button */}
@@ -536,6 +725,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               if (e.key === 'ArrowDown' && visibleItems.length > 0) {
                 e.preventDefault();
                 editItem(visibleItems[0], 'qty');
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                toggleRef.current?.focus();
               }
             }}
           />
@@ -677,29 +871,32 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 110px 32px', gap: 8, alignItems: 'center' }}>
           <input
+            ref={manualNameRef}
             className="iinput"
             placeholder="Nombre del producto"
             value={manualName}
             onChange={e => { setManualName(e.target.value); setManualError(''); }}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'name'); }}
             style={{ fontSize: 13 }}
           />
           <input
+            ref={manualQtyRef}
             className="iinput"
             placeholder="Ej: 2 kg"
             value={manualQty}
             onChange={e => setManualQty(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'qty'); }}
             style={{ fontSize: 13 }}
           />
           <input
+            ref={manualPriceRef}
             className="iinput no-spin"
             placeholder="$0"
             type="number"
             min="0"
             value={manualPrice}
             onChange={e => setManualPrice(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'price'); }}
             style={{ fontSize: 13 }}
           />
           <button

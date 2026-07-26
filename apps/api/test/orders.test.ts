@@ -335,6 +335,106 @@ describe('orders routes', () => {
     expect(secondCobro.json().code).toBe('ORDER_LOCKED');
   });
 
+  describe('crédito payment method', () => {
+    async function createCreditoOrder() {
+      const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Crédito' } });
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ payment_method: 'credito', employee_id: empleado.id, customer_phone: '3009998877' }),
+      });
+      expect(create.statusCode).toBe(201);
+      return create.json().data;
+    }
+
+    it('POST /orders/:id/cobro on a crédito order closes it (cerrado+locked) through the SAME password+amount flow as everyone else, but leaves paid:false', async () => {
+      const order = await createCreditoOrder();
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS },
+      });
+      expect(cobro.statusCode).toBe(200);
+      expect(cobro.json().data.status).toBe('cerrado');
+      expect(cobro.json().data.locked).toBe(true);
+      expect(cobro.json().data.paid).toBe(false);
+    });
+
+    it('PATCH /orders/:id/credito-pagado settles it - paid flips to true, paid_by/paid_at stamped, and it can\'t be settled twice', async () => {
+      const adminEmail = `credito-admin-${Date.now()}@example.com`;
+      await createTestUser(app.prisma, orgAId, 'admin', 'CreditoAdminPass1!', { email: adminEmail });
+      const creditoAdminToken = await login(app, adminEmail, 'CreditoAdminPass1!');
+
+      const order = await createCreditoOrder();
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS },
+      });
+
+      const settle = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/orders/${order.id}/credito-pagado`,
+        headers: authHeader(creditoAdminToken),
+      });
+      expect(settle.statusCode).toBe(200);
+      expect(settle.json().data.paid).toBe(true);
+
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(after.paid_by).not.toBeNull();
+      expect(after.paid_at).not.toBeNull();
+
+      const again = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/orders/${order.id}/credito-pagado`,
+        headers: authHeader(creditoAdminToken),
+      });
+      expect(again.statusCode).toBe(400);
+    });
+
+    it('PATCH /orders/:id/credito-pagado rejects encargado - admin/dev only per business rule', async () => {
+      const order = await createCreditoOrder();
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS },
+      });
+
+      const settle = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/orders/${order.id}/credito-pagado`,
+        headers: authHeader(encargadoToken),
+      });
+      expect(settle.statusCode).toBe(403);
+    });
+
+    it('PATCH /orders/:id/credito-pagado rejects a non-crédito order', async () => {
+      const adminEmail = `credito-admin2-${Date.now()}@example.com`;
+      await createTestUser(app.prisma, orgAId, 'admin', 'CreditoAdminPass2!', { email: adminEmail });
+      const creditoAdminToken = await login(app, adminEmail, 'CreditoAdminPass2!');
+
+      const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario No Crédito' } });
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ payment_method: 'cash', employee_id: empleado.id }),
+      });
+      const order = create.json().data;
+
+      const settle = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/orders/${order.id}/credito-pagado`,
+        headers: authHeader(creditoAdminToken),
+      });
+      expect(settle.statusCode).toBe(400);
+    });
+  });
+
   describe('PATCH /:id on a locked (closed) order - only admin can fully edit, anyone can add an observación', () => {
     async function createAndCloseOrder(overrides: Record<string, unknown> = {}) {
       const empleado = await app.prisma.employee.create({

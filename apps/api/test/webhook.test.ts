@@ -183,9 +183,10 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
 
     // Welcome, then the notice/bank-account text, then the link ALONE as its own
-    // message - split so the client can forward/copy just the link without
-    // dragging the notice along, and so neither message risks getting too long.
-    expect(outbound).toHaveLength(3);
+    // message, then a short follow-up nudge - split so the client can forward/
+    // copy just the link without dragging the notice along, and so no message
+    // risks getting too long.
+    expect(outbound).toHaveLength(4);
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].wpp_message_id).toBeTruthy();
     expect(outbound[1].text).toContain('ESTE LINK ES SOLO');
@@ -196,6 +197,9 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound[2].text).toMatch(/^https?:\/\//);
     expect(outbound[2].wpp_message_id).toBeTruthy();
     expect(outbound[2].failed_reason).toBeNull();
+    expect(outbound[3].text).toContain('Diligencia por favor el pedido');
+    expect(outbound[3].wpp_message_id).toBeTruthy();
+    expect(outbound[3].failed_reason).toBeNull();
 
     // Proves generateFormLinkUrl actually ran (a live, checkable link), not just a
     // static text blob that happens to contain the right words.

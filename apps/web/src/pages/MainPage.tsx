@@ -153,6 +153,13 @@ export default function MainPage() {
     clearAuth();
   }
 
+  // Always opens a blank NuevoPedidoModal - staff clicking "crear pedido" on the
+  // platform means "start a new one," full stop, even if the ticket already has
+  // an active order. (The dedup-reopen-existing behavior stays, deliberately,
+  // on the CLIENT's own form-link side - ClientFormPage's resolveTarget - since
+  // that's a different actor with a different risk: a client resubmitting the
+  // same link shouldn't accidentally create a duplicate. Staff explicitly
+  // choosing to create another one is a distinct, intentional action.)
   function handleCreateFromTicket(ticket: Ticket) {
     setFromTicket({
       ticketId: ticket.id,
@@ -294,6 +301,7 @@ export default function MainPage() {
               setFecha={setFecha}
               dashboard={dashboard}
               papeleraOrders={papeleraOrders}
+              creditoOrders={dashboard?.creditoOrders ?? []}
               history={history}
               orders={orders}
               onCierreCaja={() => setShowCierre(true)}

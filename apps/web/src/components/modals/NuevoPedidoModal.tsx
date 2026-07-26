@@ -3,7 +3,7 @@ import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'luci
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import ChatImage from '../ui/ChatImage';
-import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -61,6 +61,39 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [items, setItems] = useState<any[]>([]);
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
+
+  // Whole-form keyboard nav, same pattern/graph as DetallePedidoModal: nombre ->
+  // dirección -> pago/domiciliario -> catálogo -> Cancelar/Registrar, so the
+  // whole "crear pedido" flow is usable without a mouse too, not just editing
+  // an existing one.
+  const nombreRef = useRef<HTMLInputElement>(null);
+  const direccionRef = useRef<HTMLInputElement>(null);
+  const pagoRef = useRef<HTMLSelectElement>(null);
+  const empleadoRef = useRef<HTMLSelectElement>(null);
+  const cancelBtnRef = useRef<HTMLButtonElement>(null);
+  const submitBtnRef = useRef<HTMLButtonElement>(null);
+  function handleFormArrowKeys(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, field: 'nombre' | 'direccion' | 'pago' | 'empleado') {
+    if (field === 'nombre' && e.key === 'ArrowDown') { e.preventDefault(); direccionRef.current?.focus(); return; }
+    if (field === 'direccion') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); nombreRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+    if (field === 'pago') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); empleadoRef.current?.focus(); return; }
+    }
+    if (field === 'empleado') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+  }
+  function handleNewOrderActionBtnKeyDown(e: KeyboardEvent<HTMLButtonElement>, which: 'cancel' | 'submit') {
+    if (e.key === 'ArrowUp') { e.preventDefault(); productSearchRef.current?.focusManualLast(); return; }
+    if (e.key === 'ArrowRight' && which === 'cancel') { e.preventDefault(); submitBtnRef.current?.focus(); return; }
+    if (e.key === 'ArrowLeft' && which === 'submit') { e.preventDefault(); cancelBtnRef.current?.focus(); }
+  }
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInnerRef = useRef<HTMLDivElement>(null);
@@ -245,10 +278,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                       url = res.data.url;
                     } catch { toast('No se pudo generar el link', true); return; }
                     try {
-                      // Two separate messages, in order (awaited, not fire-and-
-                      // forget - the notice must arrive before the link).
+                      // Three separate messages, in order (awaited, not fire-and-
+                      // forget - each must arrive in this exact sequence).
                       await replyMut.mutateAsync(buildFormLinkWarningMessage());
                       await replyMut.mutateAsync(url);
+                      await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
                     } catch {
                       // replyMut's own onError already toasted the specific reason.
                     }
@@ -338,8 +372,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente *</label>
-                <input className="fi2" placeholder="Ej: María González" value={nombre}
-                  onChange={(e) => setNombre(e.target.value)} />
+                <input ref={nombreRef} className="fi2" placeholder="Ej: María González" value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'nombre')} />
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
@@ -351,28 +386,32 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             </div>
             <div className="fg2">
               <label className="fl2">Dirección de entrega <span style={{ fontWeight: 400, color: 'var(--gt)' }}>(opcional, requerida solo para cerrar el pedido)</span></label>
-              <input className="fi2" placeholder="Ej: Cra 45 #12-34, Casa azul" value={direccion}
-                onChange={(e) => setDireccion(e.target.value)} />
+              <input ref={direccionRef} className="fi2" placeholder="Ej: Cra 45 #12-34, Casa azul" value={direccion}
+                onChange={(e) => setDireccion(e.target.value)}
+                onKeyDown={(e) => handleFormArrowKeys(e, 'direccion')} />
             </div>
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Método de pago</label>
-                <select className="fi2" value={pago} onChange={(e) => {
+                <select ref={pagoRef} className="fi2" value={pago} onChange={(e) => {
                   setPago(e.target.value);
                   // Reset the cod choice on any change away from/back to 'cod' -
                   // otherwise switching payment method and back could resurrect a
                   // stale choice/amount that no longer matches what's on screen.
                   setCodChoice(null); setCodCash('');
-                }}>
+                }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'pago')}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
                   <option value="cod">Cobro en casa</option>
+                  <option value="credito">Crédito</option>
                 </select>
               </div>
               <div className="fg2">
                 <label className="fl2">Domiciliario</label>
-                <select className="fi2" value={empleadoId} onChange={(e) => setEmpleadoId(e.target.value)}>
+                <select ref={empleadoRef} className="fi2" value={empleadoId} onChange={(e) => setEmpleadoId(e.target.value)}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'empleado')}>
                   <option value="">Sin asignar</option>
                   {employees.map((emp: any) => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
@@ -384,7 +423,10 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               <CodPaymentField total={total} choice={codChoice} onChoiceChange={setCodChoice} cash={codCash} onCashChange={setCodCash} />
             )}
             <div className="stit">Productos</div>
-            <ProductSearch ref={productSearchRef} products={products} items={items} onChange={setItems} />
+            <ProductSearch ref={productSearchRef} products={products} items={items} onChange={setItems}
+              onArrowUpFromSearch={() => pagoRef.current?.focus()}
+              onArrowDownFromManual={() => cancelBtnRef.current?.focus()}
+            />
             {hasNegativePrice && (
               <div style={{
                 background: 'var(--rc)', borderRadius: 'var(--rad)', padding: '10px 14px', marginTop: 10,
@@ -395,8 +437,8 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               </div>
             )}
             <div className="mactions">
-              <button className="bsec" onClick={handleClose}>Cancelar</button>
-              <button className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice || (pago === 'cod' && !codValid)}
+              <button ref={cancelBtnRef} onKeyDown={(e) => handleNewOrderActionBtnKeyDown(e, 'cancel')} className="bsec" onClick={handleClose}>Cancelar</button>
+              <button ref={submitBtnRef} onKeyDown={(e) => handleNewOrderActionBtnKeyDown(e, 'submit')} className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice || (pago === 'cod' && !codValid)}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {createOrder.isPending
                   ? 'Registrando...'

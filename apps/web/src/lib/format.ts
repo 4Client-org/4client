@@ -36,4 +36,5 @@ export const STATUS_ORDER = ['nuevo', 'preparando', 'listo', 'camino', 'entregad
 // everywhere else) calls "Pagado en tienda".
 export const PAYMENT_LABEL: Record<string, string> = {
   cod: 'Cobro en casa', cash: 'Pagado en tienda', transfer: 'Transferencia', sin_asignar: 'Sin asignar',
+  credito: 'Crédito',
 };

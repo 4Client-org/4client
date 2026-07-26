@@ -108,55 +108,54 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
-    // Enviar via Meta Cloud API
+    // Enviar via Meta Cloud API - fired in the BACKGROUND, not awaited before
+    // responding. The DB row + 'ticket:message' emit above already put the
+    // message on-screen (everyone's chat, including the sender's own, via the
+    // same socket room) before this even starts - awaiting Meta's own round trip
+    // here just held the HTTP response (and so the input clearing / button
+    // re-enabling) hostage to it for no benefit, since delivery status was
+    // already being reported asynchronously via 'ticket:message-status' regardless
+    // (DeliveryStatus.tsx already renders a pending state until that arrives).
     const provider = MetaCloudProvider.fromOrg(ticket.org);
-    let wpp_status: 'sent' | 'no_credentials' | 'failed' = 'no_credentials';
-    let wpp_error: string | undefined;
-
-    if (provider) {
-      try {
-        // Capturing and storing this is the whole point - webhook.ts's ingestStatus
-        // matches every later delivered/read/failed status update by THIS id
-        // (wpp_message_id). Without saving it here, every status Meta ever sends for
-        // this message has nothing to match against and is silently dropped -
-        // DeliveryStatus.tsx stays stuck on a single gray check forever, never a
-        // failure either, indistinguishable from "still sending".
-        const { messageId } = await provider.sendText(ticket.phone, body.data.text);
-        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
-        // Without this, the chat already open on someone's screen (the 'ticket:message'
-        // emit above fired BEFORE this id existed) never learns wpp_message_id is now
-        // set - DeliveryStatus.tsx is gated on that being truthy, so the check mark
-        // stayed invisible until something else happened to trigger a refetch (the
-        // next poll, or - only for THIS message - its own first real delivered/read
-        // webhook, which is exactly the delay that made this look broken).
-        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
-          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
-        });
-        wpp_status = 'sent';
-      } catch (err: any) {
-        wpp_status = 'failed';
-        wpp_error = err?.message ?? 'Error desconocido Meta API';
-        fastify.log.error({ err, ticketId }, 'WPP: error enviando respuesta via Meta API');
-        // Recorded on the message itself (not just returned in this HTTP response) so
-        // DeliveryStatus shows the red "no se pudo entregar" X - e.g. WhatsApp's 24h
-        // customer-service-window policy rejecting a business-initiated message with
-        // no active session. Broadcast so anyone else with this chat already open
-        // (not just whoever clicked send) sees it update live, same as a real Meta
-        // webhook status would.
-        const failed = await fastify.prisma.ticketMessage.update({
-          where: { id: message.id },
-          data: { failed_reason: String(wpp_error).slice(0, 255) },
-          select: { delivered: true, read_by_client: true, failed_reason: true },
-        });
-        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
-          ticketId, messageId: message.id, ...failed,
-        });
-      }
-    } else {
+    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
+    if (!provider) {
       fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, mensaje solo guardado en BD');
+    } else {
+      const orgId = req.user.orgId;
+      provider.sendText(ticket.phone, body.data.text)
+        .then(async ({ messageId }) => {
+          // Capturing and storing this is the whole point - webhook.ts's ingestStatus
+          // matches every later delivered/read/failed status update by THIS id
+          // (wpp_message_id). Without saving it here, every status Meta ever sends for
+          // this message has nothing to match against and is silently dropped -
+          // DeliveryStatus.tsx stays stuck on a single gray check forever, never a
+          // failure either, indistinguishable from "still sending".
+          await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
+            ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+          });
+        })
+        .catch(async (err: any) => {
+          const wpp_error = err?.message ?? 'Error desconocido Meta API';
+          fastify.log.error({ err, ticketId }, 'WPP: error enviando respuesta via Meta API');
+          // Recorded on the message itself (not just returned in the HTTP response,
+          // which is long gone by now) so DeliveryStatus shows the red "no se pudo
+          // entregar" X - e.g. WhatsApp's 24h customer-service-window policy
+          // rejecting a business-initiated message with no active session.
+          // Broadcast so anyone else with this chat already open sees it update
+          // live, same as a real Meta webhook status would.
+          const failed = await fastify.prisma.ticketMessage.update({
+            where: { id: message.id },
+            data: { failed_reason: String(wpp_error).slice(0, 255) },
+            select: { delivered: true, read_by_client: true, failed_reason: true },
+          });
+          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
+            ticketId, messageId: message.id, ...failed,
+          });
+        });
     }
 
-    return reply.status(201).send({ data: message, wpp_status, wpp_error });
+    return reply.status(201).send({ data: message, wpp_status });
   });
 
   // POST /api/v1/inbox/:ticketId/send-image - staff sends a photo, todos los roles
@@ -221,39 +220,40 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
+    // Same reasoning as /reply above - fired in the background, not awaited
+    // before responding. An image upload+send round trip to Meta is if anything
+    // slower than a plain text send, so this matters here at least as much.
     const provider = MetaCloudProvider.fromOrg(ticket.org);
-    let wpp_status: 'sent' | 'no_credentials' | 'failed' = 'no_credentials';
-    let wpp_error: string | undefined;
-
-    if (provider) {
-      try {
-        // Bytes uploaded straight to Meta (never a public URL of ours) - see
-        // meta-cloud.ts's uploadMedia/sendImage for why that's the point.
-        const mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
-        const { messageId } = await provider.sendImage(ticket.phone, mediaId, caption ?? undefined);
-        await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
-        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
-          ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
-        });
-        wpp_status = 'sent';
-      } catch (err: any) {
-        wpp_status = 'failed';
-        wpp_error = err?.message ?? 'Error desconocido Meta API';
-        fastify.log.error({ err, ticketId }, 'WPP: error enviando imagen via Meta API');
-        const failed = await fastify.prisma.ticketMessage.update({
-          where: { id: message.id },
-          data: { failed_reason: String(wpp_error).slice(0, 255) },
-          select: { delivered: true, read_by_client: true, failed_reason: true },
-        });
-        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
-          ticketId, messageId: message.id, ...failed,
-        });
-      }
-    } else {
+    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
+    if (!provider) {
       fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, imagen solo guardada en BD');
+    } else {
+      const orgId = req.user.orgId;
+      // Bytes uploaded straight to Meta (never a public URL of ours) - see
+      // meta-cloud.ts's uploadMedia/sendImage for why that's the point.
+      provider.uploadMedia(buffer, body.data.mime_type)
+        .then((mediaId) => provider.sendImage(ticket.phone, mediaId, caption ?? undefined))
+        .then(async ({ messageId }) => {
+          await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
+          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
+            ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+          });
+        })
+        .catch(async (err: any) => {
+          const wpp_error = err?.message ?? 'Error desconocido Meta API';
+          fastify.log.error({ err, ticketId }, 'WPP: error enviando imagen via Meta API');
+          const failed = await fastify.prisma.ticketMessage.update({
+            where: { id: message.id },
+            data: { failed_reason: String(wpp_error).slice(0, 255) },
+            select: { delivered: true, read_by_client: true, failed_reason: true },
+          });
+          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
+            ticketId, messageId: message.id, ...failed,
+          });
+        });
     }
 
-    return reply.status(201).send({ data: message, wpp_status, wpp_error });
+    return reply.status(201).send({ data: message, wpp_status });
   });
 
   // GET /api/v1/inbox/media/:token - serves a chat photo (inbound or outbound).

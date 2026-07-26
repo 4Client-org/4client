@@ -60,8 +60,13 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
       });
     }
 
+    // client_deleted excluded - the client cancelled it themselves, staff
+    // shouldn't have to make a cierre decision ("mañana"/"forzar cierre") on an
+    // order that's being treated as if it doesn't exist (see schema.prisma's own
+    // comment on that flag). It still shows on the live board in red so staff can
+    // review/restore it any time, just not as a cierre blocker.
     const pendientes = await fastify.prisma.order.findMany({
-      where: { org_id: req.user.orgId, fecha, paid: false, status: { notIn: ['cerrado', 'papelera'] } },
+      where: { org_id: req.user.orgId, fecha, paid: false, status: { notIn: ['cerrado', 'papelera'] }, client_deleted: false },
       include: { items: true },
     });
 
@@ -77,7 +82,7 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
 
     // Calcular totales
     const todosPagados = await fastify.prisma.order.findMany({
-      where: { org_id: req.user.orgId, fecha, paid: true },
+      where: { org_id: req.user.orgId, fecha, paid: true, client_deleted: false },
       include: { items: true },
     });
 
@@ -148,8 +153,8 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
       // Marcar todos los pedidos del día como caja cerrada
       await tx.order.updateMany({ where: { org_id: req.user.orgId, fecha }, data: { caja_cerrada: true } });
 
-      const allOrders = await tx.order.count({ where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' } } });
-      const closedOrders = await tx.order.count({ where: { org_id: req.user.orgId, fecha, status: 'cerrado' } });
+      const allOrders = await tx.order.count({ where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' }, client_deleted: false } });
+      const closedOrders = await tx.order.count({ where: { org_id: req.user.orgId, fecha, status: 'cerrado', client_deleted: false } });
 
       await tx.dailyClose.upsert({
         where: { org_id_fecha: { org_id: req.user.orgId, fecha } },

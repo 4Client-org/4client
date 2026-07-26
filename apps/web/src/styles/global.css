@@ -114,7 +114,6 @@ input,select,textarea{font-family:var(--f);}
 .slane-hcell.wpp-col{background:var(--vc);color:var(--vd);}
 .slane-tcell{background:var(--b);padding:11px 12px;border-bottom:2px solid var(--brd);border-right:3px solid var(--brd);cursor:pointer;transition:background .15s;position:relative;}
 .slane-tcell:hover{background:#F0FAF4;}
-.slane-tcell.urg{background:var(--rc);border-right-color:var(--r);}
 .slane-scell{padding:8px;border-bottom:2px solid var(--brd);border-right:2px solid var(--brd);min-height:108px;display:flex;flex-direction:column;gap:6px;align-items:stretch;}
 .slane-scell:last-child{border-right:none;}
 
@@ -462,7 +461,7 @@ input,select,textarea{font-family:var(--f);}
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
    but guard against page-level breakage and keep modals usable single-column */
 @media (max-width:560px){
-  .ac{overflow-x:hidden;padding:0 10px 10px;}
+  .ac{padding:0 10px 10px;}
   .khead{gap:8px;}
   .ktit{font-size:16px;}
   .agrid{grid-template-columns:1fr;}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
-import { ShoppingCart, CheckCircle, XCircle, Check, Plus, Trash2, ChevronDown, ChevronUp, ArrowLeft, Lock } from 'lucide-react';
+import { ShoppingCart, CheckCircle, XCircle, Check, Trash2, ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import { resolveApiBase } from '../lib/apiBase';
+import { normalizeSearch } from '../lib/normalize';
 
 const API = resolveApiBase();
 
@@ -12,13 +13,13 @@ interface DayOrder {
   status: string; editable: boolean; items: DayOrderItem[]; createdAt: string;
 }
 
+const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta', 'Pesos $'];
+const DEFAULT_UNIT = 'Kilo';
+
 const STATUS_LABEL_CLIENT: Record<string, string> = {
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo para entrega',
   camino: 'En camino', cerrado: 'Entregado',
 };
-
-const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta'];
-const DEFAULT_UNIT = 'Kilo';
 
 function groupByCategory(products: Product[]) {
   const order: string[] = [];
@@ -33,9 +34,10 @@ function groupByCategory(products: Product[]) {
 
 // Random value this browser generates once per link and keeps in localStorage -
 // there's no real "device identity" reachable from a web page, so this is the
-// closest available proxy. The backend (public.ts) claims the ticket's form-link
-// for whichever browser presents this value first; a different browser/device
-// opening the same link afterward gets rejected as if the link were invalid.
+// closest available proxy. Kept and still sent on every request (backend still
+// records it against submitted/deleted orders for traceability), but the backend
+// no longer REJECTS a request over it - a link can be opened/used from more than
+// one device/browser at once (see public.ts's own comment on this).
 function getOrCreateDeviceToken(token: string): string {
   const key = `4client_device_${token}`;
   const fresh = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -54,14 +56,16 @@ export default function ClientFormPage() {
   const draftKey = `4client_form_draft_${token}`;
   const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-  const [state, setState] = useState<'loading' | 'invalid' | 'choose' | 'catalog' | 'done'>('loading');
+  const [state, setState] = useState<'loading' | 'invalid' | 'catalog' | 'done' | 'deleted'>('loading');
   const [clientName, setClientName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [dayOrders, setDayOrders] = useState<DayOrder[]>([]);
-  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
-  // null = not decided yet (only matters while dayOrders.length > 0); 'new' = a
-  // separate order; any other value = the id of the existing order being edited.
+  const [deletingOrder, setDeletingOrder] = useState(false);
+  // null = not decided yet; 'new' = a separate order; any other value = the id of
+  // the existing order being edited. There's no "choose which order" menu
+  // anymore - this is resolved automatically (resolveTarget below) straight into
+  // whichever order is actually editable, or a fresh one if none is.
   const [mergeTarget, setMergeTarget] = useState<string | 'new' | null>(null);
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -80,7 +84,6 @@ export default function ClientFormPage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualName, setManualName] = useState('');
   const [manualQty, setManualQty] = useState('');
-  const [manualUnit, setManualUnit] = useState(DEFAULT_UNIT);
   const [address, setAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -111,10 +114,14 @@ export default function ClientFormPage() {
   // stale `false` value in the same tick. A ref updates immediately, no render lag.
   const submittingRef = useRef(false);
 
-  // Shared by the initial load AND "volver al menú" from the done screen - fetches
-  // the client's current info/orders and returns the order list (or null on
-  // failure, having already switched to 'invalid').
-  async function loadFormInfo(): Promise<DayOrder[] | null> {
+  // Shared by the initial load, continueToForm ("Ver mis pedidos" / "Hacer un
+  // pedido" buttons) and deleteEntireOrder - fetches the client's current info,
+  // products and orders. Returns products TOO (not just orders), not just via the
+  // `products` state - applyTarget (below) needs the freshly-fetched list to map
+  // product names to ids for prefill, and reading the `products` STATE variable
+  // right after calling setProducts() here would still see the stale pre-update
+  // value in the same tick (React state updates aren't synchronous).
+  async function loadFormInfo(): Promise<{ orders: DayOrder[]; products: Product[] } | null> {
     const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
     try {
       const [info, prods] = await Promise.all([
@@ -128,10 +135,11 @@ export default function ClientFormPage() {
       }
       setClientName(info.data.clientName);
       setOrgName(info.data.orgName ?? '');
-      setProducts(prods.data ?? []);
+      const prodList: Product[] = prods.data ?? [];
+      setProducts(prodList);
       const orders: DayOrder[] = info.data.orders ?? [];
       setDayOrders(orders);
-      return orders;
+      return { orders, products: prodList };
     } catch {
       setState('invalid');
       setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.');
@@ -139,9 +147,46 @@ export default function ClientFormPage() {
     }
   }
 
+  // The client's very first editable order today, or 'new' if there isn't one -
+  // there's no menu to pick from anymore, this is the whole decision. Matches what
+  // staff's own "crear pedido" dedup does on the board side (open the existing
+  // resumable order instead of creating a duplicate).
+  function resolveTarget(orders: DayOrder[]): string | 'new' {
+    const editable = orders.find(o => o.editable);
+    return editable ? editable.id : 'new';
+  }
+
+  // Loads whichever target resolveTarget (or a restored draft) points at into the
+  // actual form fields - pulling in what's already on that order (address/pago/
+  // items) so the client sees/edits what's really there instead of a blank slate,
+  // or resetting to a clean new order.
+  function applyTarget(target: string | 'new', orders: DayOrder[], prods: Product[]) {
+    setMergeTarget(target);
+    if (target !== 'new') {
+      const order = orders.find(o => o.id === target);
+      if (order) {
+        setAddress(order.address || '');
+        setPaymentMethod(order.paymentMethod || '');
+        setSelected(order.items.map(i => ({
+          product_name: i.product_name,
+          quantity_label: i.quantity_label,
+          productId: prods.find(p => p.name === i.product_name)?.id ?? `existing-${i.id}`,
+        })));
+        return;
+      }
+    }
+    setSelected([]);
+    setAddress('');
+    setPaymentMethod('');
+  }
+
   useEffect(() => {
     if (!token) { setState('invalid'); setErrorMsg('Link inválido. Pide un nuevo link al negocio.'); return; }
 
+    // Read synchronously (not via state, which wouldn't be committed yet in this
+    // same effect) so the branch below can tell whether there's an in-progress
+    // draft to resume straight back into, instead of resolving a fresh target.
+    let restoredMergeTarget: string | null = null;
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
@@ -150,6 +195,10 @@ export default function ClientFormPage() {
           setSelected(draft.items);
           if (typeof draft.address === 'string') setAddress(draft.address);
           if (typeof draft.paymentMethod === 'string') setPaymentMethod(draft.paymentMethod);
+          if (typeof draft.mergeTarget === 'string') {
+            restoredMergeTarget = draft.mergeTarget;
+            setMergeTarget(draft.mergeTarget as any);
+          }
         } else {
           localStorage.removeItem(draftKey);
         }
@@ -163,45 +212,46 @@ export default function ClientFormPage() {
       .then(r => r.json().then(body => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
         if (!ok) { setState('invalid'); setErrorMsg(body.error ?? 'Link inválido o expirado.'); return; }
-        return loadFormInfo().then(orders => {
-          if (orders === null) return;
-          // First-ever visit today (no orders yet) - straight to the catalog, nothing
-          // to choose between. Any later visit (an order already exists) - the menu,
-          // with that order to resume plus the option to start a separate new one.
-          if (orders.length > 0) {
-            setState('choose');
-          } else {
-            setMergeTarget('new');
-            setState('catalog');
-            setTimeout(() => searchRef.current?.focus(), 100);
+        return loadFormInfo().then(result => {
+          if (result === null) return;
+          if (!restoredMergeTarget) {
+            applyTarget(resolveTarget(result.orders), result.orders, result.products);
           }
+          setState('catalog');
+          setTimeout(() => searchRef.current?.focus(), 100);
         });
       })
       .catch(() => { setState('invalid'); setErrorMsg('No se pudo conectar. Verifica tu internet e intenta de nuevo.'); });
   }, [token]);
 
-  // From the "¡Pedido enviado!" screen back to the menu - without this, a client who
-  // just finished an order had no way back in except manually refreshing the page.
-  async function goToMenu() {
+  // From the "¡Pedido enviado!"/"Pedido eliminado" screens back into a live form -
+  // always straight to the form (a still-editable order, or a fresh one), never a
+  // menu to choose from.
+  async function continueToForm() {
     setState('loading');
-    const orders = await loadFormInfo();
-    if (orders === null) return; // loadFormInfo already switched to 'invalid'
-    setState('choose');
+    const result = await loadFormInfo();
+    if (result === null) return; // loadFormInfo already switched to 'invalid'
+    applyTarget(resolveTarget(result.orders), result.orders, result.products);
+    setState('catalog');
+    setTimeout(() => searchRef.current?.focus(), 100);
   }
 
   // Persist confirmed items as a draft so the client can resume within 1 day
   // if they close the tab mid-order. Skip until the initial restore attempt
   // above has run, so we don't overwrite a saved draft with the empty initial state.
+  // Runs on every keystroke in address/items too (not just on blur/submit) - a
+  // refresh mid-typing must never lose more than what's still sitting unsent in a
+  // single uncommitted catalog row.
   useEffect(() => {
     if (!hydrated || !token) return;
     try {
-      if (selected.length === 0) {
+      if (selected.length === 0 && !address && !paymentMethod) {
         localStorage.removeItem(draftKey);
       } else {
-        localStorage.setItem(draftKey, JSON.stringify({ items: selected, address, paymentMethod, savedAt: Date.now() }));
+        localStorage.setItem(draftKey, JSON.stringify({ items: selected, address, paymentMethod, mergeTarget, savedAt: Date.now() }));
       }
     } catch { /* localStorage unavailable - ignore, form still works without persistence */ }
-  }, [selected, address, paymentMethod, hydrated, token]);
+  }, [selected, address, paymentMethod, mergeTarget, hydrated, token]);
 
   // Live-update: poll for status changes on the client's order(s) - both while
   // choosing which one to edit and while actively editing one - so a board change
@@ -209,10 +259,10 @@ export default function ClientFormPage() {
   // submit time via a rejected request. There's no authenticated public socket
   // channel a stranger holding just a link could safely join, so this is a fast poll
   // rather than a push - 5s reads as close to instant without adding new public
-  // attack surface the night before a client demo. Doesn't touch `selected`/
-  // `address`/`paymentMethod` - never stomps whatever the client is mid-typing.
+  // attack surface. Doesn't touch `selected`/`address`/`paymentMethod` - never
+  // stomps whatever the client is mid-typing.
   useEffect(() => {
-    if ((state !== 'catalog' && state !== 'choose') || !token) return;
+    if (state !== 'catalog' || !token) return;
     const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
     const poll = () => {
       fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()).then(info => {
@@ -241,28 +291,56 @@ export default function ClientFormPage() {
   }, [state, token, deviceToken, mergeTarget]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
-  const searchLower = search.toLowerCase().trim();
+  const searchLower = normalizeSearch(search);
   const visibleGroups = useMemo(() => {
     if (!searchLower) return grouped;
     return grouped
       .map(g => ({
         category: g.category,
         products: g.products.filter(p =>
-          p.name.toLowerCase().includes(searchLower) ||
-          p.category.toLowerCase().includes(searchLower)
+          normalizeSearch(p.name).includes(searchLower) ||
+          normalizeSearch(p.category).includes(searchLower)
         ),
       }))
       .filter(g => g.products.length > 0);
   }, [grouped, searchLower]);
 
-  function addProduct(p: Product) {
-    const num = (pendingQty[p.id] ?? '').trim();
-    if (!num) return;
+  // The qty box's effective current text - whatever's actively being typed
+  // (pendingQty), or else the item's own already-committed label if it's already
+  // on the order, or blank for an untouched catalog row. Shared by addProduct AND
+  // commitUnitChange below, so changing the unit dropdown alone (nothing newly
+  // typed in the qty box) still has something to recombine with instead of
+  // silently no-op'ing - that silent no-op was exactly why switching Kilo->Libra
+  // on an already-added item never saved before.
+  function effectiveQty(p: Product): string {
+    const addedItem = selected.find(i => i.productId === p.id);
+    return (pendingQty[p.id] ?? (addedItem ? addedItem.quantity_label : '')).trim();
+  }
+
+  // Commits on EVERY keystroke, not just on blur/Enter - the client form has no
+  // "unsaved draft" concept the person needs to remember to close out; typing
+  // "1" in a fresh row must already be a real, sendable item, even if they never
+  // touch another field afterward (e.g. the very first product they type, when
+  // the unit was already left at its default and never touched either). Clearing
+  // the box back to empty removes the item, symmetric with the Trash button.
+  function commitQtyChange(p: Product, rawValue: string) {
+    setPendingQty(prev => ({ ...prev, [p.id]: rawValue }));
+    const num = rawValue.trim();
+    if (!num) {
+      setSelected(prev => prev.filter(i => i.productId !== p.id));
+      return;
+    }
     const unit = pendingUnit[p.id] ?? DEFAULT_UNIT;
+    const alreadyAdded = selected.some(i => i.productId === p.id);
     // Only append the unit onto an actual NUMBER ("2" -> "2 Kilo") - free-text
     // quantities ("una papa mediana", "la más gruesa que tengan") already say what
     // they mean and a unit tacked onto the end would just read wrong.
-    const qty = /^\d/.test(num) ? `${num} ${unit}` : num;
+    // An item being RE-edited (already added) is the one exception: its qty box
+    // was pre-filled with the FULL existing quantity_label (see effectiveQty
+    // above), not a bare number - re-combining it with the unit dropdown again
+    // would double up ("2 Kilo" + "Kilo" -> "2 Kilo Kilo"). Whatever's typed/shown
+    // there now is already the complete final text.
+    const qty = alreadyAdded ? num : (/^\d/.test(num) ? `${num} ${unit}` : num);
     setSelected(prev => {
       const exists = prev.findIndex(i => i.productId === p.id);
       if (exists >= 0) {
@@ -270,22 +348,48 @@ export default function ClientFormPage() {
       }
       return [...prev, { product_name: p.name, quantity_label: qty, productId: p.id }];
     });
+  }
+
+  // Enter still "confirms" a row (moves focus to search) - the value's already
+  // committed by commitQtyChange on every keystroke, this just clears the local
+  // pending markers and returns to search, same as before.
+  function addProduct(p: Product) {
+    commitQtyChange(p, effectiveQty(p));
     setPendingQty(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setPendingUnit(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setSearch('');
-    setTimeout(() => searchRef.current?.focus(), 50);
+  }
+
+  // Fired the instant the unit dropdown changes (a <select> has no "still typing"
+  // state the way a text input does, so there's no separate blur moment to wait
+  // for). Pulls the leading number out of the CURRENT effective quantity and
+  // recombines it with the new unit ("2 Kilo" + Libra -> "2 Libra") - a free-text
+  // quantity with no leading number (or nothing typed yet) is left alone, same
+  // reasoning as addProduct: the unit dropdown doesn't apply to it.
+  function commitUnitChange(p: Product, newUnit: string) {
+    setPendingUnit(prev => ({ ...prev, [p.id]: newUnit }));
+    const current = effectiveQty(p);
+    const m = current.match(/^\d+(?:[.,]\d+)?/);
+    if (!m) return;
+    const newQty = `${m[0]} ${newUnit}`;
+    setSelected(prev => {
+      const exists = prev.findIndex(i => i.productId === p.id);
+      if (exists < 0) return prev; // not added yet - nothing to recombine into
+      return prev.map((i, idx) => idx === exists ? { ...i, quantity_label: newQty } : i);
+    });
   }
 
   function addManualProduct() {
     const name = manualName.trim();
-    const num = manualQty.trim();
-    if (!name || !num) return;
-    const qty = /^\d/.test(num) ? `${num} ${manualUnit}` : num;
+    // Free text, same as the catalog rows above - no unit dropdown here either
+    // (was confusing where to even type the quantity, buried next to a Kilo/
+    // Libra/... picker that didn't apply to most manually-typed products anyway).
+    const qty = manualQty.trim();
+    if (!name || !qty) return;
     const id = `manual-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
     setSelected(prev => [...prev, { product_name: name, quantity_label: qty, productId: id, isManual: true }]);
     setManualName('');
     setManualQty('');
-    setManualUnit(DEFAULT_UNIT);
     setManualOpen(false);
   }
 
@@ -303,7 +407,8 @@ export default function ClientFormPage() {
 
   // Shared Up/Down/Left/Right handler for a catalog row's qty input or unit
   // select. Never touches pendingQty/pendingUnit - those live per-product-id, so
-  // moving focus away from a row can't ever erase what's already there.
+  // moving focus away from a row can't ever erase what's already there (it commits
+  // it instead, via the qty input's own onBlur below).
   function handleCatalogKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, p: Product, field: 'qty' | 'unit') {
     if (e.key === 'Enter' && field === 'qty') { e.preventDefault(); addProduct(p); return; }
     if (e.key === 'ArrowLeft' && field === 'unit') { e.preventDefault(); qtyInputRefs.current[p.id]?.focus(); return; }
@@ -343,68 +448,55 @@ export default function ClientFormPage() {
     setSelected(prev => prev.filter(i => i.productId !== productId));
   }
 
-  function toggleExpandOrder(orderId: string) {
-    setExpandedOrders(prev => {
-      const next = new Set(prev);
-      next.has(orderId) ? next.delete(orderId) : next.add(orderId);
-      return next;
-    });
-  }
-
-  function chooseTarget(target: string | 'new') {
-    // Same guard backToChoose/clearOrder already have - `selected` can be non-empty
-    // here even though the client never touched the catalog screen THIS visit: the
-    // mount effect restores an unsent draft straight into this state (see the
-    // localStorage restore above), and it sits invisible while the client is on the
-    // 'choose' screen. Without this, picking an order here silently discarded it -
-    // no confirm, no trace, the exact items the client thought they'd added just gone.
-    if (selected.length > 0 && !window.confirm('Tienes productos sin enviar de una visita anterior. ¿Continuar? Se perderán esos cambios.')) return;
-    setLiveWarning('');
-    setMergeTarget(target);
-    if (target !== 'new') {
-      // Pre-fill from the order they're adding to, so the fields show what's already
-      // on file - they only need to type something if they actually want to change it.
-      const order = dayOrders.find(o => o.id === target);
-      if (order) {
-        if (order.address) setAddress(order.address);
-        if (order.paymentMethod) setPaymentMethod(order.paymentMethod);
-        // Hydrate with what's already on the order - otherwise the client has no way
-        // to see/edit/remove existing items, only ever add more on top blind.
-        setSelected(order.items.map(i => ({
-          product_name: i.product_name,
-          quantity_label: i.quantity_label,
-          productId: products.find(p => p.name === i.product_name)?.id ?? `existing-${i.id}`,
-        })));
+  // Deletes the WHOLE order (not one item) and always lands on the "Pedido
+  // eliminado correctamente" screen next - never back on a menu. Two cases:
+  // - `mergeTarget` is a real order id: it already exists on the platform, so
+  //   this actually calls the delete endpoint (soft-deletes to papelera,
+  //   notifies staff) before leaving.
+  // - `mergeTarget` is 'new' (still just a local draft, never submitted): there's
+  //   nothing on the platform to delete - just clear the local draft and leave.
+  async function deleteEntireOrder() {
+    if (!window.confirm('¿Eliminar este pedido por completo? Esta acción no se puede deshacer.')) return;
+    const isRealOrder = !!mergeTarget && mergeTarget !== 'new';
+    if (!isRealOrder) {
+      setSelected([]);
+      setPendingQty({});
+      setAddress('');
+      setPaymentMethod('');
+      setSummaryExpanded(false);
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+      setState('deleted');
+      return;
+    }
+    setDeletingOrder(true);
+    try {
+      const res = await fetch(`${API}/api/v1/public/order/${mergeTarget}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, device_token: deviceToken }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({} as { error?: string }));
+        alert(err.error ?? 'No se pudo eliminar el pedido.');
+        return;
       }
-    } else {
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
       setSelected([]);
       setAddress('');
       setPaymentMethod('');
+      setState('deleted');
+    } catch {
+      alert('No se pudo conectar. Verifica tu internet e intenta de nuevo.');
+    } finally {
+      setDeletingOrder(false);
     }
-    setState('catalog');
-    setTimeout(() => searchRef.current?.focus(), 100);
-  }
-
-  function backToChoose() {
-    if (selected.length > 0 && !window.confirm('¿Volver? Se perderán los cambios que no hayas enviado.')) return;
-    setSelected([]);
-    setPendingQty({});
-    setAddress('');
-    setPaymentMethod('');
-    setSummaryExpanded(false);
-    setMergeTarget(null);
-    setLiveWarning('');
-    setState('choose');
   }
 
   function clearOrder() {
-    if (!window.confirm('¿Borrar todo el pedido? Se perderán los productos agregados.')) return;
+    if (!window.confirm('¿Borrar todos los productos agregados? La dirección y el método de pago se mantienen.')) return;
     setSelected([]);
     setPendingQty({});
-    setAddress('');
-    setPaymentMethod('');
     setSummaryExpanded(false);
-    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
   }
 
   async function handleSubmit() {
@@ -442,9 +534,7 @@ export default function ClientFormPage() {
         // Every branch below prefers the server's own explanatory `error` text when
         // present - it's already specific (e.g. "Tu pedido #12 ya está en camino y
         // no se puede modificar") - only falling back to a made-up message when the
-        // server didn't send one. Previously this always got overwritten with a
-        // generic "Hubo un problema", discarding a message that already answered
-        // "why" for the client.
+        // server didn't send one.
         if (res.status === 429) {
           setSubmitError(
             err.code === 'FORM_LIMIT_REACHED'
@@ -525,117 +615,38 @@ export default function ClientFormPage() {
           Tu pedido fue enviado a <strong>{orgName}</strong>.<br />
           En breve te atenderemos por WhatsApp.
         </div>
-        <button onClick={goToMenu} style={btnPrimary}>Ver mis pedidos</button>
+        <button onClick={continueToForm} style={btnPrimary}>Ver mi pedido</button>
       </div>
     </div>
   );
 
-  if (state === 'choose') {
-    const PAYMENT_LABEL: Record<string, string> = { transfer: 'Transferencia', cash: 'En tienda', cod: 'Cobro en casa' };
-    return (
-      <div style={page}>
-        <div style={header}>
-          <ShoppingCart size={20} color="#fff" />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 800, fontSize: 15 }}>{orgName}</div>
-            {clientName && <div style={{ fontSize: 12, opacity: 0.85 }}>Hola, {clientName}</div>}
-          </div>
-        </div>
-        <div style={safetyNotice}>
-          <Lock size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>ESTE LINK ES SOLO PARA HACER TU PEDIDO Y HACER SEGUIMIENTO DE TUS PEDIDOS. NUNCA TE PEDIREMOS DINERO NI DATOS BANCARIOS NI INFORMACIÓN CONFIDENCIAL.</span>
-        </div>
-        <div style={{ padding: '20px 16px' }}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 12px rgba(0,0,0,.06)', marginBottom: 14 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: '#111', marginBottom: 4 }}>
-              Tus pedidos de hoy
-            </div>
-            <div style={{ fontSize: 14, color: '#666' }}>
-              Elige uno para modificarlo, o crea uno nuevo aparte.
-            </div>
-          </div>
-
-          {dayOrders.map(o => {
-            if (!o.editable) {
-              const isExpanded = expandedOrders.has(o.id);
-              return (
-                <div key={o.id} onClick={() => toggleExpandOrder(o.id)}
-                  style={{
-                    width: '100%', textAlign: 'left', background: '#f7f7f7', border: '2px solid #e5e5e5',
-                    borderRadius: 14, padding: '14px 16px', marginBottom: 10, cursor: 'pointer',
-                  }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: '#555' }}>
-                      Pedido #{o.num} · {o.items.length} producto{o.items.length !== 1 ? 's' : ''}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: '#888', background: '#eee', padding: '4px 10px', borderRadius: 20 }}>
-                      <Lock size={11} /> {STATUS_LABEL_CLIENT[o.status] ?? o.status}
-                    </div>
-                  </div>
-                  {isExpanded && (
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #ddd' }}>
-                      {o.items.map(i => (
-                        <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#666', padding: '3px 0', gap: 8 }}>
-                          <span>{i.product_name}{i.quantity_label ? ` · ${i.quantity_label}` : ''}</span>
-                          <span style={{ flexShrink: 0, fontWeight: 700 }}>${i.price.toLocaleString('es-CO')}</span>
-                        </div>
-                      ))}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#333', padding: '7px 0 0', marginTop: 4, borderTop: '1px solid #ddd', fontWeight: 800 }}>
-                        <span>Total</span>
-                        <span>${o.items.reduce((s, i) => s + i.price, 0).toLocaleString('es-CO')}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            return (
-              <button key={o.id} onClick={() => chooseTarget(o.id)}
-                style={{
-                  width: '100%', textAlign: 'left', background: '#fff', border: '2px solid #ddd',
-                  borderRadius: 14, padding: '14px 16px', marginBottom: 10, cursor: 'pointer',
-                }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: GREEN }}>
-                    Pedido #{o.num} · {o.items.length} producto{o.items.length !== 1 ? 's' : ''}
-                  </div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: GREEN, background: '#f0fdf4', padding: '3px 9px', borderRadius: 20 }}>
-                    {STATUS_LABEL_CLIENT[o.status] ?? o.status}
-                  </div>
-                </div>
-                {o.address && <div style={{ fontSize: 13, color: '#555' }}>{o.address}</div>}
-                {o.paymentMethod && <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{PAYMENT_LABEL[o.paymentMethod] ?? o.paymentMethod}</div>}
-              </button>
-            );
-          })}
-
-          <button onClick={() => chooseTarget('new')}
-            style={{
-              width: '100%', textAlign: 'center', background: '#f0f4f8', border: '2px dashed #ccc',
-              borderRadius: 14, padding: '14px 16px', cursor: 'pointer', fontWeight: 700, color: '#444', fontSize: 14,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            }}>
-            <Plus size={15} /> Crear un pedido nuevo, aparte
-          </button>
-        </div>
+  if (state === 'deleted') return (
+    <div style={page}>
+      <div style={header}>
+        <ShoppingCart size={22} color="#fff" />
+        <span style={{ fontWeight: 800, fontSize: 18 }}>{orgName}</span>
       </div>
-    );
-  }
+      <div style={{ background: '#fff', borderRadius: 18, margin: '24px 16px', padding: '36px 20px', textAlign: 'center', boxShadow: '0 2px 12px rgba(0,0,0,.1)' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+          <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#FEF2F2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Trash2 size={36} color="#DC2626" strokeWidth={1.5} />
+          </div>
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 800, color: '#DC2626', marginBottom: 10 }}>Pedido eliminado correctamente</div>
+        <div style={{ fontSize: 15, color: '#555', lineHeight: 1.6, marginBottom: 20 }}>
+          Si quieres hacer un pedido nuevo, puedes seguir usando este mismo link.
+        </div>
+        <button onClick={continueToForm} style={btnPrimary}>Hacer un pedido</button>
+      </div>
+    </div>
+  );
 
   const selectedCount = selected.length;
+  const editingOrder = mergeTarget && mergeTarget !== 'new' ? dayOrders.find(o => o.id === mergeTarget) : undefined;
 
   return (
     <div style={page}>
-      {/* Header - back button always present so the client can return to the menu
-          (list of today's orders / "crear pedido nuevo") from the catalog, even on
-          their very first order of the day when there's technically nothing to go
-          back TO yet - backToChoose() still works fine (empty "Tus pedidos de hoy"
-          list, "Crear un pedido nuevo" button). */}
       <div style={header}>
-        <button onClick={backToChoose} title="Volver al menú anterior" aria-label="Volver"
-          style={{ background: 'rgba(255,255,255,0.18)', border: 'none', borderRadius: 8, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0 }}>
-          <ArrowLeft size={17} />
-        </button>
         <ShoppingCart size={20} color="#fff" />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 800, fontSize: 15 }}>{orgName}</div>
@@ -653,97 +664,104 @@ export default function ClientFormPage() {
         <span>ESTE LINK ES SOLO PARA HACER TU PEDIDO Y HACER SEGUIMIENTO DE TUS PEDIDOS. NUNCA TE PEDIREMOS DINERO NI DATOS BANCARIOS NI INFORMACIÓN CONFIDENCIAL.</span>
       </div>
 
+      {editingOrder && (
+        <div style={{ background: '#F0FDF4', borderBottom: '2px solid #BBF7D0', color: GREEN, padding: '8px 16px', fontSize: 12.5, fontWeight: 700 }}>
+          Editando tu pedido #{editingOrder.num}
+        </div>
+      )}
+
       {liveWarning && (
         <div style={{ background: '#FEF2F2', border: '2px solid #FCA5A5', color: '#DC2626', margin: '10px 16px 0', padding: '10px 14px', borderRadius: 12, fontSize: 13, fontWeight: 700 }}>
           {liveWarning}
         </div>
       )}
 
-      {/* Summary panel - always visible once something's added, collapses past 2 items */}
-      {selectedCount > 0 && (
-        <div ref={summaryRef} style={{ background: '#fff', margin: '0 0 2px', padding: '12px 16px', borderBottom: '2px solid #e0e0e0' }}>
-          <div style={{ fontWeight: 800, fontSize: 13, color: GREEN, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.5px' }}>
-            Productos {mergeTarget !== 'new' ? 'del pedido' : 'agregados'} ({selectedCount})
-          </div>
-          {(summaryExpanded ? selected : selected.slice(0, 2)).map((s, idx) => (
-            <div key={s.productId}
-              ref={el => { selectedRowRefs.current[s.productId] = el; }}
-              tabIndex={0}
-              onKeyDown={e => handleSelectedRowKeyDown(e, s, idx)}
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #f0f0f0', outline: 'none' }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {s.product_name}
-                  {s.isManual && (
-                    <span style={{ fontSize: 10, fontWeight: 800, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 20, padding: '1px 7px' }}>
-                      No catalogado
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: 12, color: '#666' }}>{s.quantity_label}</div>
-              </div>
-              <button onClick={() => removeSelected(s.productId)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: 4 }}>
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-            {selectedCount > 2 ? (
-              <button onClick={() => setSummaryExpanded(e => !e)}
-                style={{ fontSize: 13, color: GREEN, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
-                {summaryExpanded
-                  ? <><ChevronUp size={14} /> Ver menos</>
-                  : <><ChevronDown size={14} /> Ver los {selectedCount}</>}
-              </button>
-            ) : <span />}
-            <button onClick={clearOrder}
-              style={{ fontSize: 13, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <Trash2 size={14} /> Borrar todo
+      {/* Delivery details - ALWAYS visible, even before any product is added
+          (previously hidden inside the same panel as the item summary, so a client
+          with zero items yet couldn't even type an address). Only the send button
+          stays gated on having at least one product. */}
+      <div ref={summaryRef} style={{ background: '#fff', margin: '0 0 2px', padding: '12px 16px', borderBottom: '2px solid #e0e0e0' }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#444', marginBottom: 5 }}>
+          Dirección de entrega <span style={{ fontWeight: 700, color: '#DC2626' }}>*</span>
+        </label>
+        <input
+          type="text"
+          placeholder="Calle, número, barrio..."
+          value={address}
+          onChange={e => { setAddress(e.target.value); if (submitError) setSubmitError(''); }}
+          style={{ width: '100%', fontSize: 14, padding: '10px 12px', border: `2px solid ${!address.trim() && submitError ? '#DC2626' : '#ddd'}`, borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff', marginBottom: 10 }}
+        />
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#444', marginBottom: 5 }}>
+          Método de pago <span style={{ fontWeight: 400, color: '#999' }}>(opcional)</span>
+        </label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {[
+            { value: 'transfer', label: 'Transferencia' },
+            { value: 'cash', label: 'En tienda' },
+            { value: 'cod', label: 'Cobro en casa' },
+          ].map(opt => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setPaymentMethod(opt.value)}
+              style={{
+                flex: 1, padding: '9px 6px', fontSize: 12, fontWeight: 700,
+                borderRadius: 10, cursor: 'pointer',
+                border: `2px solid ${paymentMethod === opt.value ? GREEN : '#ddd'}`,
+                background: paymentMethod === opt.value ? '#f0fdf4' : '#fff',
+                color: paymentMethod === opt.value ? GREEN : '#444',
+              }}>
+              {opt.label}
             </button>
-          </div>
+          ))}
+        </div>
 
-          {/* Delivery details - collected here so the order comes in ready to
-              dispatch instead of needing staff to fill these in before anything
-              can happen with it. Still editable by staff afterward if needed. */}
-          <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 10, paddingTop: 10 }}>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#444', marginBottom: 5 }}>
-              Dirección de entrega <span style={{ fontWeight: 700, color: '#DC2626' }}>*</span>
-            </label>
-            <input
-              type="text"
-              placeholder="Calle, número, barrio..."
-              value={address}
-              onChange={e => { setAddress(e.target.value); if (submitError) setSubmitError(''); }}
-              style={{ width: '100%', fontSize: 14, padding: '10px 12px', border: `2px solid ${!address.trim() && submitError ? '#DC2626' : '#ddd'}`, borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff', marginBottom: 10 }}
-            />
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#444', marginBottom: 5 }}>
-              Método de pago <span style={{ fontWeight: 400, color: '#999' }}>(opcional)</span>
-            </label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[
-                { value: 'transfer', label: 'Transferencia' },
-                { value: 'cash', label: 'En tienda' },
-                { value: 'cod', label: 'Cobro en casa' },
-              ].map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setPaymentMethod(opt.value)}
-                  style={{
-                    flex: 1, padding: '9px 6px', fontSize: 12, fontWeight: 700,
-                    borderRadius: 10, cursor: 'pointer',
-                    border: `2px solid ${paymentMethod === opt.value ? GREEN : '#ddd'}`,
-                    background: paymentMethod === opt.value ? '#f0fdf4' : '#fff',
-                    color: paymentMethod === opt.value ? GREEN : '#444',
-                  }}>
-                  {opt.label}
+        {/* Item summary - only once there's something to show, collapses past 2 */}
+        {selectedCount > 0 && (
+          <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 12, paddingTop: 10 }}>
+            <div style={{ fontWeight: 800, fontSize: 13, color: GREEN, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.5px' }}>
+              Productos {mergeTarget !== 'new' ? 'del pedido' : 'agregados'} ({selectedCount})
+            </div>
+            {(summaryExpanded ? selected : selected.slice(0, 2)).map((s, idx) => (
+              <div key={s.productId}
+                ref={el => { selectedRowRefs.current[s.productId] = el; }}
+                tabIndex={0}
+                onKeyDown={e => handleSelectedRowKeyDown(e, s, idx)}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #f0f0f0', outline: 'none' }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {s.product_name}
+                    {s.isManual && (
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 20, padding: '1px 7px' }}>
+                        No catalogado
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666' }}>{s.quantity_label}</div>
+                </div>
+                <button onClick={() => removeSelected(s.productId)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', padding: 4 }}>
+                  <Trash2 size={15} />
                 </button>
-              ))}
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              {selectedCount > 2 ? (
+                <button onClick={() => setSummaryExpanded(e => !e)}
+                  style={{ fontSize: 13, color: GREEN, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {summaryExpanded
+                    ? <><ChevronUp size={14} /> Ver menos</>
+                    : <><ChevronDown size={14} /> Ver los {selectedCount}</>}
+                </button>
+              ) : <span />}
+              <button onClick={clearOrder}
+                style={{ fontSize: 13, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Trash2 size={14} /> Quitar todos los productos
+              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Search bar */}
       <div style={{ position: 'sticky', top: 52, zIndex: 10, background: '#f0f4f8', padding: '10px 16px' }}>
@@ -773,9 +791,8 @@ export default function ClientFormPage() {
             style={{
               width: '100%', marginTop: 8, background: 'none', border: 'none', cursor: 'pointer',
               color: GREEN, fontSize: 13, fontWeight: 700, textAlign: 'center', padding: '4px 0',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
             }}>
-            <Plus size={13} /> ¿No encuentras tu producto? Agrégalo aquí
+            ¿No encuentras tu producto? Agrégalo aquí
           </button>
         ) : (
           <div style={{ background: '#fff', border: '2px solid #ddd', borderRadius: 12, padding: 10, marginTop: 8 }}>
@@ -796,13 +813,6 @@ export default function ClientFormPage() {
                 onKeyDown={e => { if (e.key === 'Enter') addManualProduct(); }}
                 style={{ flex: 1, minWidth: 0, fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
               />
-              <select
-                value={manualUnit}
-                onChange={e => setManualUnit(e.target.value)}
-                style={{ fontSize: 14, padding: '9px 6px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
-              >
-                {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
               <button onClick={addManualProduct} disabled={!manualName.trim() || !manualQty.trim()}
                 style={{
                   padding: '9px 14px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 13,
@@ -811,7 +821,7 @@ export default function ClientFormPage() {
                 }}>
                 Agregar
               </button>
-              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); setManualUnit(DEFAULT_UNIT); }}
+              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); }}
                 style={{ padding: '9px 12px', borderRadius: 10, border: '2px solid #ddd', background: '#fff', color: '#666', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 Cancelar
               </button>
@@ -838,9 +848,14 @@ export default function ClientFormPage() {
             </div>
 
             {group.products.map(p => {
-              const qty = pendingQty[p.id] ?? '';
               const isAdded = selected.some(i => i.productId === p.id);
               const addedItem = selected.find(i => i.productId === p.id);
+              // Falls back to the item's OWN current text, not blank - previously
+              // this box was always empty for an already-added item (only the
+              // separate green "Agregado: X" line showed the value), so changing
+              // even one character meant retyping the whole quantity from scratch
+              // instead of just editing what's already there.
+              const qty = pendingQty[p.id] ?? (isAdded && addedItem ? addedItem.quantity_label : '');
               return (
                 <div key={p.id} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
@@ -853,9 +868,6 @@ export default function ClientFormPage() {
                       {isAdded && <Check size={13} color={GREEN} />}
                     </div>
                     {p.unit_type && <div style={{ fontSize: 12, color: '#888', marginTop: 1 }}>{p.unit_type}</div>}
-                    {isAdded && addedItem && (
-                      <div style={{ fontSize: 11, color: GREEN, fontWeight: 600, marginTop: 2 }}>Agregado: {addedItem.quantity_label}</div>
-                    )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                     <input
@@ -863,7 +875,10 @@ export default function ClientFormPage() {
                       type="text"
                       placeholder="Cant."
                       value={qty}
-                      onChange={e => setPendingQty(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      // Commits on every keystroke, not just on blur - a single
+                      // "1" typed and left at the default unit must already be a
+                      // real, sendable item (see commitQtyChange's own comment).
+                      onChange={e => commitQtyChange(p, e.target.value)}
                       onKeyDown={e => handleCatalogKeyDown(e, p, 'qty')}
                       style={{
                         width: 92, fontSize: 15, padding: '9px 6px',
@@ -875,7 +890,7 @@ export default function ClientFormPage() {
                     <select
                       ref={el => { unitSelectRefs.current[p.id] = el; }}
                       value={pendingUnit[p.id] ?? DEFAULT_UNIT}
-                      onChange={e => setPendingUnit(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      onChange={e => commitUnitChange(p, e.target.value)}
                       onKeyDown={e => handleCatalogKeyDown(e, p, 'unit')}
                       style={{
                         fontSize: 13, padding: '9px 4px',
@@ -886,20 +901,6 @@ export default function ClientFormPage() {
                     >
                       {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
-                    <button
-                      onClick={() => addProduct(p)}
-                      disabled={!qty.trim()}
-                      style={{
-                        width: 38, height: 38, borderRadius: '50%', border: 'none',
-                        background: qty.trim() ? GREEN : '#ddd',
-                        color: '#fff', cursor: qty.trim() ? 'pointer' : 'default',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0, transition: 'background .12s',
-                      }}
-                      title="Agregar (o presiona Enter)"
-                    >
-                      <Plus size={18} strokeWidth={3} />
-                    </button>
                     {isAdded && (
                       <button
                         onClick={() => removeSelected(p.id)}
@@ -922,7 +923,7 @@ export default function ClientFormPage() {
         ))}
       </div>
 
-      {/* Bottom bar - stays visible even with zero items (client deleted everything
+      {/* Bottom bar - stays visible even with zero items (client removed everything
           from an order they'd already started) instead of vanishing along with the
           last item, which left them stuck with no visible way to submit or even see
           why. Submit just shows disabled + the same red reason instead. */}
@@ -952,23 +953,21 @@ export default function ClientFormPage() {
               <Check size={14} color={GREEN} /> {selectedCount}
             </button>
           )}
-          {selectedCount > 0 && (
-            <button
-              onClick={clearOrder}
-              disabled={submitting}
-              title="Borrar pedido"
-              aria-label="Borrar pedido"
-              style={{
-                flex: '0 0 auto', padding: '14px 14px',
-                background: '#fff', color: '#DC2626', border: '2px solid #F5C6C6',
-                borderRadius: 12, cursor: submitting ? 'default' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                fontWeight: 700, fontSize: 13,
-                opacity: submitting ? 0.5 : 1,
-              }}>
-              <Trash2 size={16} /> Borrar
-            </button>
-          )}
+          <button
+            onClick={deleteEntireOrder}
+            disabled={submitting || deletingOrder}
+            title="Eliminar este pedido por completo"
+            aria-label="Eliminar pedido"
+            style={{
+              flex: '0 0 auto', padding: '14px 14px',
+              background: '#fff', color: '#DC2626', border: '2px solid #F5C6C6',
+              borderRadius: 12, cursor: (submitting || deletingOrder) ? 'default' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              fontWeight: 700, fontSize: 13,
+              opacity: (submitting || deletingOrder) ? 0.5 : 1,
+            }}>
+            <Trash2 size={16} /> Eliminar pedido
+          </button>
           <button
             onClick={handleSubmit}
             disabled={submitting || !!liveWarning || selectedCount === 0}

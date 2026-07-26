@@ -8,20 +8,38 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
     const query = z.object({ fecha: z.string().optional() }).parse(req.query);
     const fecha = query.fecha ? new Date(query.fecha) : new Date();
 
-    const [orders, papeleraOrders, history, tickets, dailyClose] = await Promise.all([
+    const [orders, papeleraOrders, creditoOrders, history, tickets, dailyClose] = await Promise.all([
+      // client_deleted excluded - "se hace de cuenta que no existe" for every
+      // stat/total on this page (it's still fully visible, red-flagged, on the
+      // live board itself - just not counted here, same as papelera).
       fastify.prisma.order.findMany({
-        where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' } },
+        where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' }, client_deleted: false },
         include: { items: true, employee: { select: { id: true, name: true } } },
       }),
+      // Papelera tab now also surfaces client_deleted orders (status untouched by
+      // that flow, see public.ts/schema.prisma) so staff can find/restore them
+      // from "Informe del día" too, not only from the live board.
       fastify.prisma.order.findMany({
-        where: { org_id: req.user.orgId, fecha, status: 'papelera' },
+        where: { org_id: req.user.orgId, fecha, OR: [{ status: 'papelera' }, { client_deleted: true }] },
         include: { items: true },
+      }),
+      // NOT scoped to `fecha` like everything else here - a crédito order stays
+      // relevant (unpaid, on this list) for as long as it takes to actually
+      // collect, which routinely spans well past the day it was created. Not
+      // filtered by `paid` either anymore - the Créditos tab now has its own
+      // Pagados/No pagados sub-tabs, so it needs BOTH to split between them
+      // (previously paying one just made it vanish from here entirely, with no
+      // way to look it back up).
+      fastify.prisma.order.findMany({
+        where: { org_id: req.user.orgId, payment_method: 'credito' },
+        include: { items: true, employee: { select: { id: true, name: true } } },
+        orderBy: { fecha: 'desc' },
       }),
       fastify.prisma.orderHistory.findMany({
         where: { org_id: req.user.orgId, order: { fecha } },
         include: {
           actor: { select: { id: true, name: true } },
-          order: { select: { num: true, customer_name: true } },
+          order: { select: { num: true, customer_name: true, client_contact_name: true } },
         },
         orderBy: { created_at: 'desc' },
         take: 300,
@@ -49,7 +67,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
           // wasn't closed - this is what "chats completados"/"con pedido activo"
           // meant to reflect right now, today, not the ticket's entire lifetime.
           orders: {
-            where: { status: { not: 'papelera' }, fecha },
+            where: { status: { not: 'papelera' }, fecha, client_deleted: false },
             select: { status: true, paid: true },
           },
         },
@@ -107,6 +125,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         },
         orders,
         papeleraOrders,
+        creditoOrders,
         history,
         // `decisions` (per-order action taken at cierre time) travels along too - lets
         // the frontend rebuild the exact same CSV report on demand, any time after the

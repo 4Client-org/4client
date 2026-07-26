@@ -6,6 +6,7 @@ import {
   MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
+import { normalizeSearch } from '../../lib/normalize';
 import { downloadCierreCSV } from '../../lib/csv';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { api } from '../../lib/api';
@@ -29,17 +30,62 @@ interface Props {
   setFecha: (d: string) => void;
   dashboard: any;
   papeleraOrders: any[];
+  creditoOrders: any[];
   history: any[];
   orders: any[];
   onCierreCaja: () => void;
   onOpenOrder: (orderId: string) => void;
 }
 
-export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, history, onCierreCaja, onOpenOrder }: Props) {
-  const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'cambios'>('activos');
+export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, creditoOrders, history, onCierreCaja, onOpenOrder }: Props) {
+  const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'credito' | 'cambios'>('activos');
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showBlockAllConfirm, setShowBlockAllConfirm] = useState(false);
+  // Not scoped to `fecha` like the rest of this page - crédito orders can be from
+  // any day (see dashboard.ts's own creditoOrders query), so this searches by
+  // name, address, date, monto, artículos - whatever matches, across the whole
+  // list at once. Also split Pagados/No pagados below (dashboard.ts now sends
+  // both, not just unpaid ones).
+  const [creditoSearch, setCreditoSearch] = useState('');
+  const [creditoSubTab, setCreditoSubTab] = useState<'no_pagados' | 'pagados'>('no_pagados');
+  const creditoNoPagados = useMemo(() => creditoOrders.filter((o: any) => !o.paid), [creditoOrders]);
+  const creditoPagados = useMemo(() => creditoOrders.filter((o: any) => o.paid), [creditoOrders]);
+  const filteredCreditoOrders = useMemo(() => {
+    const list = creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados;
+    const q = normalizeSearch(creditoSearch);
+    if (!q) return list;
+    return list.filter((o: any) => {
+      // Several date formats checked, not just ISO - a search box is where people
+      // type "25/07", "25-07-2026", or "25 jul" just as often as "2026-07-25", and
+      // only matching the raw ISO string silently failed every one of those.
+      let fechaMatch = false;
+      if (o.fecha) {
+        const d = new Date(o.fecha);
+        const iso = d.toISOString().split('T')[0]; // 2026-07-25
+        const [y, m, day] = iso.split('-');
+        const ddmmyyyy = `${day}/${m}/${y}`;
+        const ddmmyyyyDash = `${day}-${m}-${y}`;
+        const localized = normalizeSearch(d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Bogota' }));
+        fechaMatch = iso.includes(creditoSearch) || ddmmyyyy.includes(creditoSearch) || ddmmyyyyDash.includes(creditoSearch) || localized.includes(q);
+      }
+      const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+      const itemsText = (o.items ?? []).map((i: any) => `${i.quantity_label ?? ''} ${i.product_name ?? ''}`).join(' ');
+      return normalizeSearch(o.client_contact_name ?? o.customer_name ?? '').includes(q)
+        || normalizeSearch(o.address ?? '').includes(q)
+        || normalizeSearch(o.employee?.name ?? '').includes(q)
+        || normalizeSearch(itemsText).includes(q)
+        || (o.num ?? '').includes(creditoSearch)
+        || fechaMatch
+        || String(total).includes(creditoSearch);
+    });
+  }, [creditoNoPagados, creditoPagados, creditoSubTab, creditoSearch]);
+
+  const restoreMut = useMutation({
+    mutationFn: (orderId: string) => api.patch(`/orders/${orderId}/restore`, {}),
+    onSuccess: () => toast('Pedido restaurado'),
+    onError: (e: any) => toast(e.message ?? 'No se pudo restaurar el pedido', true),
+  });
 
   // Emergency kill switch - e.g. the store closes early one day and every form link
   // sent out today needs to die right now, not just the one someone remembers to
@@ -99,7 +145,11 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
       seen.get(key)!.push(o);
     }
     for (const [key, orders] of seen.entries()) {
-      const label = orders[0].customer_name;
+      // client_contact_name (the WhatsApp contact's name, snapshotted once at
+      // creation, never editable afterward) over customer_name (staff can
+      // freely retype it per-order) - Informe del día must show the real
+      // contact, not whatever a specific order's name field was last edited to.
+      const label = orders[0].client_contact_name ?? orders[0].customer_name;
       groups.push({ key, label, orders });
     }
     return groups;
@@ -252,6 +302,10 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           <Trash2 size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
           Papelera ({papeleraOrders.length})
         </button>
+        <button className={`atab${resumenTab === 'credito' ? ' on' : ''}`} onClick={() => setResumenTab('credito')}>
+          <Wallet size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
+          Crédito ({creditoNoPagados.length})
+        </button>
         <button className={`atab${resumenTab === 'cambios' ? ' on' : ''}`} onClick={() => setResumenTab('cambios')}>
           <History size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
           Cambios ({history.length})
@@ -375,22 +429,98 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           )}
           {papeleraOrders.map((o: any) => {
             const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+            const clientDeleted = !!o.client_deleted;
             return (
               <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
                 title="Ver detalle - quién lo envió a la papelera y cuándo"
-                style={{ cursor: 'pointer' }}>
+                style={{ cursor: 'pointer', ...(clientDeleted ? { border: '1.5px solid var(--r)' } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.customer_name}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Trash2 size={11} /> {new Date(o.updated_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                   </span>
                 </div>
+                {clientDeleted && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--rc)', color: 'var(--r)', borderRadius: 8, padding: '5px 9px', marginBottom: 6, fontSize: 12, fontWeight: 800 }}>
+                    <span>⚠ Eliminado por el cliente</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); restoreMut.mutate(o.id); }}
+                      disabled={restoreMut.isPending}
+                      style={{ background: 'var(--v)', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 9px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                      Restaurar
+                    </button>
+                  </div>
+                )}
                 <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>{o.address}</div>
                 <div style={{ fontSize: 13, color: 'var(--gt)' }}>
                   {o.items?.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
                 </div>
                 <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700 }}>
                   {fmtCOP(total)} · {PAYMENT_LABEL[o.payment_method] ?? o.payment_method}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {resumenTab === 'credito' && (
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <button className={`atab${creditoSubTab === 'no_pagados' ? ' on' : ''}`} onClick={() => setCreditoSubTab('no_pagados')}>
+              No pagados ({creditoNoPagados.length})
+            </button>
+            <button className={`atab${creditoSubTab === 'pagados' ? ' on' : ''}`} onClick={() => setCreditoSubTab('pagados')}>
+              Pagados ({creditoPagados.length})
+            </button>
+          </div>
+          <div className="sbx" style={{ margin: '0 0 12px', maxWidth: 320 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gt)' }}>
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input type="text" placeholder="Buscar por nombre, dirección, domiciliario, fecha, monto o artículo..."
+              value={creditoSearch} onChange={(e) => setCreditoSearch(e.target.value)} />
+          </div>
+          {(creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados).length === 0 && (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
+              {creditoSubTab === 'pagados' ? 'No hay créditos pagados' : 'No hay pedidos a crédito pendientes de pago'}
+            </div>
+          )}
+          {(creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados).length > 0 && filteredCreditoOrders.length === 0 && (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
+              Sin resultados para "{creditoSearch}"
+            </div>
+          )}
+          {filteredCreditoOrders.map((o: any) => {
+            const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+            return (
+              <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
+                title="Ver pedido - marcar el crédito como pagado se hace ahí"
+                style={{ cursor: 'pointer' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  {/* client_contact_name (the WhatsApp contact's name, snapshotted
+                      at creation, never editable afterward) - not o.customer_name,
+                      which staff can freely retype per-order and which a crédito
+                      debt record must never silently drift away from. */}
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gt)' }}>
+                    {o.fecha ? new Date(o.fecha).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' }) : ''}
+                  </span>
+                </div>
+                {o.client_contact_name && o.customer_name && o.client_contact_name !== o.customer_name && (
+                  <div style={{ fontSize: 11, color: 'var(--gt)', marginBottom: 3, fontStyle: 'italic' }}>
+                    Pedido a nombre de: {o.customer_name}
+                  </div>
+                )}
+                <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>{o.address}</div>
+                {o.employee?.name && (
+                  <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>Domiciliario: {o.employee.name}</div>
+                )}
+                <div style={{ fontSize: 13, color: 'var(--gt)' }}>
+                  {o.items?.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
+                </div>
+                <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: o.paid ? 'var(--v)' : '#DC2626' }}>
+                  {fmtCOP(total)} · {o.paid ? 'Pagado' : 'Pendiente de pago'}
                 </div>
               </div>
             );

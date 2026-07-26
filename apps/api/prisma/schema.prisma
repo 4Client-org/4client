@@ -226,6 +226,16 @@ model Order {
   ticket_id       String?   @db.Uuid
   num             String    @db.VarChar(10)
   customer_name   String    @db.VarChar(200)
+  // Snapshot of the contact's name (ticket.customer_name, i.e. the WhatsApp
+  // profile name) taken ONCE at order creation and never touched by any later
+  // update (updateOrderSchema deliberately has no field for it) - unlike
+  // `customer_name` above, which staff can freely retype per-order (e.g. to fix a
+  // typo, or write a delivery-recipient's name instead of the account holder's).
+  // Crédito specifically needs a name that can't drift out from under the debt
+  // record no matter what gets edited on the order later - this is that anchor.
+  // Null for orders with no ticket (channel 'call') or created before this field
+  // existed - callers fall back to `customer_name` in that case.
+  client_contact_name String? @db.VarChar(200)
   customer_phone  String?   @db.VarChar(20)
   address         String
   channel         String    @default("whatsapp") @db.VarChar(20)
@@ -256,6 +266,15 @@ model Order {
   // individual item's own `added_by_client` flag below, which never clears - this is
   // a transient "needs attention" signal, that's permanent provenance.
   client_modified Boolean   @default(false)
+  // The client deleted this order themselves via their form link (public.ts's
+  // POST /order/:orderId/delete) - deliberately NOT the same as status:'papelera'
+  // (that's still staff's own separate trash action, untouched by this): `status`
+  // is left exactly as it was, so the order keeps rendering in its normal board
+  // column, just tinted red with a warning - staff decides Restaurar (clears this
+  // flag) or "Mantener eliminado" (leaves it flagged, order stays frozen).
+  // Excluded from cierre/dashboard totals wherever it matters (treated as if it
+  // doesn't exist for accounting purposes) but still visible on the live board.
+  client_deleted  Boolean   @default(false)
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 

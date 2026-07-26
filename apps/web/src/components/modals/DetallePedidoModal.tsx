@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -109,6 +109,100 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const productSearchRef = useRef<ProductSearchHandle>(null);
+  // Whole-form keyboard nav (Up/Down between field rows, Left/Right within a row)
+  // - nombre -> dirección -> método de pago/domiciliario -> catalog search ->
+  // productos, same direction the eye already reads the form in. Enter opening a
+  // focused <select> and Esc closing it need no extra code at all - that's
+  // already the browser's own default behavior for a native select; the only
+  // thing missing was moving FOCUS between fields with the arrow keys, which
+  // native inputs/selects don't do across different elements on their own.
+  const nombreRef = useRef<HTMLInputElement>(null);
+  const direccionRef = useRef<HTMLInputElement>(null);
+  const pagoRef = useRef<HTMLSelectElement>(null);
+  const empleadoRef = useRef<HTMLSelectElement>(null);
+  function handleFormArrowKeys(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, field: 'nombre' | 'direccion' | 'pago' | 'empleado') {
+    // preventDefault before moving focus - without it, ArrowUp/Down on a focused
+    // but CLOSED <select> is the browser's own shortcut for "change the selected
+    // option", which would fight with using those same keys to move between
+    // fields instead.
+    if (field === 'nombre' && e.key === 'ArrowDown') { e.preventDefault(); direccionRef.current?.focus(); return; }
+    if (field === 'direccion') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); nombreRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+    if (field === 'pago') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); empleadoRef.current?.focus(); return; }
+    }
+    if (field === 'empleado') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+  }
+  // Continues the whole-form nav graph PAST the catalog: new-observación
+  // textarea -> historial toggle (if present) -> action buttons row
+  // (Papelera/Guardar/Copiar/PDF/Enviar factura), Right-chained. Fixed slots
+  // (not a plain push array) so a button that isn't currently rendered (e.g.
+  // "Marcar crédito pagado" only shows for admin/dev on a crédito order) just
+  // leaves a hole Left/Right skip over, instead of shifting every other
+  // button's index around across renders.
+  const obsTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const historyToggleRef = useRef<HTMLDivElement>(null);
+  const actionBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  function actionBtnRef(idx: number) {
+    return (el: HTMLButtonElement | null) => { actionBtnRefs.current[idx] = el; };
+  }
+  function focusFirstActionBtn() {
+    const first = actionBtnRefs.current.find((el) => !!el);
+    first?.focus();
+  }
+  // Textarea Up/Down normally moves the cursor between lines - only intercepted
+  // at the very top/bottom line (no '\n' before/after the cursor), so multi-line
+  // notes still work normally for internal cursor movement.
+  const saveObsBtnRef = useRef<HTMLButtonElement>(null);
+  function handleObsArrowKeys(e: KeyboardEvent<HTMLTextAreaElement>) {
+    const el = e.currentTarget;
+    if (e.key === 'ArrowUp' && el.value.slice(0, el.selectionStart ?? 0).indexOf('\n') === -1) {
+      e.preventDefault();
+      productSearchRef.current?.focusManualLast();
+      return;
+    }
+    if (e.key === 'ArrowDown' && el.value.slice(el.selectionEnd ?? el.value.length).indexOf('\n') === -1) {
+      e.preventDefault();
+      saveObsBtnRef.current?.focus();
+    }
+  }
+  function handleSaveObsBtnKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === 'ArrowUp') { e.preventDefault(); obsTextareaRef.current?.focus(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (canManage && order?.history && order.history.length > 0) { historyToggleRef.current?.focus(); return; }
+      focusFirstActionBtn();
+    }
+  }
+  function handleHistoryToggleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); setShowHist((v) => !v); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); saveObsBtnRef.current?.focus(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusFirstActionBtn(); }
+  }
+  function handleActionBtnKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    if (e.key === 'ArrowUp') {
+      if (historyToggleRef.current) { historyToggleRef.current.focus(); return; }
+      obsTextareaRef.current?.focus();
+      return;
+    }
+    const refs = actionBtnRefs.current;
+    const idx = refs.indexOf(e.currentTarget);
+    if (idx < 0) return;
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    for (let i = idx + dir; i >= 0 && i < refs.length; i += dir) {
+      if (refs[i]) { refs[i]!.focus(); return; }
+    }
+  }
   const [catalogDirty, setCatalogDirty] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   // Observaciones - independent of the rest of the form's isDirty/Guardar flow on
@@ -135,8 +229,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   }
   const [showHist, setShowHist] = useState(false);
   const [showCobro, setShowCobro] = useState(openCobro ?? false);
+  // The client-deleted decision popup (Restaurar / Mantener eliminado) shows
+  // automatically whenever this order is opened with client_deleted still set -
+  // "Mantener eliminado" just dismisses it locally (no mutation - the order was
+  // already flagged, there's nothing to change to keep it that way); reopening
+  // the same order later shows it again, since nothing here persists "reviewed".
+  const [clientDeletedDismissed, setClientDeletedDismissed] = useState(false);
+  useEffect(() => { setClientDeletedDismissed(false); }, [orderId]);
   const [replyText, setReplyText] = useState('');
   const [cobroPass, setCobroPass] = useState('');
+  const cobroPassRef = useRef<HTMLInputElement>(null);
+  const cobroConfirmBtnRef = useRef<HTMLButtonElement>(null);
+  // Autofocus the password field the instant the dialog opens - the whole
+  // point of wiring this dialog's keyboard nav is being able to close a pedido
+  // without ever touching the mouse, starting from the moment it appears.
+  useEffect(() => { if (showCobro) cobroPassRef.current?.focus(); }, [showCobro]);
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
 
   useEffect(() => {
@@ -376,6 +483,34 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
+  // Pulls a papelera order back to 'nuevo' - most relevant for one the CLIENT
+  // deleted themselves via the form (see the warning banner below), but works on
+  // any papelera order.
+  const restoreMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}/restore`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      toast('Pedido restaurado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  // Settles a crédito order sometime after it already closed unpaid (POST /:id/
+  // cobro deliberately leaves crédito orders paid:false - see that mutation/route's
+  // own comments) - no password/amount re-entry, that already happened at cobro
+  // time; this just records the money actually came in.
+  const creditoPagadoMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}/credito-pagado`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast('Crédito marcado como pagado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
   const invoiceMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
     onSuccess: () => {
@@ -447,10 +582,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       return;
     }
     try {
-      // Two separate messages, in order (awaited, not fire-and-forget - the whole
-      // point is the notice arrives before the link, see formLinkMessage.ts).
+      // Three separate messages, in order (awaited, not fire-and-forget - the
+      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
       await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
       await formLinkMut.mutateAsync(url);
+      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.
@@ -716,7 +852,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // `locked` alone no longer means read-only - admin/dev can still fully edit a
   // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
   // is cerrado (diaCerrado still freezes everyone, admin included).
-  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera';
+  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera' || order.client_deleted;
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -951,6 +1087,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
+            {order.client_deleted && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={15} /> El cliente eliminó este pedido desde el formulario.
+                </span>
+                {canManage && (
+                  <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
+                  </button>
+                )}
+              </div>
+            )}
+
             {!locked && diaCerrado && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Este día ya fue cerrado - vista de solo lectura.
@@ -990,8 +1140,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente</label>
-                <input className="fi2" disabled={readOnly} value={nombre}
-                  onChange={(e) => { setNombre(e.target.value); touchField('nombre'); }} />
+                <input ref={nombreRef} className="fi2" disabled={readOnly} value={nombre}
+                  onChange={(e) => { setNombre(e.target.value); touchField('nombre'); }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'nombre')} />
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
@@ -1007,8 +1158,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 Dirección
                 {direccionFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
               </label>
-              <input className="fi2" disabled={readOnly} value={direccion}
-                onChange={(e) => { setDireccion(e.target.value); touchField('direccion'); }} />
+              <input ref={direccionRef} className="fi2" disabled={readOnly} value={direccion}
+                onChange={(e) => { setDireccion(e.target.value); touchField('direccion'); }}
+                onKeyDown={(e) => handleFormArrowKeys(e, 'direccion')} />
             </div>
             <div className="frow">
               <div className="fg2">
@@ -1016,24 +1168,27 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   Método de pago
                   {pagoFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
                 </label>
-                <select className="fi2" disabled={readOnly} value={pago}
+                <select ref={pagoRef} className="fi2" disabled={readOnly} value={pago}
                   onChange={(e) => {
                     setPago(e.target.value);
                     // Same reset as NuevoPedidoModal - switching away from (or back
                     // to) 'cod' must not resurrect a stale choice/amount.
                     setCodChoice(null); setCodCash('');
                     touchField('pago');
-                  }}>
+                  }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'pago')}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
                   <option value="cod">Cobro en casa</option>
+                  <option value="credito">Crédito</option>
                 </select>
               </div>
               <div className="fg2">
                 <label className="fl2">Domiciliario</label>
-                <select className="fi2" disabled={readOnly} value={empleadoId}
-                  onChange={(e) => { setEmpleadoId(e.target.value); touchField('empleado'); }}>
+                <select ref={empleadoRef} className="fi2" disabled={readOnly} value={empleadoId}
+                  onChange={(e) => { setEmpleadoId(e.target.value); touchField('empleado'); }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'empleado')}>
                   <option value="">Sin asignar</option>
                   {employees.map((emp: any) => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
@@ -1056,6 +1211,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               onChange={(it) => { setItems(it); markDirty(); }}
               onLocalDirty={setCatalogDirty}
               clearKey={catalogClearKey}
+              onArrowUpFromSearch={() => pagoRef.current?.focus()}
+              onArrowDownFromManual={() => obsTextareaRef.current?.focus()}
             />
 
             {/* Observaciones - a growing list of notes, always addable/editable
@@ -1112,14 +1269,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 )}
               </div>
             )}
-            <textarea className="fi2" style={{ minHeight: 50, resize: 'vertical', width: '100%' }}
+            <textarea ref={obsTextareaRef} className="fi2" style={{ minHeight: 50, resize: 'vertical', width: '100%' }}
               placeholder={order.observations && order.observations.length > 0 ? 'Agregar otra observación...' : 'Nota interna - se puede agregar incluso después de cerrado el pedido'}
               value={newObsText}
               maxLength={1000}
               onChange={(e) => setNewObsText(e.target.value)}
+              onKeyDown={handleObsArrowKeys}
             />
             <div className="mactions" style={{ marginBottom: 14 }}>
-              <button className="bsec"
+              <button ref={saveObsBtnRef} onKeyDown={handleSaveObsBtnKeyDown} className="bsec"
                 onClick={() => addObsMut.mutate(newObsText.trim())}
                 disabled={addObsMut.isPending || !newObsText.trim()}
                 style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1130,7 +1288,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             {/* History - visible to whoever can manage this order */}
             {canManage && order.history && order.history.length > 0 && (
               <div>
-                <div className={`hist-toggle${showHist ? ' open' : ''}`} onClick={() => setShowHist(!showHist)}>
+                <div ref={historyToggleRef} tabIndex={0} onKeyDown={handleHistoryToggleKeyDown}
+                  className={`hist-toggle${showHist ? ' open' : ''}`} onClick={() => setShowHist(!showHist)}>
                   <ChevronDown size={16} style={{ transition: 'transform .2s', transform: showHist ? 'rotate(180deg)' : 'none' }} />
                   Historial de cambios
                   <span style={{ background: 'var(--v)', color: '#fff', borderRadius: 20, padding: '1px 7px', fontSize: 11, fontWeight: 800, marginLeft: 'auto' }}>
@@ -1155,8 +1314,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
+              {canEditLocked && order.payment_method === 'credito' && !order.paid && (
+                <button ref={actionBtnRef(0)} onKeyDown={handleActionBtnKeyDown} className="bverde"
+                  onClick={() => setConfirmDlg({ msg: '¿Marcar este crédito como pagado?', onOk: () => creditoPagadoMut.mutate() })}
+                  disabled={creditoPagadoMut.isPending}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <CheckCircle size={13} /> {creditoPagadoMut.isPending ? 'Guardando...' : 'Marcar crédito pagado'}
+                </button>
+              )}
               {!readOnly && !locked && canManage && order.status !== 'papelera' && (
-                <button className="bdel"
+                <button ref={actionBtnRef(1)} onKeyDown={handleActionBtnKeyDown} className="bdel"
                   onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
                   disabled={papeleraMut.isPending || hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1164,7 +1331,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 </button>
               )}
               {!readOnly && (
-                <button className="bpri"
+                <button ref={actionBtnRef(2)} onKeyDown={handleActionBtnKeyDown} className="bpri"
                   onClick={() => {
                     if (items.length === 0) { toast('El pedido debe tener al menos un producto', true); return; }
                     if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de guardar', true); return; }
@@ -1177,13 +1344,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 </button>
               )}
               {items.length > 0 && (
-                <button className="bsec" onClick={copyInvoice} disabled={hasNegativePrice}
+                <button ref={actionBtnRef(3)} onKeyDown={handleActionBtnKeyDown} className="bsec" onClick={copyInvoice} disabled={hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <FileText size={13} /> Copiar
                 </button>
               )}
               {items.length > 0 && (
-                <button className="bsec" onClick={generatePDF} disabled={hasNegativePrice}
+                <button ref={actionBtnRef(4)} onKeyDown={handleActionBtnKeyDown} className="bsec" onClick={generatePDF} disabled={hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <FileText size={13} /> PDF
                 </button>
@@ -1198,7 +1365,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 // re-read on every render is all this needs - no separate effect.
                 const enRuta = ['camino', 'entregado', 'cerrado'].includes(order.status);
                 return (
-                  <button className="bsec" onClick={sendInvoiceToChat}
+                  <button ref={actionBtnRef(5)} onKeyDown={handleActionBtnKeyDown} className="bsec" onClick={sendInvoiceToChat}
                     disabled={invoiceMut.isPending || hasNegativePrice || enRuta}
                     title={enRuta ? 'El pedido ya está en camino, entregado o cerrado' : undefined}
                     style={{ display: 'flex', alignItems: 'center', gap: 5, borderColor: 'var(--v)', color: 'var(--v)' }}>
@@ -1210,6 +1377,34 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
           </div>
         </div>
       </div>
+
+      {/* CLIENT-DELETED DECISION DIALOG - pops automatically on open, same as the
+          cobro dialog does with openCobro, since this needs a staff decision
+          before anything else about the order matters. */}
+      {order.client_deleted && !clientDeletedDismissed && (
+        <div className="moverlay on" style={{ zIndex: 700 }}>
+          <div className="cobrobox">
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              <AlertTriangle size={32} color="var(--r)" strokeWidth={1.5} />
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 800, textAlign: 'center', marginBottom: 8, color: 'var(--r)' }}>
+              El cliente eliminó este pedido
+            </div>
+            <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 20 }}>
+              Pedido #{order.num} - {order.customer_name}
+            </div>
+            <div style={{ display: 'flex', gap: 9 }}>
+              <button className="bsec" onClick={() => setClientDeletedDismissed(true)}>
+                Mantener eliminado
+              </button>
+              <button className="bpri" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+                {restoreMut.isPending ? 'Restaurando...' : <><CheckCircle size={15} /> Restaurar pedido</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CONFIRM DIALOG */}
       {confirmDlg && (
@@ -1254,17 +1449,24 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <label className="fl2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Lock size={13} /> Tu contraseña para confirmar <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span>
               </label>
-              <PasswordInput className="fi2" placeholder="Contraseña de tu sesión"
+              <PasswordInput ref={cobroPassRef} className="fi2" placeholder="Contraseña de tu sesión"
                 value={cobroPass} onChange={(e) => setCobroPass(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); } }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); return; }
+                  if (e.key === 'ArrowDown') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); }
+                }}
                 autoComplete="current-password" />
               <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 4 }}>
                 Requerida para evitar cobros no autorizados
               </div>
             </div>
             <div style={{ display: 'flex', gap: 9, marginTop: 20 }}>
-              <button className="bsec" onClick={onClose}>Cancelar</button>
-              <button className="bpri" onClick={() => cobroMut.mutate(recibido)}
+              <button className="bsec" onClick={onClose}
+                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } else if (e.key === 'ArrowRight') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); } }}>
+                Cancelar
+              </button>
+              <button ref={cobroConfirmBtnRef} className="bpri" onClick={() => cobroMut.mutate(recibido)}
+                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } }}
                 disabled={cobroMut.isPending || !cobroValido}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: cobroValido ? 1 : 0.5 }}>
                 {cobroMut.isPending ? 'Confirmando...' : <><CheckCircle size={15} /> Confirmar pago</>}

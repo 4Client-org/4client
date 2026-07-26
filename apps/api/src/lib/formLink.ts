@@ -42,7 +42,6 @@ export async function generateFormLinkUrl(
     },
   });
   await fastify.prisma.revokedFormToken.deleteMany({ where: { ticket_id: ticketId, org_id: orgId } });
-  await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticketId } });
 
   const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
   return `${frontendUrl}/form?t=${token}`;
@@ -61,8 +60,14 @@ export async function generateFormLinkUrl(
 export function buildFormLinkWarningMessage(): string {
   return '*ESTE LINK ES SOLO PARA HACER TU PEDIDO Y HACER SEGUIMIENTO DE TUS PEDIDOS. '
     + 'NUNCA TE PEDIREMOS DINERO NI DATOS BANCARIOS NI INFORMACIÓN CONFIDENCIAL.*'
-    + '\n\n*Este link estará activo por 4 horas. Si lo abres dentro de ese tiempo, '
-    + 'quedará activo por 24 horas. Si no lo abres en las primeras 4 horas, quedará '
-    + 'inactivo y deberás pedir uno nuevo.*'
+    + '\n\n*Este link estará activo por 24 horas.*'
     + '\n\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
+}
+
+// Sent as a THIRD message, right after the link itself (see callers) - the
+// warning notice and the link both need to stand alone (see their own comments
+// above), and this is a separate, short nudge rather than something to append to
+// either of them.
+export function buildFormLinkFollowUpMessage(): string {
+  return 'Diligencia por favor el pedido por medio del link. Cualquier duda con gusto.';
 }
