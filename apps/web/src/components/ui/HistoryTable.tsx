@@ -16,6 +16,14 @@ function fmtHistVal(v: string | null | undefined): string {
   return HIST_VAL_MAP[v] ?? v;
 }
 
+// Only ever shown as a fallback for entries with no `field` set (see the
+// "Campo / Acción" cell below) - action_type itself is a raw backend enum
+// (orders.ts/cierre.ts/public.ts), never meant to be read directly.
+const ACTION_TYPE_LABEL: Record<string, string> = {
+  create: 'Creado', cierre: 'Cierre de caja', cobro: 'Cobro',
+  papelera: 'Papelera', restaurado: 'Restaurado', eliminado_cliente: 'Eliminado por el cliente',
+};
+
 // Every history entry the client made through the public form has this substring
 // in its notes (see orders.ts and public.ts) - a reliable signal that actor_id
 // records the staff member who SENT the link, not who made the actual change.
@@ -106,7 +114,7 @@ export default function HistoryTable({ history, showOrder }: Props) {
                   ...td, fontWeight: 600,
                   color: isRemove ? '#DC2626' : isAdd ? 'var(--v)' : isCobro ? 'var(--v)' : 'var(--n)',
                 }}>
-                  {h.field ?? h.action_type}
+                  {h.field ?? ACTION_TYPE_LABEL[h.action_type] ?? h.action_type}
                   {h.notes && !isCobro && <div style={{ fontWeight: 400, color: 'var(--gt)', fontSize: 11, marginTop: 2 }}>{h.notes}</div>}
                 </td>
                 <td style={{ ...td, color: '#DC2626' }}>

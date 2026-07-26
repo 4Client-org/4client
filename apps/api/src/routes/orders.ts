@@ -196,7 +196,7 @@ function buildOrderSelect(includeHistory = false) {
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
     change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
-    client_modified: true,
+    client_modified: true, client_deleted: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
     registeredBy: { select: { id: true, name: true } },
@@ -682,39 +682,36 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     return reply.send({ data: updated });
   });
 
-  // PATCH /api/v1/orders/:id/restore - pulls an order back out of papelera, most
-  // commonly one the CLIENT deleted from their own form link (public.ts's own
-  // POST /order/:orderId/delete, which marks it with a 'client_deleted:' note
-  // instead of just silently trashing it) - staff review it here and either leave
-  // it in papelera or bring it back to life. Deliberately its own route rather
-  // than reusing PATCH /:id/status: that one has no notion of "only FROM
-  // papelera", and always landing back on 'nuevo' regardless of whatever status
-  // it was in before getting trashed is the right call either way (it needs a
-  // fresh look, not a blind resume mid-flight).
+  // PATCH /api/v1/orders/:id/restore - clears `client_deleted` on an order the
+  // CLIENT deleted themselves via their form link (public.ts's own POST
+  // /order/:orderId/delete) - status is untouched by that route in the first
+  // place, so restoring is just clearing the flag, nothing to "put back" status-
+  // wise. Not for staff's own separate papelera trash action (status:'papelera',
+  // a different, unrelated concern - see PATCH /:id/status).
   fastify.patch('/:id/restore', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    if (existing.status !== 'papelera') return reply.status(400).send({ error: 'Este pedido no está en la papelera', code: 'NOT_IN_PAPELERA' });
+    if (!existing.client_deleted) return reply.status(400).send({ error: 'Este pedido no fue eliminado por el cliente', code: 'NOT_CLIENT_DELETED' });
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
       const order = await tx.order.update({
         where: { id },
-        data: { status: 'nuevo', updated_at: new Date() },
+        data: { client_deleted: false, updated_at: new Date() },
         select: buildOrderSelect(false),
       });
       await tx.orderHistory.create({
         data: {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
           action_type: 'restaurado', field: 'Estado',
-          value_before: 'papelera', value_after: 'nuevo',
-          notes: 'Restaurado desde la papelera',
+          value_before: 'Eliminado por el cliente', value_after: 'Activo',
+          notes: 'Restaurado por staff',
         },
       });
       return order;
     });
 
-    fastify.io.to(`org:${req.user.orgId}`).emit('order:moved', { orderId: id, newStatus: 'nuevo' });
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updated as any);
     return reply.send({ data: updated });
   });
 
@@ -830,7 +827,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   // deliberately simple action (no password/amount re-entry) since the actual
   // "how much, confirmed by whom" already happened at cobro time; this just
   // records that the money that was owed has now actually come in.
-  fastify.patch('/:id/credito-pagado', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+  // admin/dev only, deliberately narrower than most order-management actions
+  // (which allow encargado too) - marking a debt as settled needs the tighter
+  // trust level, per explicit business direction.
+  fastify.patch('/:id/credito-pagado', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });

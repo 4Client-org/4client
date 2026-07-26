@@ -230,7 +230,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // whether that happened today or it arrived already closed from a prior day,
       // there's nothing left for the client to see or do with it.
       const todaysOrders = await fastify.prisma.order.findMany({
-        where: { ticket_id: ticket.id, org_id: ticket.org_id, fecha: todayLocal, status: { notIn: ['cerrado', 'papelera'] } },
+        where: { ticket_id: ticket.id, org_id: ticket.org_id, fecha: todayLocal, status: { notIn: ['cerrado', 'papelera'] }, client_deleted: false },
         select: {
           id: true, num: true, address: true, payment_method: true, status: true, source: true, created_at: true,
           items: { select: { id: true, product_name: true, quantity_label: true, price: true }, orderBy: { sort_order: 'asc' } },
@@ -382,6 +382,16 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       if (target.source !== 'form') {
         return reply.status(409).send({
           error: `Tu pedido #${target.num} fue creado por el negocio y no se puede modificar desde aquí. Si necesitas hacer un cambio, contáctanos directamente.`,
+          code: 'ORDER_NOT_EDITABLE',
+        });
+      }
+
+      // Deleted by the client themselves (status untouched by that route, so it'd
+      // otherwise still pass the EDITABLE_STATUSES check below) - frozen until
+      // staff restores it, same as any other not-editable case.
+      if (target.client_deleted) {
+        return reply.status(409).send({
+          error: `Tu pedido #${target.num} fue eliminado y no se puede modificar. Si fue un error, contáctanos directamente.`,
           code: 'ORDER_NOT_EDITABLE',
         });
       }
@@ -783,6 +793,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       where: { id: orderId, ticket_id: ticket.id, org_id: ticket.org_id },
     });
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    if (order.client_deleted) return reply.status(400).send({ error: 'Este pedido ya fue eliminado.', code: 'ALREADY_DELETED' });
 
     const isEditable = order.source === 'form' && (EDITABLE_STATUSES as readonly string[]).includes(order.status) && !order.locked;
     if (!isEditable) {
@@ -795,33 +806,40 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const actorUser = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
-    // A marker appended to `notes` (never overwritten), same convention cierre.ts
-    // already uses for its own 'pasado_manana:DATE' deferral markers - lets staff
-    // (admin AND encargado, `notes` is always selected regardless of role, unlike
-    // the audit `history` array which encargado no longer sees at all) tell a
-    // client-initiated delete apart from a staff one at a glance, without a schema
-    // change. The Papelera list/detail view checks for this to show a warning
-    // badge + a "Restaurar" action.
-    const deletedMarker = `client_deleted:${Date.now()}`;
-    const newNotes = order.notes ? `${order.notes}\n${deletedMarker}` : deletedMarker;
-
-    await fastify.prisma.$transaction([
-      fastify.prisma.order.update({ where: { id: order.id }, data: { status: 'papelera', client_modified: true, notes: newNotes } }),
-      fastify.prisma.orderHistory.create({
+    // Deliberately NOT status:'papelera' (that's still staff's own separate trash
+    // action, untouched) - `client_deleted` alone, so the order keeps its real
+    // status and keeps rendering in its normal board column, just flagged red
+    // with a warning, instead of vanishing off the board the way papelera does.
+    // Staff decides from there: Restaurar (clears the flag) or "Mantener
+    // eliminado" (leaves it exactly as-is, frozen). See schema.prisma's comment.
+    const updated = await fastify.prisma.$transaction(async (tx) => {
+      const upd = await tx.order.update({
+        where: { id: order.id },
+        data: { client_deleted: true, client_modified: true },
+        include: {
+          items: { orderBy: { sort_order: 'asc' } },
+          employee: { select: { id: true, name: true } },
+          registeredBy: { select: { id: true, name: true } },
+          paidBy: { select: { id: true, name: true } },
+        },
+      });
+      await tx.orderHistory.create({
         data: {
           org_id: ticket.org_id, order_id: order.id, actor_id: actorUser.id,
-          action_type: 'papelera', field: 'Estado',
-          value_before: order.status,
-          value_after: 'Eliminado por el cliente',
+          action_type: 'eliminado_cliente', field: 'Estado',
+          value_before: 'Activo', value_after: 'Eliminado por el cliente',
           notes: 'Vía formulario del cliente',
         },
-      }),
-    ]);
+      });
+      return upd;
+    });
 
-    // Same event the board/staff swimlane already listens for on any status move
-    // (orders.ts's PATCH /:id/status) - the card disappears from the active
-    // columns into papelera live, no different from a staff-initiated delete.
-    fastify.io.to(`org:${ticket.org_id}`).emit('order:moved', { orderId: order.id, newStatus: 'papelera' });
+    // Full-object broadcast (not just a status patch) - the board (GET /orders,
+    // invalidated+refetched on this event regardless of payload) and any open
+    // DetallePedidoModal (which DOES read this payload, see its own order:updated
+    // socket handler) both need the fresh `client_deleted` flag, not just status.
+    const updatedWithFlags = { ...updated, ...(await clientChangedFlags(fastify.prisma, updated.id)) };
+    fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updatedWithFlags as any);
 
     return reply.send({ data: { ok: true } });
   });

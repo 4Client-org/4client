@@ -27,8 +27,12 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         // day), so without this a heavily-used chat's badge/count here would include
         // every order across its whole history instead of just what's relevant to the
         // day being viewed.
+        // client_deleted excluded too - used by MainPage's "crear pedido" dedup
+        // (reopen an existing resumable order instead of duplicating); a
+        // client-deleted order is frozen pending staff review, not something a
+        // fresh "crear pedido" click should silently resume into.
         orders: {
-          where: { status: { not: 'papelera' }, fecha },
+          where: { status: { not: 'papelera' }, fecha, client_deleted: false },
           select: { id: true, num: true, status: true, paid: true },
         },
       },

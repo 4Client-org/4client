@@ -28,6 +28,10 @@ interface Props {
   // (Método de pago, in DetallePedidoModal). Optional since not every caller
   // wires this whole-form nav graph (e.g. NuevoPedidoModal).
   onArrowUpFromSearch?: () => void;
+  // Down from the LAST manual-product field (Precio) - hands focus OUT to
+  // whatever the parent form has below this whole component (Observaciones, in
+  // DetallePedidoModal). Same optionality reasoning as onArrowUpFromSearch.
+  onArrowDownFromManual?: () => void;
 }
 
 // Exposed so a parent (NuevoPedidoModal/DetallePedidoModal) can force-commit
@@ -50,6 +54,10 @@ export interface ProductSearchHandle {
   // row), so Enter there can collapse/expand and Down can branch: into the
   // catalog when expanded, or into the already-added items list when collapsed.
   focusToggle: () => void;
+  // Symmetric re-entry point for a parent field below this component (e.g.
+  // Observaciones) arrowing back UP into it - lands on the LAST manual-product
+  // field (Precio), the natural "bottom" of this whole component's nav graph.
+  focusManualLast: () => void;
 }
 
 function groupByCategory(products: Product[]) {
@@ -63,7 +71,7 @@ function groupByCategory(products: Product[]) {
 }
 
 const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
-  { products, items, locked, onChange, onLocalDirty, clearKey, onArrowUpFromSearch }, ref,
+  { products, items, locked, onChange, onLocalDirty, clearKey, onArrowUpFromSearch, onArrowDownFromManual }, ref,
 ) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
@@ -90,6 +98,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [manualQty, setManualQty] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualError, setManualError] = useState('');
+  const manualNameRef = useRef<HTMLInputElement | null>(null);
+  const manualQtyRef = useRef<HTMLInputElement | null>(null);
+  const manualPriceRef = useRef<HTMLInputElement | null>(null);
   // Filters the Factbox table below (already-selected items), separate from the
   // catalog search above - lets staff quickly find one line to price on an order
   // with many items, instead of scrolling the whole committed list.
@@ -344,7 +355,12 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       return;
     }
     const next = visibleItems[direction === 'up' ? idx - 1 : idx + 1];
-    if (next) editItem(next, field);
+    if (next) { editItem(next, field); return; }
+    // Down past the LAST row - hands off to the manual/off-catalog row right
+    // below the Factbox, instead of silently doing nothing (the previous dead
+    // end here - "el último producto... si le doy abajo me debe llevar a nombre
+    // del producto cuando no está en el catálogo porque no lo hace").
+    if (direction === 'down') { setEditingRow(null); manualNameRef.current?.focus(); }
   }
 
   // Shared by both the qty and price inputs of a row being edited. Enter/Escape
@@ -411,6 +427,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     commitPendingEdit: () => (editingRow ? saveEdit(editingRow) : items) ?? items,
     focusSearch: () => searchRef.current?.focus(),
     focusToggle: () => toggleRef.current?.focus(),
+    focusManualLast: () => manualPriceRef.current?.focus(),
   }));
 
   // Toggle header is itself a stop in the whole-form nav graph, not just a click
@@ -424,12 +441,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (!collapsed) {
-        const first = flatVisibleProducts[0];
-        if (first) { catalogQtyRefs.current[first.id]?.focus(); return; }
+        // Search box is its own stop in between - going toggle -> search ->
+        // product (not straight to the first product) matches the rest of this
+        // list's own nav (search's ArrowDown already lands on the first product).
         searchRef.current?.focus();
         return;
       }
-      if (items.length > 0) editItem(items[0], 'qty');
+      if (items.length > 0) { editItem(items[0], 'qty'); return; }
+      manualNameRef.current?.focus();
     }
   }
 
@@ -450,6 +469,43 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     setManualError('');
     onChange([...items, { product_name: name, quantity_label: manualQty.trim(), price: manualPrice.trim() }]);
     setManualName(''); setManualQty(''); setManualPrice('');
+  }
+
+  // The manual/off-catalog row was previously NOT wired into keyboard nav at all
+  // (only Enter-to-submit on each field) - Left/Right chain the three fields,
+  // Up goes back to the last Factbox row (or the toggle if there are no items
+  // yet), Down bubbles OUT to whatever the parent form has below this whole
+  // component (Observaciones, in DetallePedidoModal).
+  function handleManualKeyDown(e: KeyboardEvent<HTMLInputElement>, field: 'name' | 'qty' | 'price') {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length > 0) { editItem(visibleItems[visibleItems.length - 1], 'qty'); return; }
+      toggleRef.current?.focus();
+      return;
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); onArrowDownFromManual?.(); return; }
+    if (e.key === 'ArrowRight' && (field === 'name' || field === 'qty')) {
+      // Boundary-aware for name/qty (both type="text", selectionStart reliable) -
+      // only jump fields once the cursor has nowhere further right to go.
+      const input = e.currentTarget;
+      if (input.selectionStart !== input.value.length) return;
+      e.preventDefault();
+      (field === 'name' ? manualQtyRef : manualPriceRef).current?.focus();
+      (field === 'name' ? manualQtyRef : manualPriceRef).current?.select();
+      return;
+    }
+    if (e.key === 'ArrowLeft' && (field === 'qty' || field === 'price')) {
+      // qty is boundary-aware (text input); price is type="number" so this jumps
+      // unconditionally, same trade-off as everywhere else in this file that
+      // handles a price field's ArrowLeft.
+      if (field === 'qty') {
+        const input = e.currentTarget;
+        if (input.selectionStart !== 0) return;
+      }
+      e.preventDefault();
+      (field === 'qty' ? manualNameRef : manualQtyRef).current?.focus();
+      (field === 'qty' ? manualNameRef : manualQtyRef).current?.select();
+    }
   }
 
   useEffect(() => {
@@ -803,29 +859,32 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 110px 32px', gap: 8, alignItems: 'center' }}>
           <input
+            ref={manualNameRef}
             className="iinput"
             placeholder="Nombre del producto"
             value={manualName}
             onChange={e => { setManualName(e.target.value); setManualError(''); }}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'name'); }}
             style={{ fontSize: 13 }}
           />
           <input
+            ref={manualQtyRef}
             className="iinput"
             placeholder="Ej: 2 kg"
             value={manualQty}
             onChange={e => setManualQty(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'qty'); }}
             style={{ fontSize: 13 }}
           />
           <input
+            ref={manualPriceRef}
             className="iinput no-spin"
             placeholder="$0"
             type="number"
             min="0"
             value={manualPrice}
             onChange={e => setManualPrice(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); } }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualProduct(); return; } handleManualKeyDown(e, 'price'); }}
             style={{ fontSize: 13 }}
           />
           <button

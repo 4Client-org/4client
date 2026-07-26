@@ -266,6 +266,15 @@ model Order {
   // individual item's own `added_by_client` flag below, which never clears - this is
   // a transient "needs attention" signal, that's permanent provenance.
   client_modified Boolean   @default(false)
+  // The client deleted this order themselves via their form link (public.ts's
+  // POST /order/:orderId/delete) - deliberately NOT the same as status:'papelera'
+  // (that's still staff's own separate trash action, untouched by this): `status`
+  // is left exactly as it was, so the order keeps rendering in its normal board
+  // column, just tinted red with a warning - staff decides Restaurar (clears this
+  // flag) or "Mantener eliminado" (leaves it flagged, order stays frozen).
+  // Excluded from cierre/dashboard totals wherever it matters (treated as if it
+  // doesn't exist for accounting purposes) but still visible on the live board.
+  client_deleted  Boolean   @default(false)
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 

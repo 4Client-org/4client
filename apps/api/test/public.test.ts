@@ -524,7 +524,7 @@ describe('public form routes', () => {
   });
 
   describe('POST /public/order/:orderId/delete - client cancels their own order', () => {
-    it('deletes (papelera) an editable order the client submitted, and it disappears from form-info afterward', async () => {
+    it('marks client_deleted (status untouched, NOT papelera) on an editable order the client submitted, and it disappears from form-info afterward', async () => {
       const phone = '573001112270';
       const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Elimina Pedido' } });
       const token = await issueFormToken(app, ticket.id, orgId);
@@ -542,13 +542,14 @@ describe('public form routes', () => {
       expect(del.statusCode).toBe(200);
 
       const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-      expect(after.status).toBe('papelera');
+      expect(after.status).toBe('nuevo'); // untouched - stays visible on the board, just flagged
+      expect(after.client_deleted).toBe(true);
 
       const info = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=device-delete-1` });
       expect(info.json().data.orders).toHaveLength(0);
 
       const history = await app.prisma.orderHistory.findMany({ where: { order_id: orderId } });
-      expect(history.some(h => h.action_type === 'papelera' && h.notes?.includes('formulario'))).toBe(true);
+      expect(history.some(h => h.action_type === 'eliminado_cliente' && h.notes?.includes('formulario'))).toBe(true);
     });
 
     it('rejects deleting an order that already moved past listo (e.g. camino) - 400 NOT_EDITABLE, order untouched', async () => {
@@ -615,7 +616,8 @@ describe('public form routes', () => {
       expect(del.statusCode).toBe(200);
 
       const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-      expect(after.status).toBe('papelera');
+      expect(after.status).toBe('nuevo');
+      expect(after.client_deleted).toBe(true);
     });
 
     it('rejects an order belonging to a different ticket than the one the token was issued for', async () => {
@@ -640,6 +642,57 @@ describe('public form routes', () => {
 
       const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderBId } });
       expect(after.status).toBe('nuevo');
+    });
+
+    it('rejects deleting the same order twice - 400 ALREADY_DELETED', async () => {
+      const phone = '573001112276';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Doble Delete' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token, device_token: 'device-double', address: 'Calle Doble 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      const orderId = create.json().data.orderId;
+
+      const first = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-double' },
+      });
+      expect(first.statusCode).toBe(200);
+
+      const second = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-double' },
+      });
+      expect(second.statusCode).toBe(400);
+      expect(second.json().code).toBe('ALREADY_DELETED');
+    });
+
+    it('rejects resubmitting (merge_order_id) into a client_deleted order even though its status is still editable - 409 ORDER_NOT_EDITABLE', async () => {
+      const phone = '573001112277';
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Resubmit Tras Delete' } });
+      const token = await issueFormToken(app, ticket.id, orgId);
+      const create = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { token, device_token: 'device-resub', address: 'Calle Resub 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      const orderId = create.json().data.orderId;
+
+      const del = await app.inject({
+        method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
+        payload: { token, device_token: 'device-resub' },
+      });
+      expect(del.statusCode).toBe(200);
+
+      const resubmit = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: {
+          token, device_token: 'device-resub', merge_order_id: orderId,
+          address: 'Calle Resub Nueva 2', items: [{ product_name: 'Mango', quantity_label: '2 kg' }],
+        },
+      });
+      expect(resubmit.statusCode).toBe(409);
+      expect(resubmit.json().code).toBe('ORDER_NOT_EDITABLE');
     });
   });
 

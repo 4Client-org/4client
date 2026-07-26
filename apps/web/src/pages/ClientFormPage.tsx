@@ -317,9 +317,19 @@ export default function ClientFormPage() {
     return (pendingQty[p.id] ?? (addedItem ? addedItem.quantity_label : '')).trim();
   }
 
-  function addProduct(p: Product) {
-    const num = effectiveQty(p);
-    if (!num) return;
+  // Commits on EVERY keystroke, not just on blur/Enter - the client form has no
+  // "unsaved draft" concept the person needs to remember to close out; typing
+  // "1" in a fresh row must already be a real, sendable item, even if they never
+  // touch another field afterward (e.g. the very first product they type, when
+  // the unit was already left at its default and never touched either). Clearing
+  // the box back to empty removes the item, symmetric with the Trash button.
+  function commitQtyChange(p: Product, rawValue: string) {
+    setPendingQty(prev => ({ ...prev, [p.id]: rawValue }));
+    const num = rawValue.trim();
+    if (!num) {
+      setSelected(prev => prev.filter(i => i.productId !== p.id));
+      return;
+    }
     const unit = pendingUnit[p.id] ?? DEFAULT_UNIT;
     const alreadyAdded = selected.some(i => i.productId === p.id);
     // Only append the unit onto an actual NUMBER ("2" -> "2 Kilo") - free-text
@@ -338,6 +348,13 @@ export default function ClientFormPage() {
       }
       return [...prev, { product_name: p.name, quantity_label: qty, productId: p.id }];
     });
+  }
+
+  // Enter still "confirms" a row (moves focus to search) - the value's already
+  // committed by commitQtyChange on every keystroke, this just clears the local
+  // pending markers and returns to search, same as before.
+  function addProduct(p: Product) {
+    commitQtyChange(p, effectiveQty(p));
     setPendingQty(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setPendingUnit(prev => { const c = { ...prev }; delete c[p.id]; return c; });
     setSearch('');
@@ -858,12 +875,11 @@ export default function ClientFormPage() {
                       type="text"
                       placeholder="Cant."
                       value={qty}
-                      onChange={e => setPendingQty(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      // Commits on every keystroke, not just on blur - a single
+                      // "1" typed and left at the default unit must already be a
+                      // real, sendable item (see commitQtyChange's own comment).
+                      onChange={e => commitQtyChange(p, e.target.value)}
                       onKeyDown={e => handleCatalogKeyDown(e, p, 'qty')}
-                      // Commits the instant focus leaves this box - typing a
-                      // quantity and moving to the next field (Tab, arrow-nav,
-                      // tapping elsewhere) IS "add it", no separate button needed.
-                      onBlur={() => addProduct(p)}
                       style={{
                         width: 92, fontSize: 15, padding: '9px 6px',
                         border: `2px solid ${qty.trim() ? GREEN : '#ddd'}`,

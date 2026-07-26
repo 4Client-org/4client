@@ -56,7 +56,19 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
     const q = normalizeSearch(creditoSearch);
     if (!q) return list;
     return list.filter((o: any) => {
-      const fechaStr = o.fecha ? new Date(o.fecha).toISOString().split('T')[0] : '';
+      // Several date formats checked, not just ISO - a search box is where people
+      // type "25/07", "25-07-2026", or "25 jul" just as often as "2026-07-25", and
+      // only matching the raw ISO string silently failed every one of those.
+      let fechaMatch = false;
+      if (o.fecha) {
+        const d = new Date(o.fecha);
+        const iso = d.toISOString().split('T')[0]; // 2026-07-25
+        const [y, m, day] = iso.split('-');
+        const ddmmyyyy = `${day}/${m}/${y}`;
+        const ddmmyyyyDash = `${day}-${m}-${y}`;
+        const localized = normalizeSearch(d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Bogota' }));
+        fechaMatch = iso.includes(creditoSearch) || ddmmyyyy.includes(creditoSearch) || ddmmyyyyDash.includes(creditoSearch) || localized.includes(q);
+      }
       const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
       const itemsText = (o.items ?? []).map((i: any) => `${i.quantity_label ?? ''} ${i.product_name ?? ''}`).join(' ');
       return normalizeSearch(o.client_contact_name ?? o.customer_name ?? '').includes(q)
@@ -64,20 +76,10 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
         || normalizeSearch(o.employee?.name ?? '').includes(q)
         || normalizeSearch(itemsText).includes(q)
         || (o.num ?? '').includes(creditoSearch)
-        || fechaStr.includes(creditoSearch)
+        || fechaMatch
         || String(total).includes(creditoSearch);
     });
   }, [creditoNoPagados, creditoPagados, creditoSubTab, creditoSearch]);
-
-  // A papelera order carries a `client_deleted:TIMESTAMP` marker in its `notes`
-  // (appended, never overwritten - same convention cierre.ts uses for its own
-  // 'pasado_manana:DATE' markers) when the CLIENT deleted it themselves via the
-  // form link, rather than staff sending it to papelera - `notes` is always
-  // selected regardless of role, unlike the audit `history` array (encargado
-  // doesn't get that one), so this works for both roles.
-  function isClientDeleted(o: any): boolean {
-    return /client_deleted:/.test(o.notes ?? '');
-  }
 
   const restoreMut = useMutation({
     mutationFn: (orderId: string) => api.patch(`/orders/${orderId}/restore`, {}),
@@ -423,7 +425,7 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           )}
           {papeleraOrders.map((o: any) => {
             const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
-            const clientDeleted = isClientDeleted(o);
+            const clientDeleted = !!o.client_deleted;
             return (
               <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
                 title="Ver detalle - quién lo envió a la papelera y cuándo"
