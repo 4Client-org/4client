@@ -45,6 +45,11 @@ export interface ProductSearchHandle {
   // part of a keyboard-nav graph that spans the whole order form, not just what's
   // inside here - e.g. arrowing down from "Domiciliario" needs to land here.
   focusSearch: () => void;
+  // The actual entry point from the parent form's nav graph now - lands on the
+  // collapse/expand toggle header itself (not straight into the search box or a
+  // row), so Enter there can collapse/expand and Down can branch: into the
+  // catalog when expanded, or into the already-added items list when collapsed.
+  focusToggle: () => void;
 }
 
 function groupByCategory(products: Product[]) {
@@ -64,6 +69,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   const [collapsed, setCollapsed] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
   const factboxSearchRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLDivElement>(null);
   // Per-row refs for the CATALOG list (before adding) - unlike the Factbox below,
   // every catalog row is always "live" at once (no single editingRow), so this
   // needs a ref per product id, not one shared pair.
@@ -119,8 +125,18 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     onLocalDirty?.(hasLocal);
   }, [localInputs, onLocalDirty]);
 
+  // Falls back to the item's OWN committed values (not blank) when there's no
+  // in-progress local edit - previously an already-added catalog row always
+  // showed an empty qty/price box (just the checkmark), so re-finding a product
+  // to tweak it meant retyping its quantity AND price from scratch instead of
+  // just editing what's already there. Only used for DISPLAY - commitProduct's
+  // own no-op guard still reads localInputs directly, so a truly-untouched new
+  // catalog row is unaffected.
   function getLocal(name: string) {
-    return localInputs[name] ?? { qty: '', price: '' };
+    if (localInputs[name]) return localInputs[name];
+    const committed = items.find(i => i.product_name === name);
+    if (committed) return { qty: committed.quantity_label, price: parseFloat(committed.price) > 0 ? committed.price : '' };
+    return { qty: '', price: '' };
   }
 
   function setLocal(name: string, field: 'qty' | 'price', val: string) {
@@ -394,7 +410,28 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     // open with their bad value still in it for them to fix.
     commitPendingEdit: () => (editingRow ? saveEdit(editingRow) : items) ?? items,
     focusSearch: () => searchRef.current?.focus(),
+    focusToggle: () => toggleRef.current?.focus(),
   }));
+
+  // Toggle header is itself a stop in the whole-form nav graph, not just a click
+  // target - Enter collapses/expands it in place; Up bubbles back out to whatever
+  // the parent form has above (Método de pago); Down branches depending on state:
+  // expanded -> into the catalog's first row, collapsed -> into the already-added
+  // items list (Factbox) instead, since there's no catalog visible to land in.
+  function handleToggleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); setCollapsed(c => !c); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); onArrowUpFromSearch?.(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!collapsed) {
+        const first = flatVisibleProducts[0];
+        if (first) { catalogQtyRefs.current[first.id]?.focus(); return; }
+        searchRef.current?.focus();
+        return;
+      }
+      if (items.length > 0) editItem(items[0], 'qty');
+    }
+  }
 
   function addManualProduct() {
     const name = manualName.trim();
@@ -471,7 +508,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     <>
       {/* Catalog toggle header */}
       <div
+        ref={toggleRef}
+        tabIndex={0}
         onClick={() => setCollapsed(c => !c)}
+        onKeyDown={handleToggleKeyDown}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
           padding: '8px 12px', background: 'var(--bg)', borderRadius: 'var(--rad)',
@@ -505,9 +545,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                   catalogQtyRefs.current[first.id]?.focus();
                   return;
                 }
-                if (e.key === 'ArrowUp' && onArrowUpFromSearch) {
+                if (e.key === 'ArrowUp') {
                   e.preventDefault();
-                  onArrowUpFromSearch();
+                  toggleRef.current?.focus();
                 }
               }} />
             {search && (
@@ -617,6 +657,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               if (e.key === 'ArrowDown' && visibleItems.length > 0) {
                 e.preventDefault();
                 editItem(visibleItems[0], 'qty');
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                toggleRef.current?.focus();
               }
             }}
           />

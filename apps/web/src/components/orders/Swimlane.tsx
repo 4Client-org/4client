@@ -167,15 +167,10 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
 
   const searchNorm = normalizeSearch(search);
 
-  const filteredTickets = tickets.filter((t) =>
-    !searchNorm || normalizeSearch(t.customer_name).includes(searchNorm) || t.phone.includes(search)
-  );
-
   // Matches every field staff might actually search by, not just name/order#/
   // address - domiciliario, payment method (by its Spanish label, not the raw
   // 'cod'/'transfer' value), the linked ticket's phone, and the order's total.
-  const filteredOrders = orders.filter((o) => {
-    if (o.status === 'papelera') return false;
+  function orderMatchesSearch(o: Order): boolean {
     if (!searchNorm) return true;
     const total = o.items.reduce((sum, i) => sum + Number(i.price), 0);
     const linkedTicket = tickets.find((t) => t.id === o.ticket_id);
@@ -186,6 +181,19 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
       || normalizeSearch(o.employee?.name ?? '').includes(searchNorm)
       || String(total).includes(search)
       || (linkedTicket?.phone.includes(search) ?? false);
+  }
+
+  const filteredOrders = orders.filter((o) => o.status !== 'papelera' && orderMatchesSearch(o));
+
+  // A ticket shows if IT matches (name/phone) OR any of its own orders match
+  // (domiciliario, pago, dirección, monto, etc.) - previously these were two
+  // independent filters, so searching "julio" (a domiciliario) matched his
+  // orders fine but the ticket row itself never passed its own name/phone-only
+  // check, so the ticket (and its matching order) never rendered at all.
+  const filteredTickets = tickets.filter((t) => {
+    if (!searchNorm) return true;
+    if (normalizeSearch(t.customer_name).includes(searchNorm) || t.phone.includes(search)) return true;
+    return orders.some((o) => o.ticket_id === t.id && o.status !== 'papelera' && orderMatchesSearch(o));
   });
 
   function moveNext(order: Order) {
@@ -297,7 +305,6 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
           borderLeftColor: COL_COLORS[ord.status],
           cursor: (ord.locked || frozen) ? 'default' : 'grab',
           opacity: frozen ? 0.72 : 1,
-          ...(urg ? { background: '#FFF5F5', borderColor: '#FECACA' } : {}),
         }}
         draggable={!ord.locked && !frozen}
         onDragStart={(e) => !frozen && handleDragStart(e, ord, ticketId)}
@@ -473,7 +480,19 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="slane slane-header" style={{ position: 'sticky', top: redZoneHeight, zIndex: 150 }}>
           <div className="slane-hcell wpp-col">
             <MessageSquare size={14} strokeWidth={2.5} /> Conversaciones WPP
-            <span style={{ marginLeft: 'auto', background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setCollapsedTickets(new Set(tickets.map((t) => t.id))); }}
+              title="Contraer todos los tickets"
+              style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--vd)', display: 'flex', alignItems: 'center', padding: 3 }}>
+              <ChevronUp size={14} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setCollapsedTickets(new Set()); }}
+              title="Expandir todos los tickets"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--vd)', display: 'flex', alignItems: 'center', padding: 3 }}>
+              <ChevronDown size={14} />
+            </button>
+            <span style={{ background: 'var(--b)', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
               {filteredTickets.length}
             </span>
           </div>
@@ -512,7 +531,12 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
               ? activeOrderStatuses.reduce((furthest, s) =>
                   STATUS_ORDER.indexOf(s) < STATUS_ORDER.indexOf(furthest) ? s : furthest)
               : null;
-            const statusTintStyle = (!urg && furthestBehindStatus)
+            // Urgency no longer paints the row red - the ZONA ROJA banner up top is
+            // the one place that alert lives now (a T-xx button that jumps straight
+            // to the chat); painting every urgent row red too just drowned out the
+            // per-status color underneath it, which is what actually helps at a
+            // glance ("this one's still preparando", "this one's ya listo").
+            const statusTintStyle = furthestBehindStatus
               ? { background: COL_BG[furthestBehindStatus], borderRightColor: COL_COLORS[furthestBehindStatus] }
               : undefined;
             const isCollapsed = collapsedTickets.has(ticket.id);
@@ -536,7 +560,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
               return (
                 <div key={ticket.id} style={{ display: 'contents' }}>
                   <div
-                    className={`slane-tcell${urg ? ' urg' : ''}`}
+                    className="slane-tcell"
                     style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 0, padding: '7px 12px', cursor: 'pointer', ...statusTintStyle }}
                     onClick={() => toggleCollapseTicket(ticket.id)}
                   >
@@ -557,7 +581,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
 
             return (
               <div key={ticket.id} style={{ display: 'contents' }}>
-                <div className={`slane-tcell${urg ? ' urg' : ''}`} onClick={() => onOpenTicket(ticket.id)}
+                <div className="slane-tcell" onClick={() => onOpenTicket(ticket.id)}
                   style={{ opacity: isTicketGhost ? 0.72 : 1, ...statusTintStyle }}>
                   {ticket.unread_count > 0 && <div className="tk-new-dot">{ticket.unread_count}</div>}
                   {/* Button sits right next to tk-num on the LEFT, not the top-right

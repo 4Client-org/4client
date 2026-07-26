@@ -191,7 +191,7 @@ function codDisplay(choice: string | null | undefined, amount: any, total: numbe
 function buildOrderSelect(includeHistory = false) {
   return {
     id: true, org_id: true, ticket_id: true, num: true,
-    customer_name: true, customer_phone: true, address: true,
+    customer_name: true, client_contact_name: true, customer_phone: true, address: true,
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
@@ -254,13 +254,19 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // are globally-unique ids, not scoped per org). Without this, a crafted id
     // belonging to a different organization would still satisfy the foreign key and
     // silently attach this order to another tenant's ticket/employee.
+    // Snapshot of the ticket's contact name at creation time, for orders WITH a
+    // ticket - see schema.prisma's own comment on client_contact_name. A
+    // ticket-less order (channel 'call') falls back to whatever customer_name
+    // staff typed in below (createFn), same as before this field existed.
+    let clientContactName: string | undefined;
     if (rest.ticket_id) {
-      const ticket = await fastify.prisma.ticket.findFirst({ where: { id: rest.ticket_id, org_id: req.user.orgId }, select: { phone: true } });
+      const ticket = await fastify.prisma.ticket.findFirst({ where: { id: rest.ticket_id, org_id: req.user.orgId }, select: { phone: true, customer_name: true } });
       if (!ticket) return reply.status(400).send({ error: 'Ticket no encontrado', code: 'VALIDATION_ERROR' });
       // The customer's phone is always the WhatsApp number the conversation is
       // actually on, never a value typed into a form - whatever customer_phone the
       // request sent gets overridden here rather than trusted.
       rest.customer_phone = ticket.phone;
+      clientContactName = ticket.customer_name ?? rest.customer_name;
     }
     if (rest.employee_id) {
       const employee = await fastify.prisma.employee.findFirst({ where: { id: rest.employee_id, org_id: req.user.orgId }, select: { id: true } });
@@ -287,6 +293,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           num,
           registered_by: req.user.userId,
           fecha: fechaDate,
+          client_contact_name: clientContactName ?? rest.customer_name,
           items: { create: items },
         },
         select: buildOrderSelect(false),
@@ -442,6 +449,15 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return String(val);
     }
 
+    // A field edit that lands on an already-LOCKED order only ever gets here
+    // because it's admin/dev (see the guard above - anyone else was already
+    // rejected) - flagged in `notes` so it's visibly distinguishable in the
+    // Historial from a normal pre-close edit, not silently indistinguishable.
+    // Item add/remove/modify entries below already reveal this indirectly via
+    // their own "Estado al ... :" notes; this brings the same visibility to
+    // Nombre/Dirección/Método de pago/Domiciliario/Notas edits, which had none.
+    const postLockNote = existing.locked ? `Editado después de cerrado (estado: ${existing.status})` : undefined;
+
     for (const [key, label] of Object.entries(trackFields)) {
       const newVal = (fields as any)[key];
       const oldVal = (existing as any)[key];
@@ -451,6 +467,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           action_type: 'edit', field: label,
           value_before: displayVal(key, oldVal),
           value_after: displayVal(key, newVal),
+          notes: postLockNote,
         });
       }
     }
@@ -473,6 +490,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
           action_type: 'edit', field: 'Pago en efectivo',
           value_before: before, value_after: after,
+          notes: postLockNote,
         });
       }
     }
@@ -661,6 +679,42 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     });
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:moved', { orderId: id, newStatus: body.data.status });
+    return reply.send({ data: updated });
+  });
+
+  // PATCH /api/v1/orders/:id/restore - pulls an order back out of papelera, most
+  // commonly one the CLIENT deleted from their own form link (public.ts's own
+  // POST /order/:orderId/delete, which marks it with a 'client_deleted:' note
+  // instead of just silently trashing it) - staff review it here and either leave
+  // it in papelera or bring it back to life. Deliberately its own route rather
+  // than reusing PATCH /:id/status: that one has no notion of "only FROM
+  // papelera", and always landing back on 'nuevo' regardless of whatever status
+  // it was in before getting trashed is the right call either way (it needs a
+  // fresh look, not a blind resume mid-flight).
+  fastify.patch('/:id/restore', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    if (existing.status !== 'papelera') return reply.status(400).send({ error: 'Este pedido no está en la papelera', code: 'NOT_IN_PAPELERA' });
+
+    const updated = await fastify.prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id },
+        data: { status: 'nuevo', updated_at: new Date() },
+        select: buildOrderSelect(false),
+      });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'restaurado', field: 'Estado',
+          value_before: 'papelera', value_after: 'nuevo',
+          notes: 'Restaurado desde la papelera',
+        },
+      });
+      return order;
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:moved', { orderId: id, newStatus: 'nuevo' });
     return reply.send({ data: updated });
   });
 

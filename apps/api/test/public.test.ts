@@ -142,28 +142,34 @@ describe('public form routes', () => {
     expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg', price: 3000 }]);
   });
 
-  it('the device lock only guards /submit - viewing form-info/products from a different device_token still works, only submitting from one does not', async () => {
-    // Merely looking (GET) never claims or checks a device - only a real submit does
-    // (see public.ts's assertDeviceOk comment: this used to run on every request,
-    // which broke iPhone links whose first "open" was WhatsApp's own in-app browser
-    // previewing it before the customer ever reached Safari).
-    const formInfo = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=some-other-device&phone_last4=${PHONE4}` });
+  it('the link is not locked to whichever device opened/submitted it first - any device presenting the same token can view AND submit', async () => {
+    // A staff member testing the link (or the customer switching phones, or
+    // WhatsApp's own in-app browser previewing it before Safari) must never lock
+    // out every OTHER device from then on - the token itself is the only security
+    // boundary now (see loadTicketByFormToken's own comment), not a first-claimer
+    // device_token. Uses its OWN ticket/token (not the describe block's shared
+    // one) so this submit doesn't add a real order the later "merge never counts
+    // against the per-link cap" test isn't expecting.
+    const multiPhone = '573001112201';
+    const multiTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: multiPhone, customer_name: 'Cliente Multi Device' } });
+    const multiToken = await issueFormToken(app, multiTicket.id, orgId);
+
+    const formInfo = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${multiToken}&device_token=some-other-device&phone_last4=2201` });
     expect(formInfo.statusCode).toBe(200);
 
-    const products = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${token}&device_token=some-other-device&phone_last4=${PHONE4}` });
+    const products = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${multiToken}&device_token=some-other-device&phone_last4=2201` });
     expect(products.statusCode).toBe(200);
 
-    // firstOrderId's earlier submit (above) already claimed the ticket for DEVICE -
-    // a different device_token submitting now is rejected.
+    // A different device_token submitting now still succeeds - no lock to reject it.
     const submit = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token, device_token: 'some-other-device', phone_last4: PHONE4, address: 'Calle Test 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { token: multiToken, device_token: 'some-other-device', phone_last4: '2201', address: 'Calle Test 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
-    expect(submit.statusCode).toBe(401);
+    expect(submit.statusCode).toBe(201);
 
-    // The original device is unaffected - still works fine.
-    const stillOk = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=${DEVICE}&phone_last4=${PHONE4}` });
+    // A yet-different device is unaffected too - still works fine against the same token.
+    const stillOk = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${multiToken}&device_token=yet-another-device&phone_last4=2201` });
     expect(stillOk.statusCode).toBe(200);
   });
 
@@ -592,9 +598,9 @@ describe('public form routes', () => {
       expect(del.json().code).toBe('NOT_EDITABLE');
     });
 
-    it('rejects a device_token that does not match the one already locked to this ticket', async () => {
+    it('a different device_token than the one that created the order can still delete it - same token, no device lock', async () => {
       const phone = '573001112273';
-      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Delete Device Mismatch' } });
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Delete Otro Device' } });
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
@@ -604,12 +610,12 @@ describe('public form routes', () => {
 
       const del = await app.inject({
         method: 'POST', url: `/api/v1/public/order/${orderId}/delete`,
-        payload: { token, device_token: 'device-impostor' },
+        payload: { token, device_token: 'device-otro' },
       });
-      expect(del.statusCode).toBe(401);
+      expect(del.statusCode).toBe(200);
 
       const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-      expect(after.status).toBe('nuevo');
+      expect(after.status).toBe('papelera');
     });
 
     it('rejects an order belonging to a different ticket than the one the token was issued for', async () => {

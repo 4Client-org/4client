@@ -42,7 +42,6 @@ export async function generateFormLinkUrl(
     },
   });
   await fastify.prisma.revokedFormToken.deleteMany({ where: { ticket_id: ticketId, org_id: orgId } });
-  await fastify.prisma.formLinkSession.deleteMany({ where: { ticket_id: ticketId } });
 
   const frontendUrl = config.FRONTEND_URL.split(',')[0].trim();
   return `${frontendUrl}/form?t=${token}`;

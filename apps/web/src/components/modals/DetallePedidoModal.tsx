@@ -132,12 +132,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     }
     if (field === 'pago') {
       if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
-      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusSearch(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
       if (e.key === 'ArrowRight') { e.preventDefault(); empleadoRef.current?.focus(); return; }
     }
     if (field === 'empleado') {
       if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
-      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusSearch(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusToggle(); return; }
       if (e.key === 'ArrowLeft') { e.preventDefault(); pagoRef.current?.focus(); return; }
     }
   }
@@ -405,6 +405,19 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const papeleraMut = useMutation({
     mutationFn: () => api.patch(`/orders/${orderId}/status`, { status: 'papelera' }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); toast('Pedido enviado a papelera'); onClose(); },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  // Pulls a papelera order back to 'nuevo' - most relevant for one the CLIENT
+  // deleted themselves via the form (see the warning banner below), but works on
+  // any papelera order.
+  const restoreMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}/restore`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      toast('Pedido restaurado');
+    },
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -779,6 +792,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // (who actually runs day-to-day fulfillment) still needs this specific signal.
   const direccionFromClient = !!order?.address_changed_by_client;
   const pagoFromClient = !!order?.payment_changed_by_client;
+  // `notes` carries a `client_deleted:TIMESTAMP` marker (appended, never
+  // overwritten) when the CLIENT deleted this order themselves via the form link
+  // (public.ts's POST /order/:orderId/delete) rather than staff sending it to
+  // papelera - same "append a marker to notes" convention cierre.ts already uses
+  // for its own deferral markers, chosen specifically because `notes` (unlike the
+  // audit `history` array) is visible to encargado too, not just admin/dev.
+  const clientDeletedThisOrder = order?.status === 'papelera' && /client_deleted:/.test(order?.notes ?? '');
   // A pedido can't be closed with any of these missing - mirrors the same check enforced
   // server-side in POST /orders/:id/cobro, so the UI blocks it before the request even goes out.
   const cierreMissing: string[] = [];
@@ -996,6 +1016,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                     <div><span style={{ color: 'var(--gt)' }}>Vuelto: </span><strong>{fmtCOP(Number(order.change_amount ?? 0))}</strong></div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {clientDeletedThisOrder && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={15} /> El cliente eliminó este pedido desde el formulario.
+                </span>
+                {canManage && (
+                  <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
+                  </button>
+                )}
               </div>
             )}
 

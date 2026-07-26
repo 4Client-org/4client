@@ -18,11 +18,14 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         include: { items: true },
       }),
       // NOT scoped to `fecha` like everything else here - a crédito order stays
-      // unpaid (and on this list) for as long as it takes to actually collect,
-      // which routinely spans well past the day it was created. The Créditos tab
-      // needs to see all of them at once (with its own search), not just today's.
+      // relevant (unpaid, on this list) for as long as it takes to actually
+      // collect, which routinely spans well past the day it was created. Not
+      // filtered by `paid` either anymore - the Créditos tab now has its own
+      // Pagados/No pagados sub-tabs, so it needs BOTH to split between them
+      // (previously paying one just made it vanish from here entirely, with no
+      // way to look it back up).
       fastify.prisma.order.findMany({
-        where: { org_id: req.user.orgId, payment_method: 'credito', paid: false },
+        where: { org_id: req.user.orgId, payment_method: 'credito' },
         include: { items: true, employee: { select: { id: true, name: true } } },
         orderBy: { fecha: 'desc' },
       }),

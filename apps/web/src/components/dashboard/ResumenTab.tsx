@@ -44,20 +44,46 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
   const [showBlockAllConfirm, setShowBlockAllConfirm] = useState(false);
   // Not scoped to `fecha` like the rest of this page - crédito orders can be from
   // any day (see dashboard.ts's own creditoOrders query), so this searches by
-  // name, address, date, whatever matches, across the whole list at once.
+  // name, address, date, monto, artículos - whatever matches, across the whole
+  // list at once. Also split Pagados/No pagados below (dashboard.ts now sends
+  // both, not just unpaid ones).
   const [creditoSearch, setCreditoSearch] = useState('');
+  const [creditoSubTab, setCreditoSubTab] = useState<'no_pagados' | 'pagados'>('no_pagados');
+  const creditoNoPagados = useMemo(() => creditoOrders.filter((o: any) => !o.paid), [creditoOrders]);
+  const creditoPagados = useMemo(() => creditoOrders.filter((o: any) => o.paid), [creditoOrders]);
   const filteredCreditoOrders = useMemo(() => {
+    const list = creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados;
     const q = normalizeSearch(creditoSearch);
-    if (!q) return creditoOrders;
-    return creditoOrders.filter((o: any) => {
+    if (!q) return list;
+    return list.filter((o: any) => {
       const fechaStr = o.fecha ? new Date(o.fecha).toISOString().split('T')[0] : '';
-      return normalizeSearch(o.customer_name ?? '').includes(q)
+      const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+      const itemsText = (o.items ?? []).map((i: any) => `${i.quantity_label ?? ''} ${i.product_name ?? ''}`).join(' ');
+      return normalizeSearch(o.client_contact_name ?? o.customer_name ?? '').includes(q)
         || normalizeSearch(o.address ?? '').includes(q)
         || normalizeSearch(o.employee?.name ?? '').includes(q)
+        || normalizeSearch(itemsText).includes(q)
         || (o.num ?? '').includes(creditoSearch)
-        || fechaStr.includes(creditoSearch);
+        || fechaStr.includes(creditoSearch)
+        || String(total).includes(creditoSearch);
     });
-  }, [creditoOrders, creditoSearch]);
+  }, [creditoNoPagados, creditoPagados, creditoSubTab, creditoSearch]);
+
+  // A papelera order carries a `client_deleted:TIMESTAMP` marker in its `notes`
+  // (appended, never overwritten - same convention cierre.ts uses for its own
+  // 'pasado_manana:DATE' markers) when the CLIENT deleted it themselves via the
+  // form link, rather than staff sending it to papelera - `notes` is always
+  // selected regardless of role, unlike the audit `history` array (encargado
+  // doesn't get that one), so this works for both roles.
+  function isClientDeleted(o: any): boolean {
+    return /client_deleted:/.test(o.notes ?? '');
+  }
+
+  const restoreMut = useMutation({
+    mutationFn: (orderId: string) => api.patch(`/orders/${orderId}/restore`, {}),
+    onSuccess: () => toast('Pedido restaurado'),
+    onError: (e: any) => toast(e.message ?? 'No se pudo restaurar el pedido', true),
+  });
 
   // Emergency kill switch - e.g. the store closes early one day and every form link
   // sent out today needs to die right now, not just the one someone remembers to
@@ -272,7 +298,7 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
         </button>
         <button className={`atab${resumenTab === 'credito' ? ' on' : ''}`} onClick={() => setResumenTab('credito')}>
           <Wallet size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
-          Crédito ({creditoOrders.length})
+          Crédito ({creditoNoPagados.length})
         </button>
         <button className={`atab${resumenTab === 'cambios' ? ' on' : ''}`} onClick={() => setResumenTab('cambios')}>
           <History size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
@@ -397,16 +423,28 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           )}
           {papeleraOrders.map((o: any) => {
             const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+            const clientDeleted = isClientDeleted(o);
             return (
               <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
                 title="Ver detalle - quién lo envió a la papelera y cuándo"
-                style={{ cursor: 'pointer' }}>
+                style={{ cursor: 'pointer', ...(clientDeleted ? { border: '1.5px solid var(--r)' } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.customer_name}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Trash2 size={11} /> {new Date(o.updated_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                   </span>
                 </div>
+                {clientDeleted && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--rc)', color: 'var(--r)', borderRadius: 8, padding: '5px 9px', marginBottom: 6, fontSize: 12, fontWeight: 800 }}>
+                    <span>⚠ Eliminado por el cliente</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); restoreMut.mutate(o.id); }}
+                      disabled={restoreMut.isPending}
+                      style={{ background: 'var(--v)', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 9px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                      Restaurar
+                    </button>
+                  </div>
+                )}
                 <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>{o.address}</div>
                 <div style={{ fontSize: 13, color: 'var(--gt)' }}>
                   {o.items?.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
@@ -422,19 +460,27 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
 
       {resumenTab === 'credito' && (
         <div style={{ padding: '4px 0' }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <button className={`atab${creditoSubTab === 'no_pagados' ? ' on' : ''}`} onClick={() => setCreditoSubTab('no_pagados')}>
+              No pagados ({creditoNoPagados.length})
+            </button>
+            <button className={`atab${creditoSubTab === 'pagados' ? ' on' : ''}`} onClick={() => setCreditoSubTab('pagados')}>
+              Pagados ({creditoPagados.length})
+            </button>
+          </div>
           <div className="sbx" style={{ margin: '0 0 12px', maxWidth: 320 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gt)' }}>
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input type="text" placeholder="Buscar por nombre, dirección, domiciliario o fecha..."
+            <input type="text" placeholder="Buscar por nombre, dirección, domiciliario, fecha, monto o artículo..."
               value={creditoSearch} onChange={(e) => setCreditoSearch(e.target.value)} />
           </div>
-          {creditoOrders.length === 0 && (
+          {(creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados).length === 0 && (
             <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
-              No hay pedidos a crédito pendientes de pago
+              {creditoSubTab === 'pagados' ? 'No hay créditos pagados' : 'No hay pedidos a crédito pendientes de pago'}
             </div>
           )}
-          {creditoOrders.length > 0 && filteredCreditoOrders.length === 0 && (
+          {(creditoSubTab === 'pagados' ? creditoPagados : creditoNoPagados).length > 0 && filteredCreditoOrders.length === 0 && (
             <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
               Sin resultados para "{creditoSearch}"
             </div>
@@ -446,11 +492,20 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                 title="Ver pedido - marcar el crédito como pagado se hace ahí"
                 style={{ cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.customer_name}</span>
+                  {/* client_contact_name (the WhatsApp contact's name, snapshotted
+                      at creation, never editable afterward) - not o.customer_name,
+                      which staff can freely retype per-order and which a crédito
+                      debt record must never silently drift away from. */}
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gt)' }}>
                     {o.fecha ? new Date(o.fecha).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' }) : ''}
                   </span>
                 </div>
+                {o.client_contact_name && o.customer_name && o.client_contact_name !== o.customer_name && (
+                  <div style={{ fontSize: 11, color: 'var(--gt)', marginBottom: 3, fontStyle: 'italic' }}>
+                    Pedido a nombre de: {o.customer_name}
+                  </div>
+                )}
                 <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>{o.address}</div>
                 {o.employee?.name && (
                   <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>Domiciliario: {o.employee.name}</div>
@@ -458,8 +513,8 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                 <div style={{ fontSize: 13, color: 'var(--gt)' }}>
                   {o.items?.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
                 </div>
-                <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: '#DC2626' }}>
-                  {fmtCOP(total)} · Pendiente de pago
+                <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: o.paid ? 'var(--v)' : '#DC2626' }}>
+                  {fmtCOP(total)} · {o.paid ? 'Pagado' : 'Pendiente de pago'}
                 </div>
               </div>
             );

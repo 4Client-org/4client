@@ -226,6 +226,16 @@ model Order {
   ticket_id       String?   @db.Uuid
   num             String    @db.VarChar(10)
   customer_name   String    @db.VarChar(200)
+  // Snapshot of the contact's name (ticket.customer_name, i.e. the WhatsApp
+  // profile name) taken ONCE at order creation and never touched by any later
+  // update (updateOrderSchema deliberately has no field for it) - unlike
+  // `customer_name` above, which staff can freely retype per-order (e.g. to fix a
+  // typo, or write a delivery-recipient's name instead of the account holder's).
+  // Crédito specifically needs a name that can't drift out from under the debt
+  // record no matter what gets edited on the order later - this is that anchor.
+  // Null for orders with no ticket (channel 'call') or created before this field
+  // existed - callers fall back to `customer_name` in that case.
+  client_contact_name String? @db.VarChar(200)
   customer_phone  String?   @db.VarChar(20)
   address         String
   channel         String    @default("whatsapp") @db.VarChar(20)

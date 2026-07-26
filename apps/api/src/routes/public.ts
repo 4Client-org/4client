@@ -160,38 +160,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     return ticket;
   }
 
-  // Claims this ticket's form-link for whichever browser SUBMITS first. There's no
-  // real device identity reachable from a web page - deviceToken is a random value
-  // the client generates once and keeps in its own localStorage (ClientFormPage.tsx),
-  // sent on every request. Only /submit calls this (form-info and /products don't) -
-  // it used to run on every request including the merely-read-only ones, which
-  // claimed the ticket the moment the link was so much as opened. On iPhone that
-  // broke real orders: WhatsApp often opens a tapped link in its own in-app browser
-  // first (separate localStorage from Safari), so that preview silently claimed the
-  // slot with a throwaway device_token before the customer ever got to Safari -
-  // their real, second open then got flatly rejected as "device mismatch". Only
-  // gating the actual write means looking at the catalog can't burn the claim;
-  // rejecting a second submitter from a different device is the one place this was
-  // ever meant to matter. The find-then-create dance (instead of a plain upsert) is
-  // so two submits racing each other read back whatever the winner actually claimed
-  // instead of erroring.
-  async function assertDeviceOk(ticketId: string, deviceToken: string): Promise<void> {
-    if (!deviceToken) throw new Error('device token required');
-    let session = await fastify.prisma.formLinkSession.findUnique({ where: { ticket_id: ticketId } });
-    if (!session) {
-      try {
-        session = await fastify.prisma.formLinkSession.create({ data: { ticket_id: ticketId, device_token: deviceToken } });
-      } catch (err) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          session = await fastify.prisma.formLinkSession.findUnique({ where: { ticket_id: ticketId } });
-        } else {
-          throw err;
-        }
-      }
-    }
-    if (!session || session.device_token !== deviceToken) throw new Error('device mismatch');
-  }
-
   // Orders a client may see/act on via the form are scoped to TODAY (Colombia local) -
   // matches the link's own <=24h lifetime, and "editable" mirrors what staff can still
   // change too: once an order is 'camino' or 'cerrado', only staff can touch it from
@@ -246,8 +214,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     try {
       const ticket = await loadTicketByFormToken(q.data.t);
 
-      // First successful open of THIS link - stamps it so loadTicketByFormToken's
-      // 4-hour-unopened check never fires again for it (see that function).
+      // First successful open of THIS link - stamped for display purposes only now
+      // (loadTicketByFormToken's expiry check is a flat 24h from issuance regardless
+      // of whether/when it was ever opened).
       if (!ticket.form_link_opened_at) {
         await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { form_link_opened_at: new Date() } });
       }
@@ -360,7 +329,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     let ticket: Awaited<ReturnType<typeof loadTicketByFormToken>>;
     try {
       ticket = await loadTicketByFormToken(body.data.token);
-      await assertDeviceOk(ticket.id, body.data.device_token);
     } catch (err) {
       return sendInvalidToken(err, reply);
     }
@@ -627,6 +595,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           ticket_id: ticket.id,
           num,
           customer_name: ticket.customer_name ?? '',
+          // Snapshot at creation time, never touched afterward - see
+          // schema.prisma's own comment on client_contact_name. Matches
+          // orders.ts's own staff-side order creation.
+          client_contact_name: ticket.customer_name ?? '',
           customer_phone: ticket.phone,
           address: body.data.address,
           channel: 'whatsapp',
@@ -803,7 +775,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     let ticket: Awaited<ReturnType<typeof loadTicketByFormToken>>;
     try {
       ticket = await loadTicketByFormToken(body.data.token);
-      await assertDeviceOk(ticket.id, body.data.device_token);
     } catch (err) {
       return sendInvalidToken(err, reply);
     }
@@ -824,8 +795,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const actorUser = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
+    // A marker appended to `notes` (never overwritten), same convention cierre.ts
+    // already uses for its own 'pasado_manana:DATE' deferral markers - lets staff
+    // (admin AND encargado, `notes` is always selected regardless of role, unlike
+    // the audit `history` array which encargado no longer sees at all) tell a
+    // client-initiated delete apart from a staff one at a glance, without a schema
+    // change. The Papelera list/detail view checks for this to show a warning
+    // badge + a "Restaurar" action.
+    const deletedMarker = `client_deleted:${Date.now()}`;
+    const newNotes = order.notes ? `${order.notes}\n${deletedMarker}` : deletedMarker;
+
     await fastify.prisma.$transaction([
-      fastify.prisma.order.update({ where: { id: order.id }, data: { status: 'papelera', client_modified: true } }),
+      fastify.prisma.order.update({ where: { id: order.id }, data: { status: 'papelera', client_modified: true, notes: newNotes } }),
       fastify.prisma.orderHistory.create({
         data: {
           org_id: ticket.org_id, order_id: order.id, actor_id: actorUser.id,
