@@ -6,6 +6,7 @@ import {
   MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
+import { normalizeSearch } from '../../lib/normalize';
 import { downloadCierreCSV } from '../../lib/csv';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { api } from '../../lib/api';
@@ -29,17 +30,34 @@ interface Props {
   setFecha: (d: string) => void;
   dashboard: any;
   papeleraOrders: any[];
+  creditoOrders: any[];
   history: any[];
   orders: any[];
   onCierreCaja: () => void;
   onOpenOrder: (orderId: string) => void;
 }
 
-export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, history, onCierreCaja, onOpenOrder }: Props) {
-  const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'cambios'>('activos');
+export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, creditoOrders, history, onCierreCaja, onOpenOrder }: Props) {
+  const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'credito' | 'cambios'>('activos');
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showBlockAllConfirm, setShowBlockAllConfirm] = useState(false);
+  // Not scoped to `fecha` like the rest of this page - crédito orders can be from
+  // any day (see dashboard.ts's own creditoOrders query), so this searches by
+  // name, address, date, whatever matches, across the whole list at once.
+  const [creditoSearch, setCreditoSearch] = useState('');
+  const filteredCreditoOrders = useMemo(() => {
+    const q = normalizeSearch(creditoSearch);
+    if (!q) return creditoOrders;
+    return creditoOrders.filter((o: any) => {
+      const fechaStr = o.fecha ? new Date(o.fecha).toISOString().split('T')[0] : '';
+      return normalizeSearch(o.customer_name ?? '').includes(q)
+        || normalizeSearch(o.address ?? '').includes(q)
+        || normalizeSearch(o.employee?.name ?? '').includes(q)
+        || (o.num ?? '').includes(creditoSearch)
+        || fechaStr.includes(creditoSearch);
+    });
+  }, [creditoOrders, creditoSearch]);
 
   // Emergency kill switch - e.g. the store closes early one day and every form link
   // sent out today needs to die right now, not just the one someone remembers to
@@ -252,6 +270,10 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           <Trash2 size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
           Papelera ({papeleraOrders.length})
         </button>
+        <button className={`atab${resumenTab === 'credito' ? ' on' : ''}`} onClick={() => setResumenTab('credito')}>
+          <Wallet size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
+          Crédito ({creditoOrders.length})
+        </button>
         <button className={`atab${resumenTab === 'cambios' ? ' on' : ''}`} onClick={() => setResumenTab('cambios')}>
           <History size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
           Cambios ({history.length})
@@ -391,6 +413,53 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                 </div>
                 <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700 }}>
                   {fmtCOP(total)} · {PAYMENT_LABEL[o.payment_method] ?? o.payment_method}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {resumenTab === 'credito' && (
+        <div style={{ padding: '4px 0' }}>
+          <div className="sbx" style={{ margin: '0 0 12px', maxWidth: 320 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gt)' }}>
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input type="text" placeholder="Buscar por nombre, dirección, domiciliario o fecha..."
+              value={creditoSearch} onChange={(e) => setCreditoSearch(e.target.value)} />
+          </div>
+          {creditoOrders.length === 0 && (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
+              No hay pedidos a crédito pendientes de pago
+            </div>
+          )}
+          {creditoOrders.length > 0 && filteredCreditoOrders.length === 0 && (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--gt)', fontSize: 14 }}>
+              Sin resultados para "{creditoSearch}"
+            </div>
+          )}
+          {filteredCreditoOrders.map((o: any) => {
+            const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
+            return (
+              <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
+                title="Ver pedido - marcar el crédito como pagado se hace ahí"
+                style={{ cursor: 'pointer' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.customer_name}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gt)' }}>
+                    {o.fecha ? new Date(o.fecha).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' }) : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>{o.address}</div>
+                {o.employee?.name && (
+                  <div style={{ fontSize: 13, color: 'var(--gt)', marginBottom: 3 }}>Domiciliario: {o.employee.name}</div>
+                )}
+                <div style={{ fontSize: 13, color: 'var(--gt)' }}>
+                  {o.items?.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' · ')}
+                </div>
+                <div style={{ fontSize: 13, marginTop: 4, fontWeight: 700, color: '#DC2626' }}>
+                  {fmtCOP(total)} · Pendiente de pago
                 </div>
               </div>
             );

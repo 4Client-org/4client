@@ -153,7 +153,19 @@ export default function MainPage() {
     clearAuth();
   }
 
+  // Was always opening NuevoPedidoModal, unconditionally - a second click on the
+  // same ticket (or just forgetting a pedido already exists for it) created a
+  // genuine duplicate order instead of just reopening the one already in
+  // progress. Now: if the ticket already has one still short of camino/
+  // entregado/cerrado/papelera, open THAT to edit instead - only falls through
+  // to actually creating a new one when there's truly nothing left to resume.
+  const TERMINAL_STATUSES = ['camino', 'entregado', 'cerrado', 'papelera'];
   function handleCreateFromTicket(ticket: Ticket) {
+    const resumable = ticket.orders.find((o) => !TERMINAL_STATUSES.includes(o.status));
+    if (resumable) {
+      setOpenOrderId(resumable.id);
+      return;
+    }
     setFromTicket({
       ticketId: ticket.id,
       nombre: ticket.customer_name,
@@ -294,6 +306,7 @@ export default function MainPage() {
               setFecha={setFecha}
               dashboard={dashboard}
               papeleraOrders={papeleraOrders}
+              creditoOrders={dashboard?.creditoOrders ?? []}
               history={history}
               orders={orders}
               onCierreCaja={() => setShowCierre(true)}

@@ -23,6 +23,11 @@ interface Props {
   onChange: (items: Item[]) => void;
   onLocalDirty?: (dirty: boolean) => void;
   clearKey?: number;
+  // ArrowUp from the catalog search box - the top of this component's own nav
+  // graph - hands focus back OUT to whatever the parent modal has above it
+  // (Método de pago, in DetallePedidoModal). Optional since not every caller
+  // wires this whole-form nav graph (e.g. NuevoPedidoModal).
+  onArrowUpFromSearch?: () => void;
 }
 
 // Exposed so a parent (NuevoPedidoModal/DetallePedidoModal) can force-commit
@@ -36,6 +41,10 @@ interface Props {
 // only visible on the next render, too late for a save already about to happen.
 export interface ProductSearchHandle {
   commitPendingEdit: () => Item[];
+  // Lets the parent modal (DetallePedidoModal) hand focus INTO this component as
+  // part of a keyboard-nav graph that spans the whole order form, not just what's
+  // inside here - e.g. arrowing down from "Domiciliario" needs to land here.
+  focusSearch: () => void;
 }
 
 function groupByCategory(products: Product[]) {
@@ -49,7 +58,7 @@ function groupByCategory(products: Product[]) {
 }
 
 const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
-  { products, items, locked, onChange, onLocalDirty, clearKey }, ref,
+  { products, items, locked, onChange, onLocalDirty, clearKey, onArrowUpFromSearch }, ref,
 ) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState(true);
@@ -384,6 +393,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     // the person already saw the "no puede ser negativo" toast and the row stayed
     // open with their bad value still in it for them to fix.
     commitPendingEdit: () => (editingRow ? saveEdit(editingRow) : items) ?? items,
+    focusSearch: () => searchRef.current?.focus(),
   }));
 
   function addManualProduct() {
@@ -493,6 +503,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                   e.preventDefault();
                   const first = flatVisibleProducts[0];
                   catalogQtyRefs.current[first.id]?.focus();
+                  return;
+                }
+                if (e.key === 'ArrowUp' && onArrowUpFromSearch) {
+                  e.preventDefault();
+                  onArrowUpFromSearch();
                 }
               }} />
             {search && (

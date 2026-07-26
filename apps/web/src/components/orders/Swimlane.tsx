@@ -548,9 +548,14 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                       corner - that corner is where tk-new-dot (absolute, top:5
                       right:5) lands, and used to cover this button whenever a new
                       message arrived. Kept out of that corner regardless of
-                      whether the urgency badge (still right-aligned via its own
-                      marginLeft:auto) is present or not. */}
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
+                      whether the urgency badge is present or not.
+                      tk-urg itself (marginLeft:auto, so it's right-aligned in this
+                      row) gets extra right padding whenever tk-new-dot is actually
+                      showing - tk-new-dot is position:absolute (takes no flow
+                      space), so without this, tk-urg's own right edge lands
+                      exactly where the dot floats and the time text renders
+                      underneath/behind it, unreadable. */}
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3, paddingRight: ticket.unread_count > 0 ? 26 : 0 }}>
                     <span className="tk-num">{tNum}</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleCollapseTicket(ticket.id); }}

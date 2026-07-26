@@ -369,6 +369,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
                   <option value="cod">Cobro en casa</option>
+                  <option value="credito">Crédito</option>
                 </select>
               </div>
               <div className="fg2">

@@ -82,7 +82,6 @@ export default function ClientFormPage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualName, setManualName] = useState('');
   const [manualQty, setManualQty] = useState('');
-  const [manualUnit, setManualUnit] = useState(DEFAULT_UNIT);
   const [address, setAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -298,14 +297,15 @@ export default function ClientFormPage() {
 
   function addManualProduct() {
     const name = manualName.trim();
-    const num = manualQty.trim();
-    if (!name || !num) return;
-    const qty = /^\d/.test(num) ? `${num} ${manualUnit}` : num;
+    // Free text, same as the catalog rows above - no unit dropdown here either
+    // (was confusing where to even type the quantity, buried next to a Kilo/
+    // Libra/... picker that didn't apply to most manually-typed products anyway).
+    const qty = manualQty.trim();
+    if (!name || !qty) return;
     const id = `manual-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
     setSelected(prev => [...prev, { product_name: name, quantity_label: qty, productId: id, isManual: true }]);
     setManualName('');
     setManualQty('');
-    setManualUnit(DEFAULT_UNIT);
     setManualOpen(false);
   }
 
@@ -864,13 +864,6 @@ export default function ClientFormPage() {
                 onKeyDown={e => { if (e.key === 'Enter') addManualProduct(); }}
                 style={{ flex: 1, minWidth: 0, fontSize: 14, padding: '9px 10px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
               />
-              <select
-                value={manualUnit}
-                onChange={e => setManualUnit(e.target.value)}
-                style={{ fontSize: 14, padding: '9px 6px', border: '2px solid #ddd', borderRadius: 10, outline: 'none', fontFamily: 'inherit', color: '#111', background: '#fff' }}
-              >
-                {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
               <button onClick={addManualProduct} disabled={!manualName.trim() || !manualQty.trim()}
                 style={{
                   padding: '9px 14px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 13,
@@ -879,7 +872,7 @@ export default function ClientFormPage() {
                 }}>
                 Agregar
               </button>
-              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); setManualUnit(DEFAULT_UNIT); }}
+              <button onClick={() => { setManualOpen(false); setManualName(''); setManualQty(''); }}
                 style={{ padding: '9px 12px', borderRadius: 10, border: '2px solid #ddd', background: '#fff', color: '#666', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 Cancelar
               </button>

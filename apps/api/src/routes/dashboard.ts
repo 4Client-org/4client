@@ -8,7 +8,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
     const query = z.object({ fecha: z.string().optional() }).parse(req.query);
     const fecha = query.fecha ? new Date(query.fecha) : new Date();
 
-    const [orders, papeleraOrders, history, tickets, dailyClose] = await Promise.all([
+    const [orders, papeleraOrders, creditoOrders, history, tickets, dailyClose] = await Promise.all([
       fastify.prisma.order.findMany({
         where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' } },
         include: { items: true, employee: { select: { id: true, name: true } } },
@@ -16,6 +16,15 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       fastify.prisma.order.findMany({
         where: { org_id: req.user.orgId, fecha, status: 'papelera' },
         include: { items: true },
+      }),
+      // NOT scoped to `fecha` like everything else here - a crédito order stays
+      // unpaid (and on this list) for as long as it takes to actually collect,
+      // which routinely spans well past the day it was created. The Créditos tab
+      // needs to see all of them at once (with its own search), not just today's.
+      fastify.prisma.order.findMany({
+        where: { org_id: req.user.orgId, payment_method: 'credito', paid: false },
+        include: { items: true, employee: { select: { id: true, name: true } } },
+        orderBy: { fecha: 'desc' },
       }),
       fastify.prisma.orderHistory.findMany({
         where: { org_id: req.user.orgId, order: { fecha } },
@@ -107,6 +116,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         },
         orders,
         papeleraOrders,
+        creditoOrders,
         history,
         // `decisions` (per-order action taken at cierre time) travels along too - lets
         // the frontend rebuild the exact same CSV report on demand, any time after the

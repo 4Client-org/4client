@@ -109,6 +109,38 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [empleadoId, setEmpleadoId] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const productSearchRef = useRef<ProductSearchHandle>(null);
+  // Whole-form keyboard nav (Up/Down between field rows, Left/Right within a row)
+  // - nombre -> dirección -> método de pago/domiciliario -> catalog search ->
+  // productos, same direction the eye already reads the form in. Enter opening a
+  // focused <select> and Esc closing it need no extra code at all - that's
+  // already the browser's own default behavior for a native select; the only
+  // thing missing was moving FOCUS between fields with the arrow keys, which
+  // native inputs/selects don't do across different elements on their own.
+  const nombreRef = useRef<HTMLInputElement>(null);
+  const direccionRef = useRef<HTMLInputElement>(null);
+  const pagoRef = useRef<HTMLSelectElement>(null);
+  const empleadoRef = useRef<HTMLSelectElement>(null);
+  function handleFormArrowKeys(e: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, field: 'nombre' | 'direccion' | 'pago' | 'empleado') {
+    // preventDefault before moving focus - without it, ArrowUp/Down on a focused
+    // but CLOSED <select> is the browser's own shortcut for "change the selected
+    // option", which would fight with using those same keys to move between
+    // fields instead.
+    if (field === 'nombre' && e.key === 'ArrowDown') { e.preventDefault(); direccionRef.current?.focus(); return; }
+    if (field === 'direccion') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); nombreRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+    if (field === 'pago') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusSearch(); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); empleadoRef.current?.focus(); return; }
+    }
+    if (field === 'empleado') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); direccionRef.current?.focus(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); productSearchRef.current?.focusSearch(); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); pagoRef.current?.focus(); return; }
+    }
+  }
   const [catalogDirty, setCatalogDirty] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   // Observaciones - independent of the rest of the form's isDirty/Guardar flow on
@@ -373,6 +405,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const papeleraMut = useMutation({
     mutationFn: () => api.patch(`/orders/${orderId}/status`, { status: 'papelera' }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); toast('Pedido enviado a papelera'); onClose(); },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  // Settles a crédito order sometime after it already closed unpaid (POST /:id/
+  // cobro deliberately leaves crédito orders paid:false - see that mutation/route's
+  // own comments) - no password/amount re-entry, that already happened at cobro
+  // time; this just records the money actually came in.
+  const creditoPagadoMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}/credito-pagado`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast('Crédito marcado como pagado');
+    },
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -991,8 +1038,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div className="frow">
               <div className="fg2">
                 <label className="fl2">Nombre del cliente</label>
-                <input className="fi2" disabled={readOnly} value={nombre}
-                  onChange={(e) => { setNombre(e.target.value); touchField('nombre'); }} />
+                <input ref={nombreRef} className="fi2" disabled={readOnly} value={nombre}
+                  onChange={(e) => { setNombre(e.target.value); touchField('nombre'); }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'nombre')} />
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
@@ -1008,8 +1056,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 Dirección
                 {direccionFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
               </label>
-              <input className="fi2" disabled={readOnly} value={direccion}
-                onChange={(e) => { setDireccion(e.target.value); touchField('direccion'); }} />
+              <input ref={direccionRef} className="fi2" disabled={readOnly} value={direccion}
+                onChange={(e) => { setDireccion(e.target.value); touchField('direccion'); }}
+                onKeyDown={(e) => handleFormArrowKeys(e, 'direccion')} />
             </div>
             <div className="frow">
               <div className="fg2">
@@ -1017,24 +1066,27 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   Método de pago
                   {pagoFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
                 </label>
-                <select className="fi2" disabled={readOnly} value={pago}
+                <select ref={pagoRef} className="fi2" disabled={readOnly} value={pago}
                   onChange={(e) => {
                     setPago(e.target.value);
                     // Same reset as NuevoPedidoModal - switching away from (or back
                     // to) 'cod' must not resurrect a stale choice/amount.
                     setCodChoice(null); setCodCash('');
                     touchField('pago');
-                  }}>
+                  }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'pago')}>
                   <option value="sin_asignar">Sin asignar</option>
                   <option value="transfer">Transferencia</option>
                   <option value="cash">Pagado en tienda</option>
                   <option value="cod">Cobro en casa</option>
+                  <option value="credito">Crédito</option>
                 </select>
               </div>
               <div className="fg2">
                 <label className="fl2">Domiciliario</label>
-                <select className="fi2" disabled={readOnly} value={empleadoId}
-                  onChange={(e) => { setEmpleadoId(e.target.value); touchField('empleado'); }}>
+                <select ref={empleadoRef} className="fi2" disabled={readOnly} value={empleadoId}
+                  onChange={(e) => { setEmpleadoId(e.target.value); touchField('empleado'); }}
+                  onKeyDown={(e) => handleFormArrowKeys(e, 'empleado')}>
                   <option value="">Sin asignar</option>
                   {employees.map((emp: any) => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
@@ -1057,6 +1109,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               onChange={(it) => { setItems(it); markDirty(); }}
               onLocalDirty={setCatalogDirty}
               clearKey={catalogClearKey}
+              onArrowUpFromSearch={() => pagoRef.current?.focus()}
             />
 
             {/* Observaciones - a growing list of notes, always addable/editable
@@ -1156,6 +1209,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
             <div className="mactions" style={{ flexWrap: 'wrap' }}>
+              {canManage && order.payment_method === 'credito' && !order.paid && (
+                <button className="bverde"
+                  onClick={() => setConfirmDlg({ msg: '¿Marcar este crédito como pagado?', onOk: () => creditoPagadoMut.mutate() })}
+                  disabled={creditoPagadoMut.isPending}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <CheckCircle size={13} /> {creditoPagadoMut.isPending ? 'Guardando...' : 'Marcar crédito pagado'}
+                </button>
+              )}
               {!readOnly && !locked && canManage && order.status !== 'papelera' && (
                 <button className="bdel"
                   onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
