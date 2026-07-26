@@ -39,7 +39,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         where: { org_id: req.user.orgId, order: { fecha } },
         include: {
           actor: { select: { id: true, name: true } },
-          order: { select: { num: true, customer_name: true } },
+          order: { select: { num: true, customer_name: true, client_contact_name: true } },
         },
         orderBy: { created_at: 'desc' },
         take: 300,

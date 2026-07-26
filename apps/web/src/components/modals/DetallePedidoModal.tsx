@@ -161,6 +161,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // Textarea Up/Down normally moves the cursor between lines - only intercepted
   // at the very top/bottom line (no '\n' before/after the cursor), so multi-line
   // notes still work normally for internal cursor movement.
+  const saveObsBtnRef = useRef<HTMLButtonElement>(null);
   function handleObsArrowKeys(e: KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget;
     if (e.key === 'ArrowUp' && el.value.slice(0, el.selectionStart ?? 0).indexOf('\n') === -1) {
@@ -170,13 +171,20 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     }
     if (e.key === 'ArrowDown' && el.value.slice(el.selectionEnd ?? el.value.length).indexOf('\n') === -1) {
       e.preventDefault();
+      saveObsBtnRef.current?.focus();
+    }
+  }
+  function handleSaveObsBtnKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === 'ArrowUp') { e.preventDefault(); obsTextareaRef.current?.focus(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
       if (canManage && order?.history && order.history.length > 0) { historyToggleRef.current?.focus(); return; }
       focusFirstActionBtn();
     }
   }
   function handleHistoryToggleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === 'Enter') { e.preventDefault(); setShowHist((v) => !v); return; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); obsTextareaRef.current?.focus(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); saveObsBtnRef.current?.focus(); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); focusFirstActionBtn(); }
   }
   function handleActionBtnKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
@@ -230,6 +238,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   useEffect(() => { setClientDeletedDismissed(false); }, [orderId]);
   const [replyText, setReplyText] = useState('');
   const [cobroPass, setCobroPass] = useState('');
+  const cobroPassRef = useRef<HTMLInputElement>(null);
+  const cobroConfirmBtnRef = useRef<HTMLButtonElement>(null);
+  // Autofocus the password field the instant the dialog opens - the whole
+  // point of wiring this dialog's keyboard nav is being able to close a pedido
+  // without ever touching the mouse, starting from the moment it appears.
+  useEffect(() => { if (showCobro) cobroPassRef.current?.focus(); }, [showCobro]);
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
 
   useEffect(() => {
@@ -1263,7 +1277,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               onKeyDown={handleObsArrowKeys}
             />
             <div className="mactions" style={{ marginBottom: 14 }}>
-              <button className="bsec"
+              <button ref={saveObsBtnRef} onKeyDown={handleSaveObsBtnKeyDown} className="bsec"
                 onClick={() => addObsMut.mutate(newObsText.trim())}
                 disabled={addObsMut.isPending || !newObsText.trim()}
                 style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1435,17 +1449,24 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <label className="fl2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Lock size={13} /> Tu contraseña para confirmar <span style={{ color: 'var(--r)', fontWeight: 800 }}>*</span>
               </label>
-              <PasswordInput className="fi2" placeholder="Contraseña de tu sesión"
+              <PasswordInput ref={cobroPassRef} className="fi2" placeholder="Contraseña de tu sesión"
                 value={cobroPass} onChange={(e) => setCobroPass(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); } }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); return; }
+                  if (e.key === 'ArrowDown') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); }
+                }}
                 autoComplete="current-password" />
               <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 4 }}>
                 Requerida para evitar cobros no autorizados
               </div>
             </div>
             <div style={{ display: 'flex', gap: 9, marginTop: 20 }}>
-              <button className="bsec" onClick={onClose}>Cancelar</button>
-              <button className="bpri" onClick={() => cobroMut.mutate(recibido)}
+              <button className="bsec" onClick={onClose}
+                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } else if (e.key === 'ArrowRight') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); } }}>
+                Cancelar
+              </button>
+              <button ref={cobroConfirmBtnRef} className="bpri" onClick={() => cobroMut.mutate(recibido)}
+                onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } }}
                 disabled={cobroMut.isPending || !cobroValido}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: cobroValido ? 1 : 0.5 }}>
                 {cobroMut.isPending ? 'Confirmando...' : <><CheckCircle size={15} /> Confirmar pago</>}

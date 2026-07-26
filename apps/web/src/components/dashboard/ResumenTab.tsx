@@ -145,7 +145,11 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
       seen.get(key)!.push(o);
     }
     for (const [key, orders] of seen.entries()) {
-      const label = orders[0].customer_name;
+      // client_contact_name (the WhatsApp contact's name, snapshotted once at
+      // creation, never editable afterward) over customer_name (staff can
+      // freely retype it per-order) - Informe del día must show the real
+      // contact, not whatever a specific order's name field was last edited to.
+      const label = orders[0].client_contact_name ?? orders[0].customer_name;
       groups.push({ key, label, orders });
     }
     return groups;
@@ -431,7 +435,7 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                 title="Ver detalle - quién lo envió a la papelera y cuándo"
                 style={{ cursor: 'pointer', ...(clientDeleted ? { border: '1.5px solid var(--r)' } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.customer_name}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Trash2 size={11} /> {new Date(o.updated_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                   </span>

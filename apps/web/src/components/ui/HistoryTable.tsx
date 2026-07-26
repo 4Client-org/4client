@@ -98,7 +98,7 @@ export default function HistoryTable({ history, showOrder }: Props) {
                 {showOrder && (
                   <td style={{ ...td, fontWeight: 700 }}>
                     #{h.order?.num ?? '?'}
-                    <div style={{ fontSize: 11, color: 'var(--gt)', fontWeight: 400 }}>{h.order?.customer_name ?? ''}</div>
+                    <div style={{ fontSize: 11, color: 'var(--gt)', fontWeight: 400 }}>{h.order?.client_contact_name ?? h.order?.customer_name ?? ''}</div>
                   </td>
                 )}
                 <td style={{ ...td, fontWeight: 700, color: isFromClient(h) ? 'var(--r)' : 'var(--n)' }}>

@@ -153,19 +153,14 @@ export default function MainPage() {
     clearAuth();
   }
 
-  // Was always opening NuevoPedidoModal, unconditionally - a second click on the
-  // same ticket (or just forgetting a pedido already exists for it) created a
-  // genuine duplicate order instead of just reopening the one already in
-  // progress. Now: if the ticket already has one still short of camino/
-  // entregado/cerrado/papelera, open THAT to edit instead - only falls through
-  // to actually creating a new one when there's truly nothing left to resume.
-  const TERMINAL_STATUSES = ['camino', 'entregado', 'cerrado', 'papelera'];
+  // Always opens a blank NuevoPedidoModal - staff clicking "crear pedido" on the
+  // platform means "start a new one," full stop, even if the ticket already has
+  // an active order. (The dedup-reopen-existing behavior stays, deliberately,
+  // on the CLIENT's own form-link side - ClientFormPage's resolveTarget - since
+  // that's a different actor with a different risk: a client resubmitting the
+  // same link shouldn't accidentally create a duplicate. Staff explicitly
+  // choosing to create another one is a distinct, intentional action.)
   function handleCreateFromTicket(ticket: Ticket) {
-    const resumable = ticket.orders.find((o) => !TERMINAL_STATUSES.includes(o.status));
-    if (resumable) {
-      setOpenOrderId(resumable.id);
-      return;
-    }
     setFromTicket({
       ticketId: ticket.id,
       nombre: ticket.customer_name,

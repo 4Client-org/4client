@@ -1,4 +1,4 @@
-import { useState, InputHTMLAttributes, CSSProperties } from 'react';
+import { useState, forwardRef, InputHTMLAttributes, CSSProperties } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 
 interface Props extends InputHTMLAttributes<HTMLInputElement> {
@@ -7,12 +7,14 @@ interface Props extends InputHTMLAttributes<HTMLInputElement> {
 
 // Same look as a plain password <input> (className/style still land on the input
 // itself) with an eye toggle to show/hide the value - just wraps it in a relative
-// positioned box so the button can sit inside the field.
-export default function PasswordInput({ wrapperStyle, style, ...props }: Props) {
+// positioned box so the button can sit inside the field. forwardRef so callers
+// can focus it programmatically (keyboard-nav graphs elsewhere hand focus INTO
+// this field, e.g. DetallePedidoModal's cobro dialog).
+const PasswordInput = forwardRef<HTMLInputElement, Props>(function PasswordInput({ wrapperStyle, style, ...props }, ref) {
   const [show, setShow] = useState(false);
   return (
     <div style={{ position: 'relative', ...wrapperStyle }}>
-      <input {...props} type={show ? 'text' : 'password'} style={{ ...style, width: '100%', paddingRight: 36, boxSizing: 'border-box' }} />
+      <input ref={ref} {...props} type={show ? 'text' : 'password'} style={{ ...style, width: '100%', paddingRight: 36, boxSizing: 'border-box' }} />
       <button
         type="button"
         tabIndex={-1}
@@ -28,4 +30,6 @@ export default function PasswordInput({ wrapperStyle, style, ...props }: Props) 
       </button>
     </div>
   );
-}
+});
+
+export default PasswordInput;

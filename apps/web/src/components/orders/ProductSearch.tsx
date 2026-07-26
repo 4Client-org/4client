@@ -236,10 +236,19 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
         return;
       }
       const next = flatVisibleProducts[e.key === 'ArrowUp' ? idx - 1 : idx + 1];
-      if (!next) return;
-      const ref = field === 'qty' ? catalogQtyRefs : catalogPriceRefs;
-      ref.current[next.id]?.focus();
-      ref.current[next.id]?.select();
+      if (next) {
+        const ref = field === 'qty' ? catalogQtyRefs : catalogPriceRefs;
+        ref.current[next.id]?.focus();
+        ref.current[next.id]?.select();
+        return;
+      }
+      // Down past the LAST catalog row - continues into the Factbox's own
+      // search box (if there's anything to search), instead of dead-ending.
+      // Previously this just did nothing at the last product.
+      if (e.key === 'ArrowDown') {
+        if (items.length > 0) { factboxSearchRef.current?.focus(); return; }
+        manualNameRef.current?.focus();
+      }
       return;
     }
     if (e.key === 'ArrowRight' && field === 'qty') {
@@ -447,7 +456,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
         searchRef.current?.focus();
         return;
       }
-      if (items.length > 0) { editItem(items[0], 'qty'); return; }
+      // Same "search box in between" rule as the expanded branch above - the
+      // Factbox's OWN search box ("Buscar entre los productos del pedido...")
+      // is a stop before its first row, not skipped straight into.
+      if (items.length > 0) { factboxSearchRef.current?.focus(); return; }
       manualNameRef.current?.focus();
     }
   }
