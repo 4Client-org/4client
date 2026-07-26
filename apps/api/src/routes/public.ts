@@ -573,6 +573,46 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           },
         });
 
+        // Same nudge the NEW-order path sends below - this used to only exist
+        // there, but ClientFormPage no longer offers "crear uno nuevo aparte" as
+        // a real choice (it auto-resolves into merging onto an existing
+        // resumable order), so most submissions go through THIS path now. Only
+        // fires when the order still has no payment method at all after this
+        // submission (not on every merge - an already-chosen method staying
+        // untouched must not re-trigger the question).
+        if (!body.data.payment_method && (!updated.payment_method || updated.payment_method === 'sin_asignar')) {
+          const promptText = '¿Efectivo o transferencia?';
+          const promptMessage = await fastify.prisma.ticketMessage.create({
+            data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorUser.id },
+          });
+          let promptWppMessageId: string | null = null;
+          let promptFailedReason: string | null = null;
+          if (provider) {
+            try {
+              const sent = await provider.sendText(ticket.phone, promptText);
+              promptWppMessageId = sent.messageId;
+            } catch (err: any) {
+              promptFailedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
+              fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando pregunta de método de pago');
+            }
+          }
+          if (promptWppMessageId || promptFailedReason) {
+            await fastify.prisma.ticketMessage.update({
+              where: { id: promptMessage.id },
+              data: { wpp_message_id: promptWppMessageId, failed_reason: promptFailedReason },
+            });
+          }
+          fastify.io.to(`org:${ticket.org_id}`).emit('ticket:message', {
+            ticketId: ticket.id,
+            message: {
+              id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
+              media_url: null, media_type: null, media_caption: null,
+              sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: promptWppMessageId,
+              sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
+            },
+          });
+        }
+
         return reply.status(200).send({ data: { ok: true, orderId: updated.id, num: updated.num, merged: true } });
       }
     }
