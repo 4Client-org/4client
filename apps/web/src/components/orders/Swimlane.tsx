@@ -499,6 +499,22 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             // even though the same order rendered fine once "today" became tomorrow.
             const ticketOrders = filteredOrders.filter((o) => o.ticket_id === ticket.id);
             const urg = isToday && isTicketUrg(ticket, ticketOrders);
+            // Furthest-BEHIND status among this ticket's still-open orders (lowest
+            // STATUS_ORDER index) - two orders on the same chat, one "en camino" and
+            // one still "preparando", tint the row for preparando: that's the one
+            // that still needs work, not the one that's basically done. Urgency
+            // (red, isTicketUrg above) always wins when both apply - it's a "needs
+            // attention right now" signal, not just a progress indicator.
+            const activeOrderStatuses = ticketOrders
+              .filter((o) => o.status !== 'cerrado' && o.status !== 'papelera')
+              .map((o) => o.status);
+            const furthestBehindStatus = activeOrderStatuses.length > 0
+              ? activeOrderStatuses.reduce((furthest, s) =>
+                  STATUS_ORDER.indexOf(s) < STATUS_ORDER.indexOf(furthest) ? s : furthest)
+              : null;
+            const statusTintStyle = (!urg && furthestBehindStatus)
+              ? { background: COL_BG[furthestBehindStatus], borderRightColor: COL_COLORS[furthestBehindStatus] }
+              : undefined;
             const isCollapsed = collapsedTickets.has(ticket.id);
             const tNum = `T-${String(filteredTickets.indexOf(ticket) + 1).padStart(2, '0')}`;
 
@@ -521,7 +537,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                 <div key={ticket.id} style={{ display: 'contents' }}>
                   <div
                     className={`slane-tcell${urg ? ' urg' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 0, padding: '7px 12px', cursor: 'pointer' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 0, padding: '7px 12px', cursor: 'pointer', ...statusTintStyle }}
                     onClick={() => toggleCollapseTicket(ticket.id)}
                   >
                     <ChevronDown size={14} color="var(--gt)" />
@@ -542,7 +558,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             return (
               <div key={ticket.id} style={{ display: 'contents' }}>
                 <div className={`slane-tcell${urg ? ' urg' : ''}`} onClick={() => onOpenTicket(ticket.id)}
-                  style={{ opacity: isTicketGhost ? 0.72 : 1 }}>
+                  style={{ opacity: isTicketGhost ? 0.72 : 1, ...statusTintStyle }}>
                   {ticket.unread_count > 0 && <div className="tk-new-dot">{ticket.unread_count}</div>}
                   {/* Button sits right next to tk-num on the LEFT, not the top-right
                       corner - that corner is where tk-new-dot (absolute, top:5

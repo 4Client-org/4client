@@ -867,9 +867,14 @@ describe('public /submit - Meta WhatsApp delivery tracking on the order confirma
     const token = await issueFormToken(app, ticket.id, orgId);
     // Unique per test run, not a fixed literal - wpp_message_id is globally unique,
     // and a hardcoded value would collide with a leftover row from a previous run
-    // against the same (not wiped between runs) test database.
-    const fakeWamid = `wamid.SUBMITOK${Date.now()}`;
-    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+    // against the same (not wiped between runs) test database. Also unique PER
+    // CALL (a counter suffix) - submitting with no payment_method sends a second
+    // message (the "¿Efectivo o transferencia?" nudge), and a real Meta response
+    // never reuses the same wamid for two different sends the way a naive static
+    // mock would.
+    let fakeWamidCounter = 0;
+    const fakeWamidBase = `wamid.SUBMITOK${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `${fakeWamidBase}-${fakeWamidCounter++}` }] }), { status: 200 })) as any;
 
     const res = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
@@ -877,8 +882,13 @@ describe('public /submit - Meta WhatsApp delivery tracking on the order confirma
     });
     expect(res.statusCode).toBe(201);
 
-    const message = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: ticket.id, direction: 'out' } });
-    expect(message!.wpp_message_id).toBe(fakeWamid);
+    const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
+    expect(outbound[0].wpp_message_id).toBe(`${fakeWamidBase}-0`);
+    // No payment_method in the payload above - the "¿Efectivo o transferencia?"
+    // nudge should have gone out right after, as its own message.
+    expect(outbound).toHaveLength(2);
+    expect(outbound[1].text).toBe('¿Efectivo o transferencia?');
+    expect(outbound[1].wpp_message_id).toBe(`${fakeWamidBase}-1`);
   });
 });
 

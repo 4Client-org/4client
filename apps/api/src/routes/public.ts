@@ -735,6 +735,44 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       },
     });
 
+    // Nudges the client for a payment method right away when they submitted the
+    // form without picking one - a "Sin especificar" sitting in the confirmation
+    // above is easy to skim past; a direct question isn't. Sent as its own
+    // message, same "receipt first, question second" ordering as everywhere else
+    // in this file that sends more than one message per action.
+    if (!body.data.payment_method) {
+      const promptText = '¿Efectivo o transferencia?';
+      const promptMessage = await fastify.prisma.ticketMessage.create({
+        data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorUser.id },
+      });
+      let promptWppMessageId: string | null = null;
+      let promptFailedReason: string | null = null;
+      if (provider) {
+        try {
+          const sent = await provider.sendText(ticket.phone, promptText);
+          promptWppMessageId = sent.messageId;
+        } catch (err: any) {
+          promptFailedReason = String(err?.message ?? 'Error desconocido Meta API').slice(0, 255);
+          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando pregunta de método de pago');
+        }
+      }
+      if (promptWppMessageId || promptFailedReason) {
+        await fastify.prisma.ticketMessage.update({
+          where: { id: promptMessage.id },
+          data: { wpp_message_id: promptWppMessageId, failed_reason: promptFailedReason },
+        });
+      }
+      fastify.io.to(`org:${ticket.org_id}`).emit('ticket:message', {
+        ticketId: ticket.id,
+        message: {
+          id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
+          media_url: null, media_type: null, media_caption: null,
+          sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: promptWppMessageId,
+          sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
+        },
+      });
+    }
+
     return reply.status(201).send({ data: { ok: true, orderId: order.id, num: order.num } });
   });
 
