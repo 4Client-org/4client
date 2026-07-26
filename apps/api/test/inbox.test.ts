@@ -145,8 +145,13 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       payload: { text: 'Hola, tu pedido va en camino' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().wpp_status).toBe('sent');
+    // The actual Meta send is now fired in the background, not awaited before
+    // responding (see inbox.ts's /reply) - the HTTP response only ever reports
+    // 'sending' at this point, the real outcome lands moments later via a DB
+    // update + 'ticket:message-status' socket emit.
+    expect(res.json().wpp_status).toBe('sending');
 
+    await new Promise((r) => setTimeout(r, 200));
     const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
     expect(stored!.wpp_message_id).toBe(fakeWamid);
     expect(stored!.failed_reason).toBeNull();
@@ -166,6 +171,9 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       payload: { text: 'Confirmando tu pedido' },
     });
     expect(res.statusCode).toBe(201);
+    // Background send (see the previous test's comment) - give it a moment to
+    // actually run and emit before checking the spy.
+    await new Promise((r) => setTimeout(r, 200));
 
     const statusEmitCall = emitSpy.mock.calls.find(call => call[0] === 'ticket:message-status');
     expect(statusEmitCall).toBeDefined();
@@ -184,8 +192,11 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       payload: { text: 'Hola de nuevo' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().wpp_status).toBe('failed');
+    // Same as the success case - the HTTP response can't know the real outcome
+    // anymore, it only ever reports 'sending' (see inbox.ts's /reply).
+    expect(res.json().wpp_status).toBe('sending');
 
+    await new Promise((r) => setTimeout(r, 200));
     const stored = await app.prisma.ticketMessage.findUnique({ where: { id: res.json().data.id } });
     expect(stored!.wpp_message_id).toBeNull();
     expect(stored!.failed_reason).toContain('Re-engagement');
@@ -215,12 +226,15 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       payload: { data: tinyPng, mime_type: 'image/png', caption: 'Así llegó el pedido' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().wpp_status).toBe('sent');
+    // Background upload+send (see the /reply tests' comment above) - the HTTP
+    // response can't know the real Meta outcome yet.
+    expect(res.json().wpp_status).toBe('sending');
     const msg = res.json().data;
     expect(msg.media_type).toBe('image');
     expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.png$/);
     expect(msg.media_caption).toBe('Así llegó el pedido');
 
+    await new Promise((r) => setTimeout(r, 200));
     const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
     expect(stored!.wpp_message_id).toBe(fakeWamid);
     expect(stored!.failed_reason).toBeNull();

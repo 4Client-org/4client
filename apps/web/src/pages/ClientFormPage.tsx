@@ -278,10 +278,16 @@ export default function ClientFormPage() {
     const num = (pendingQty[p.id] ?? '').trim();
     if (!num) return;
     const unit = pendingUnit[p.id] ?? DEFAULT_UNIT;
+    const alreadyAdded = selected.some(i => i.productId === p.id);
     // Only append the unit onto an actual NUMBER ("2" -> "2 Kilo") - free-text
     // quantities ("una papa mediana", "la más gruesa que tengan") already say what
     // they mean and a unit tacked onto the end would just read wrong.
-    const qty = /^\d/.test(num) ? `${num} ${unit}` : num;
+    // An item being RE-edited (already added) is the one exception: its qty box
+    // was pre-filled with the FULL existing quantity_label (see `qty` below in the
+    // catalog row), not a bare number - re-combining it with the unit dropdown
+    // again would double up ("2 Kilo" + "Kilo" -> "2 Kilo Kilo"). Whatever's typed
+    // there now is already the complete final text.
+    const qty = alreadyAdded ? num : (/^\d/.test(num) ? `${num} ${unit}` : num);
     setSelected(prev => {
       const exists = prev.findIndex(i => i.productId === p.id);
       if (exists >= 0) {
@@ -899,9 +905,14 @@ export default function ClientFormPage() {
             </div>
 
             {group.products.map(p => {
-              const qty = pendingQty[p.id] ?? '';
               const isAdded = selected.some(i => i.productId === p.id);
               const addedItem = selected.find(i => i.productId === p.id);
+              // Falls back to the item's OWN current text, not blank - previously
+              // this box was always empty for an already-added item (only the
+              // separate green "Agregado: X" line showed the value), so changing
+              // even one character meant retyping the whole quantity from scratch
+              // instead of just editing what's already there.
+              const qty = pendingQty[p.id] ?? (isAdded && addedItem ? addedItem.quantity_label : '');
               return (
                 <div key={p.id} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
