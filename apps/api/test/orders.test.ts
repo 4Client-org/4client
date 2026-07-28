@@ -335,6 +335,64 @@ describe('orders routes', () => {
     expect(secondCobro.json().code).toBe('ORDER_LOCKED');
   });
 
+  describe('split payment (efectivo + transferencia)', () => {
+    async function createSplitTestOrder() {
+      const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Split' } });
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ fecha: '2026-01-16', customer_phone: '3009991111', employee_id: empleado.id }),
+      });
+      return create.json().data; // total = 8000 (5000 + 3000)
+    }
+
+    it('accepts a split that sums exactly to the total - stores split_cash/split_transfer, no vuelto', async () => {
+      const order = await createSplitTestOrder();
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS, split: { cash: 5000, transfer: 3000 } },
+      });
+      expect(cobro.statusCode).toBe(200);
+      expect(cobro.json().data.paid).toBe(true);
+
+      const fresh = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(Number(fresh.split_cash)).toBe(5000);
+      expect(Number(fresh.split_transfer)).toBe(3000);
+      expect(Number(fresh.change_amount)).toBe(0);
+    });
+
+    it('rejects a split that does not sum to the total', async () => {
+      const order = await createSplitTestOrder();
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS, split: { cash: 5000, transfer: 2000 } },
+      });
+      expect(cobro.statusCode).toBe(400);
+      expect(cobro.json().code).toBe('VALIDATION_ERROR');
+
+      const fresh = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(fresh.paid).toBe(false);
+      expect(fresh.split_cash).toBeNull();
+    });
+
+    it('rejects amount_received above the total when split is used (no vuelta allowed on a split)', async () => {
+      const order = await createSplitTestOrder();
+      const cobro = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 9000, password: ENCARGADO_PASS, split: { cash: 6000, transfer: 3000 } },
+      });
+      expect(cobro.statusCode).toBe(400);
+      expect(cobro.json().code).toBe('VALIDATION_ERROR');
+    });
+  });
+
   describe('crédito payment method', () => {
     async function createCreditoOrder() {
       const empleado = await app.prisma.employee.create({ data: { org_id: orgAId, name: 'Domiciliario Crédito' } });

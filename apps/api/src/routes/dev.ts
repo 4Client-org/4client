@@ -68,7 +68,7 @@ async function queryTable(
       return {
         rows: await prisma.ticketMessage.findMany({
           where: { ticket: { org_id: orgId } },
-          take: lim, skip: off, orderBy: { sent_at: 'desc' },
+          take: lim, skip: off, orderBy: { created_at: 'desc' },
         }),
         total: await prisma.ticketMessage.count({ where: { ticket: { org_id: orgId } } }),
       };

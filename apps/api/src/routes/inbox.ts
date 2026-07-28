@@ -18,7 +18,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const allTickets = await fastify.prisma.ticket.findMany({
       where: { org_id: req.user.orgId },
       include: {
-        messages: { orderBy: { sent_at: 'desc' }, take: 1 },
+        messages: { orderBy: { created_at: 'desc' }, take: 1 },
         orders: {
           where: { status: { not: 'papelera' } },
           select: { id: true, num: true, status: true, paid: true },
@@ -53,7 +53,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       where: { id: ticketId, org_id: req.user.orgId },
       include: {
         messages: {
-          orderBy: { sent_at: 'asc' },
+          orderBy: { created_at: 'asc' },
           take: 500,
           include: { sender: { select: { id: true, name: true } } },
         },

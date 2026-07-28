@@ -175,16 +175,22 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // the order-delete route below - both need a real User row for OrderHistory's
   // required actor_id, since the client itself has no User account.
   async function resolveActorUser(ticket: { org_id: string; form_link_sent_by: string | null }) {
-    let actorUser = ticket.form_link_sent_by
+    const explicit = ticket.form_link_sent_by
       ? await fastify.prisma.user.findFirst({ where: { id: ticket.form_link_sent_by, org_id: ticket.org_id } })
       : null;
-    if (!actorUser) {
-      actorUser = await fastify.prisma.user.findFirst({
-        where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
-        orderBy: { created_at: 'asc' },
-      });
-    }
-    return actorUser;
+    if (explicit) return { user: explicit, label: explicit.name };
+    const fallback = await fastify.prisma.user.findFirst({
+      where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
+      orderBy: { created_at: 'asc' },
+    });
+    // `fallback`'s NAME is never shown in any human-readable text - only its id
+    // is used (order_history.actor_id / orders.registered_by aren't nullable,
+    // so a real User row is still required for the FK). A real staff member's
+    // name attached to a link the SYSTEM sent automatically (nobody actually
+    // clicked "enviar formulario" - webhook.ts's welcome flow has no
+    // sentByUserId) read as if that person had done something they hadn't,
+    // which is exactly what caused a false "¿me vulneraron el sistema?" alarm.
+    return { user: fallback, label: 'el sistema (formulario enviado automáticamente)' };
   }
 
   // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever sees the
@@ -333,7 +339,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       return sendInvalidToken(err, reply);
     }
 
-    const actorUser = await resolveActorUser(ticket);
+    const { user: actorUser, label: actorLabel } = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
     // Fetch product prices from catalog - needed either way (new order or merge)
@@ -463,7 +469,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         // so which product/price/quantity actually changed was invisible in the
         // Historial. `notes` still says it came from the client via the form, so
         // it stays distinguishable from a staff-made edit.
-        const histNotes = `Vía formulario del cliente (enviado por ${actorUser.name})`;
+        const histNotes = `Vía formulario del cliente (enviado por ${actorLabel})`;
         const historyEntries: any[] = [];
         for (const ri of target.items.filter(i => !submittedNames.has(i.product_name))) {
           historyEntries.push({
@@ -568,7 +574,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           message: {
             id: message.id, ticket_id: ticket.id, direction: 'out' as const, text: message.text,
             media_url: null, media_type: null, media_caption: null,
-            sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
+            sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
             sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: failedReason,
           },
         });
@@ -607,7 +613,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             message: {
               id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
               media_url: null, media_type: null, media_caption: null,
-              sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: promptWppMessageId,
+              sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
               sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
             },
           });
@@ -726,7 +732,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         order_id: order.id,
         actor_id: actorUser.id,
         action_type: 'create',
-        notes: `Pedido creado desde formulario (enviado por ${actorUser.name})`,
+        notes: `Pedido creado desde formulario (enviado por ${actorLabel})`,
       },
     });
     if (order.items.length > 0) {
@@ -736,7 +742,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           action_type: 'producto_agregado', field: 'Producto agregado',
           value_before: '',
           value_after: `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name} - $${Number(i.price).toLocaleString('es-CO')}`,
-          notes: `Agregado al crear el pedido desde formulario (enviado por ${actorUser.name})`,
+          notes: `Agregado al crear el pedido desde formulario (enviado por ${actorLabel})`,
         })),
       });
     }
@@ -751,7 +757,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         direction: 'out' as const,
         text: message.text,
         media_url: null, media_type: null, media_caption: null,
-        sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: wppMessageId,
+        sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
         sent_at: message.sent_at.toISOString(),
         delivered: false, read_by_client: false, failed_reason: failedReason,
       },
@@ -789,7 +795,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         message: {
           id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
           media_url: null, media_type: null, media_caption: null,
-          sent_by: actorUser.id, sent_by_name: actorUser.name, wpp_message_id: promptWppMessageId,
+          sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
           sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
         },
       });
@@ -843,7 +849,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       });
     }
 
-    const actorUser = await resolveActorUser(ticket);
+    const { user: actorUser } = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
     // Deliberately NOT status:'papelera' (that's still staff's own separate trash

@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import {
   Package, PackageCheck, Clock, Banknote, ArrowLeftRight, Wallet,
   FileText, Trash2, History, ChevronDown, ChevronRight, Lock, Download, Ban,
-  MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
+  MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed, Bike,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { normalizeSearch } from '../../lib/normalize';
@@ -289,6 +289,32 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
               <div><div className="dlbl">Total recaudado</div><div className="dval">{fmtCOP(dashboard.recaudado?.total ?? 0)}</div></div>
             </div>
           </div>
+
+          {/* What each domiciliario owes back today (cobro en casa only) - the
+              same figure either way an order was cerrado (completo or con
+              vuelta), since a vuelta's change already nets out to the order's
+              own total. Only shown when there's actually something to collect
+              today - an all-transferencia/cash-en-tienda day has nothing here. */}
+          {(dashboard.recaudado?.domiciliario ?? 0) > 0 && (
+            <div style={{ background: 'var(--b)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <Bike size={16} color="var(--vd)" />
+                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--vd)' }}>
+                  A recibir de domiciliarios (cobro en casa): {fmtCOP(dashboard.recaudado.domiciliario)}
+                </span>
+              </div>
+              {dashboard.recaudado.porDomiciliario && Object.keys(dashboard.recaudado.porDomiciliario).length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '4px 16px' }}>
+                  {Object.entries(dashboard.recaudado.porDomiciliario as Record<string, number>).map(([name, amount]) => (
+                    <div key={name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                      <span style={{ color: 'var(--gt)' }}>{name}</span>
+                      <span style={{ fontWeight: 700 }}>{fmtCOP(amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
         </>
       )}

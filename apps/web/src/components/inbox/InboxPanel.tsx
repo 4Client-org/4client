@@ -5,7 +5,7 @@ import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
-import { colombiaDateStr } from '../../lib/format';
+import { colombiaDateStr, formatChatTimestamp } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -179,7 +179,7 @@ export default function InboxPanel() {
   }
 
   function formatMsgTime(raw: string) {
-    return new Date(raw).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
+    return formatChatTimestamp(raw);
   }
 
   function formatSidebarTime(raw: string) {

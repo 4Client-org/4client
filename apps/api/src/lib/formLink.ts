@@ -69,5 +69,5 @@ export function buildFormLinkWarningMessage(): string {
 // above), and this is a separate, short nudge rather than something to append to
 // either of them.
 export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por medio del link. Cualquier duda con gusto.';
+  return 'Diligencia por favor el pedido por medio del link. Recuerda que el monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
 }

@@ -22,6 +22,18 @@ export function todayStr(): string {
   return colombiaDateStr();
 }
 
+// Shared by every chat message bubble (InboxPanel/TicketModal/NuevoPedidoModal/
+// DetallePedidoModal) - previously each showed only the hour ("03:13 p. m."),
+// with no way to tell WHICH DAY a message was from once a conversation ran
+// long or a delayed webhook message landed late. Always includes the date,
+// not just when it isn't today - the whole point is never having to guess.
+export function formatChatTimestamp(raw: string | Date): string {
+  const d = typeof raw === 'string' ? new Date(raw) : raw;
+  return d.toLocaleString('es-CO', {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota',
+  });
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo',
   camino: 'En camino', entregado: 'Entregado', cerrado: 'Cerrado',

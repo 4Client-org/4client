@@ -9,7 +9,7 @@ import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../..
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
-import { fmtCOP, STATUS_LABEL, todayStr } from '../../lib/format';
+import { fmtCOP, STATUS_LABEL, todayStr, formatChatTimestamp } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { toast } from '../ui/Toast';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -259,7 +259,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                       ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
                       : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-                      {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                      {formatChatTimestamp(msg.sent_at)}
                       {isOut && msg.wpp_message_id && (
                         <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                       )}
