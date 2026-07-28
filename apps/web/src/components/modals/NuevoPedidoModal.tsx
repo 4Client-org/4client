@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { Fragment, useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
@@ -15,7 +15,7 @@ import DeliveryStatus from '../ui/DeliveryStatus';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
-import { todayStr, formatChatTimestamp } from '../../lib/format';
+import { todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
@@ -303,8 +303,20 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             </div>
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {liveMessages.map((m: any, i: number) => (
-                <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
+              {liveMessages.map((m: any, i: number, arr: any[]) => {
+                const day = colombiaDateStr(m.created_at ?? m.sent_at);
+                const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
+                const showDivider = day !== prevDay;
+                return (
+                <Fragment key={i}>
+                {showDivider && (
+                  <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
+                    <span style={{ background: '#e9edef', color: '#54656f', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 8 }}>
+                      {formatChatDateDivider(m.created_at ?? m.sent_at)}
+                    </span>
+                  </div>
+                )}
+                <div className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
                   {m.media_type === 'image'
                     ? <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>
                     : <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
@@ -317,7 +329,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                     </div>
                   )}
                 </div>
-              ))}
+                </Fragment>
+                );
+              })}
              </div>
             </div>
             {/* Reply input */}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
+import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -9,7 +9,7 @@ import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp } from '../../lib/format';
+import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
@@ -977,10 +977,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               {!chatData && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Cargando chat...</div>
               )}
-              {chatData?.messages?.map((msg: any, i: number) => {
+              {chatData?.messages?.map((msg: any, i: number, arr: any[]) => {
                 const isOut = msg.direction === 'out';
+                const day = colombiaDateStr(msg.created_at ?? msg.sent_at);
+                const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
+                const showDivider = day !== prevDay;
                 return (
-                  <div key={msg.id ?? i} style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  <Fragment key={msg.id ?? i}>
+                  {showDivider && (
+                    <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
+                      <span style={{ background: '#e9edef', color: '#54656f', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 8 }}>
+                        {formatChatDateDivider(msg.created_at ?? msg.sent_at)}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
                     <div style={{
                       background: isOut ? '#DCF8C6' : '#fff',
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
@@ -1001,6 +1012,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       </div>
                     </div>
                   </div>
+                  </Fragment>
                 );
               })}
               {chatData && (!chatData.messages || chatData.messages.length === 0) && (

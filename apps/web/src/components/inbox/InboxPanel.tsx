@@ -5,7 +5,7 @@ import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
-import { colombiaDateStr, formatChatTimestamp } from '../../lib/format';
+import { colombiaDateStr, formatChatTimestamp, formatChatDateDivider } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -274,14 +274,18 @@ export default function InboxPanel() {
             {conversation?.messages?.map((msg: any, i: number) => {
               const isOut = msg.direction === 'out';
               const prevMsg = conversation.messages[i - 1];
+              // Grouped by created_at (real arrival order), not sent_at - same reason
+              // the message list itself sorts by created_at: a delayed webhook
+              // delivery reporting an old sent_at must still land under TODAY's
+              // divider, not get filed under whatever day it claims to be from.
               const showDate = !prevMsg ||
-                colombiaDateStr(msg.sent_at) !== colombiaDateStr(prevMsg.sent_at);
+                colombiaDateStr(msg.created_at ?? msg.sent_at) !== colombiaDateStr(prevMsg.created_at ?? prevMsg.sent_at);
 
               return (
                 <div key={msg.id} style={{ display: 'flex', flexDirection: 'column' }}>
                   {showDate && (
                     <div className="chat-sep">
-                      {new Date(msg.sent_at).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Bogota' })}
+                      {formatChatDateDivider(msg.created_at ?? msg.sent_at)}
                     </div>
                   )}
                   <div className={`chat-bub ${isOut ? 'out' : 'in'}`}>

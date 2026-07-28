@@ -22,15 +22,30 @@ export function todayStr(): string {
   return colombiaDateStr();
 }
 
-// Shared by every chat message bubble (InboxPanel/TicketModal/NuevoPedidoModal/
-// DetallePedidoModal) - previously each showed only the hour ("03:13 p. m."),
-// with no way to tell WHICH DAY a message was from once a conversation ran
-// long or a delayed webhook message landed late. Always includes the date,
-// not just when it isn't today - the whole point is never having to guess.
+// Time-only label for a chat bubble ("03:13 p. m.") - the date itself is shown
+// once per day via the divider below (formatChatDateDivider), same split WhatsApp
+// itself uses, instead of repeating the date on every single bubble.
 export function formatChatTimestamp(raw: string | Date): string {
   const d = typeof raw === 'string' ? new Date(raw) : raw;
-  return d.toLocaleString('es-CO', {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota',
+  return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
+}
+
+// The centered "Hoy" / "Ayer" / "27 de julio" pill WhatsApp shows between two
+// messages that fall on different Colombia calendar days - callers insert one
+// of these whenever consecutive messages' colombiaDateStr() differ (see
+// InboxPanel/TicketModal/NuevoPedidoModal/DetallePedidoModal's chat render
+// loops). Always compared against "now" at render time, not create() will
+// re-run per render, so a page left open across midnight ages "Hoy" into the
+// actual date on its own next render.
+export function formatChatDateDivider(raw: string | Date): string {
+  const dayStr = colombiaDateStr(raw);
+  if (dayStr === colombiaDateStr()) return 'Hoy';
+  const yesterday = new Date(Date.now() - 24 * 3600000);
+  if (dayStr === colombiaDateStr(yesterday)) return 'Ayer';
+  const d = typeof raw === 'string' ? new Date(raw) : raw;
+  const sameYear = colombiaDateStr().slice(0, 4) === dayStr.slice(0, 4);
+  return d.toLocaleDateString('es-CO', {
+    day: 'numeric', month: 'long', ...(sameYear ? {} : { year: 'numeric' }), timeZone: 'America/Bogota',
   });
 }
 
