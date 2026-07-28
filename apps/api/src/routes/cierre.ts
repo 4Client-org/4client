@@ -81,8 +81,15 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
     }
 
     // Calcular totales
+    // Explicit status:'cerrado' guard, not just paid:true - every current code
+    // path that sets paid:true also sets status:'cerrado' in the same write
+    // (POST /:id/cobro, the only place paid ever flips true for a non-crédito
+    // order; crédito's own PATCH /:id/credito-pagado only ever runs on an
+    // order that already reached 'cerrado' via cobro first) - this makes that
+    // invariant explicit instead of implicit, so a real-money total can never
+    // silently include an order sitting in some other status.
     const todosPagados = await fastify.prisma.order.findMany({
-      where: { org_id: req.user.orgId, fecha, paid: true, client_deleted: false },
+      where: { org_id: req.user.orgId, fecha, paid: true, status: 'cerrado', client_deleted: false },
       include: { items: true },
     });
 
@@ -90,8 +97,19 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
     let totalTransferencia = 0;
     todosPagados.forEach(o => {
       const tot = o.items.reduce((s, i) => s + Number(i.price), 0);
-      if (o.payment_method === 'cash' || o.payment_method === 'cod') totalEfectivo += tot;
-      else if (o.payment_method === 'transfer') totalTransferencia += tot;
+      // Split payment (part efectivo, part transferencia) routes each piece
+      // into its own bucket instead of dumping the whole total into one -
+      // checked first since a split order's payment_method is otherwise just
+      // whatever it was before (cash/transfer/cod), which would double-count
+      // or misattribute the split amount if this branch were skipped.
+      if (o.split_cash != null && o.split_transfer != null) {
+        totalEfectivo += Number(o.split_cash);
+        totalTransferencia += Number(o.split_transfer);
+      } else if (o.payment_method === 'cash' || o.payment_method === 'cod') {
+        totalEfectivo += tot;
+      } else if (o.payment_method === 'transfer') {
+        totalTransferencia += tot;
+      }
     });
 
     const tomorrow = new Date(fecha);

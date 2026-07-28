@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
+import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -9,7 +9,7 @@ import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
+import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
@@ -240,10 +240,25 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const [cobroPass, setCobroPass] = useState('');
   const cobroPassRef = useRef<HTMLInputElement>(null);
   const cobroConfirmBtnRef = useRef<HTMLButtonElement>(null);
+  // Split cobro across efectivo + transferencia (e.g. client pays part cash,
+  // part transfer) - "esos dos deben sumar el total para poder cerrar", no
+  // vuelta concept once split (each piece is paid in its exact amount).
+  const [splitPayment, setSplitPayment] = useState(false);
+  const [splitCash, setSplitCash] = useState('');
+  const [splitTransfer, setSplitTransfer] = useState('');
   // Autofocus the password field the instant the dialog opens - the whole
   // point of wiring this dialog's keyboard nav is being able to close a pedido
   // without ever touching the mouse, starting from the moment it appears.
-  useEffect(() => { if (showCobro) cobroPassRef.current?.focus(); }, [showCobro]);
+  useEffect(() => {
+    if (showCobro) { cobroPassRef.current?.focus(); return; }
+    // Reset split state on close, not just password - a stale "dividido"
+    // toggle/amounts left checked from a previous cobro attempt on this same
+    // order (e.g. cancelled, or blocked by cierreMissing) must not silently
+    // carry over into the next attempt.
+    setSplitPayment(false);
+    setSplitCash('');
+    setSplitTransfer('');
+  }, [showCobro]);
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
 
   useEffect(() => {
@@ -763,6 +778,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     mutationFn: (amountReceived: number) => api.post(`/orders/${orderId}/cobro`, {
       amount_received: amountReceived,
       password: cobroPass,
+      ...(splitPayment ? { split: { cash: splitCashNum, transfer: splitTransferNum } } : {}),
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
@@ -799,11 +815,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       await addObsMut.mutateAsync(newObsText.trim());
     }
     if (isDirty || catalogDirty) {
-      // Same checks the main Guardar button enforces (it's the only other place
+      // Same check the main Guardar button enforces (it's the only other place
       // triggerSave gets called) - this path must not be able to silently save
-      // something the button itself would refuse to.
+      // something the button itself would refuse to. Completo/vuelta is NOT
+      // checked here on purpose - that's only required to cerrar, not to guardar.
       if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de guardar', true); return; }
-      if (pago === 'cod' && !codValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
       triggerSave({ onSuccess: () => { setConfirmDlg(null); onClose(); } });
     } else {
       setConfirmDlg(null);
@@ -896,7 +912,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   const recibido = pago === 'cod'
     ? (codChoice === 'completo' ? total : codCashNum)
     : total;
-  const cobroValido = cierreMissing.length === 0 && cobroPass.trim().length > 0;
+  const splitCashNum = parseFloat(splitCash) || 0;
+  const splitTransferNum = parseFloat(splitTransfer) || 0;
+  // Exact match required (not >=) - a split cobro has no vuelta concept, the
+  // two pieces together must land exactly on the total.
+  const splitValid = !splitPayment || (splitCashNum + splitTransferNum === total);
+  const cobroValido = cierreMissing.length === 0 && cobroPass.trim().length > 0 && splitValid;
   const hasChatPanel = !!order.ticket_id;
 
   return (
@@ -956,10 +977,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               {!chatData && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Cargando chat...</div>
               )}
-              {chatData?.messages?.map((msg: any, i: number) => {
+              {chatData?.messages?.map((msg: any, i: number, arr: any[]) => {
                 const isOut = msg.direction === 'out';
+                const day = colombiaDateStr(msg.created_at ?? msg.sent_at);
+                const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
+                const showDivider = day !== prevDay;
                 return (
-                  <div key={msg.id ?? i} style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  <Fragment key={msg.id ?? i}>
+                  {showDivider && (
+                    <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
+                      <span style={{ background: '#e9edef', color: '#54656f', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 8 }}>
+                        {formatChatDateDivider(msg.created_at ?? msg.sent_at)}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
                     <div style={{
                       background: isOut ? '#DCF8C6' : '#fff',
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
@@ -973,13 +1005,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                         ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
                         : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-                        {new Date(msg.sent_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                        {formatChatTimestamp(msg.sent_at)}
                         {isOut && msg.wpp_message_id && (
                           <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                         )}
                       </div>
                     </div>
                   </div>
+                  </Fragment>
                 );
               })}
               {chatData && (!chatData.messages || chatData.messages.length === 0) && (
@@ -1335,10 +1368,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   onClick={() => {
                     if (items.length === 0) { toast('El pedido debe tener al menos un producto', true); return; }
                     if (hasNegativePrice) { toast('Hay un precio negativo - corrígelo antes de guardar', true); return; }
-                    if (pago === 'cod' && !codValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
+                    // Completo/vuelta is only required to CERRAR (cobro dialog,
+                    // cierreMissing below already covers that) - guardando el
+                    // pedido a medio llenar (ej. aún no se sabe cómo paga) debe
+                    // funcionar siempre, sin bloquear por este campo.
                     triggerSave();
                   }}
-                  disabled={saveMut.isPending || !(isDirty || catalogDirty) || hasNegativePrice || (pago === 'cod' && !codValid)}
+                  disabled={saveMut.isPending || !(isDirty || catalogDirty) || hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5, opacity: (isDirty || catalogDirty) ? 1 : 0.5 }}>
                   <CheckCircle size={13} /> {saveMut.isPending ? 'Guardando...' : 'Guardar'}
                 </button>
@@ -1439,6 +1475,32 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 <span>Falta completar antes de cerrar: {cierreMissing.join(', ')}.</span>
               </div>
             )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, marginBottom: splitPayment ? 10 : 16, cursor: 'pointer' }}>
+              <input type="checkbox" checked={splitPayment}
+                onChange={(e) => { setSplitPayment(e.target.checked); setSplitCash(''); setSplitTransfer(''); }} />
+              ¿Pago dividido entre efectivo y transferencia?
+            </label>
+            {splitPayment && (
+              <div style={{ background: 'var(--bg)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '10px 12px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <label className="fl2">Efectivo</label>
+                    <input className="fi2 no-spin" type="number" min="0" placeholder="$0"
+                      value={splitCash} onChange={(e) => setSplitCash(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label className="fl2">Transferencia</label>
+                    <input className="fi2 no-spin" type="number" min="0" placeholder="$0"
+                      value={splitTransfer} onChange={(e) => setSplitTransfer(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginTop: 8, color: splitValid ? 'var(--v)' : 'var(--r)' }}>
+                  {splitValid
+                    ? `✓ Suman el total (${fmtCOP(total)})`
+                    : `Deben sumar exactamente ${fmtCOP(total)} - van ${fmtCOP(splitCashNum + splitTransferNum)}`}
+                </div>
+              </div>
+            )}
             <div className="fg2">
               <label className="fl2">¿Quién recibió el pago?</label>
               <div className="fi2" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--gm)', cursor: 'default' }}>
@@ -1452,7 +1514,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               <PasswordInput ref={cobroPassRef} className="fi2" placeholder="Contraseña de tu sesión"
                 value={cobroPass} onChange={(e) => setCobroPass(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(recibido); return; }
+                  if (e.key === 'Enter' && cobroValido && !cobroMut.isPending) { e.preventDefault(); cobroMut.mutate(splitPayment ? total : recibido); return; }
                   if (e.key === 'ArrowDown') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); }
                 }}
                 autoComplete="current-password" />
@@ -1465,7 +1527,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } else if (e.key === 'ArrowRight') { e.preventDefault(); cobroConfirmBtnRef.current?.focus(); } }}>
                 Cancelar
               </button>
-              <button ref={cobroConfirmBtnRef} className="bpri" onClick={() => cobroMut.mutate(recibido)}
+              <button ref={cobroConfirmBtnRef} className="bpri" onClick={() => cobroMut.mutate(splitPayment ? total : recibido)}
                 onKeyDown={(e) => { if (e.key === 'ArrowUp') { e.preventDefault(); cobroPassRef.current?.focus(); } }}
                 disabled={cobroMut.isPending || !cobroValido}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: cobroValido ? 1 : 0.5 }}>

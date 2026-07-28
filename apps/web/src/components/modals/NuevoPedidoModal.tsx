@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { Fragment, useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
@@ -15,7 +15,7 @@ import DeliveryStatus from '../ui/DeliveryStatus';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
-import { todayStr } from '../../lib/format';
+import { todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
@@ -193,10 +193,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
   const codCashNum = parseFloat(codCash) || 0;
-  // Used only to gate the submit button live - handleSubmit recomputes its own
-  // version from the FINAL committed items (see finalCodValid there), since a price
-  // edit still mid-typing when Guardar is clicked isn't reflected in `total` here yet.
-  const codValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= total);
   // Same guard as DetallePedidoModal - a negative price must block the save, not
   // just fail quietly server-side (orderItemSchema's price: z.number().min(0)).
   const hasNegativePrice = items.some((i: any) => parseFloat(i.price) < 0);
@@ -215,8 +211,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     if (finalItems.some((i: any) => parseFloat(i.price) < 0)) { toast('Hay un precio negativo - corrígelo antes de registrar el pedido', true); return; }
     const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
     const finalCodAmount = codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? codCashNum : null;
-    const finalCodValid = pago !== 'cod' || codChoice === 'completo' || (codChoice === 'vuelta' && codCashNum >= 0 && codCashNum >= finalTotal);
-    if (pago === 'cod' && !finalCodValid) { toast('Indica si el cliente paga completo o con cuánto paga', true); return; }
+    // Completo/vuelta is only required to CERRAR the order later, not to
+    // register it now - a domiciliario often doesn't know yet how the client
+    // will actually pay when the pedido is first created.
     try {
       await createOrder.mutateAsync({
         fecha,
@@ -306,21 +303,35 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             </div>
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {liveMessages.map((m: any, i: number) => (
-                <div key={i} className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
+              {liveMessages.map((m: any, i: number, arr: any[]) => {
+                const day = colombiaDateStr(m.created_at ?? m.sent_at);
+                const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
+                const showDivider = day !== prevDay;
+                return (
+                <Fragment key={i}>
+                {showDivider && (
+                  <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
+                    <span style={{ background: '#e9edef', color: '#54656f', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 8 }}>
+                      {formatChatDateDivider(m.created_at ?? m.sent_at)}
+                    </span>
+                  </div>
+                )}
+                <div className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
                   {m.media_type === 'image'
                     ? <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>
                     : <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
                   {(m.sent_at || m.created_at) && (
                     <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
-                      {new Date(m.sent_at ?? m.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
+                      {formatChatTimestamp(m.sent_at ?? m.created_at)}
                       {m.direction === 'out' && m.wpp_message_id && (
                         <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
                       )}
                     </div>
                   )}
                 </div>
-              ))}
+                </Fragment>
+                );
+              })}
              </div>
             </div>
             {/* Reply input */}
@@ -438,7 +449,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             )}
             <div className="mactions">
               <button ref={cancelBtnRef} onKeyDown={(e) => handleNewOrderActionBtnKeyDown(e, 'cancel')} className="bsec" onClick={handleClose}>Cancelar</button>
-              <button ref={submitBtnRef} onKeyDown={(e) => handleNewOrderActionBtnKeyDown(e, 'submit')} className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice || (pago === 'cod' && !codValid)}
+              <button ref={submitBtnRef} onKeyDown={(e) => handleNewOrderActionBtnKeyDown(e, 'submit')} className="bpri" onClick={handleSubmit} disabled={createOrder.isPending || hasNegativePrice}
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {createOrder.isPending
                   ? 'Registrando...'

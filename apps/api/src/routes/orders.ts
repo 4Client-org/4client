@@ -195,7 +195,7 @@ function buildOrderSelect(includeHistory = false) {
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
-    change_amount: true, cod_choice: true, locked: true, caja_cerrada: true, notes: true,
+    change_amount: true, cod_choice: true, split_cash: true, split_transfer: true, locked: true, caja_cerrada: true, notes: true,
     client_modified: true, client_deleted: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
@@ -721,6 +721,15 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const body = z.object({
       amount_received: z.number().min(0).max(99_999_999),
       password: z.string().min(1),
+      // Optional - only present when staff splits this cobro across efectivo
+      // AND transferencia (client pays part cash, part transfer). When given,
+      // cash+transfer must equal the order's own total exactly (validated
+      // below) - a split payment has no "vuelta" concept, each piece is paid
+      // in its exact amount, so amount_received is required to equal total too.
+      split: z.object({
+        cash: z.number().min(0).max(99_999_999),
+        transfer: z.number().min(0).max(99_999_999),
+      }).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
@@ -785,6 +794,20 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     if (body.data.amount_received < total) {
       return reply.status(400).send({ error: `El monto recibido debe ser mayor o igual al total del pedido ($${total.toLocaleString('es-CO')})`, code: 'VALIDATION_ERROR' });
     }
+    if (body.data.split) {
+      const splitSum = body.data.split.cash + body.data.split.transfer;
+      // Exact match required, not >= - a split payment must fully account for
+      // the order's total across the two methods, no leftover/vuelta concept.
+      if (splitSum !== total) {
+        return reply.status(400).send({
+          error: `Efectivo + transferencia debe sumar exactamente el total del pedido ($${total.toLocaleString('es-CO')}) - suman $${splitSum.toLocaleString('es-CO')}`,
+          code: 'VALIDATION_ERROR',
+        });
+      }
+      if (body.data.amount_received !== total) {
+        return reply.status(400).send({ error: 'Con pago dividido, el monto recibido debe ser igual al total (sin vuelto)', code: 'VALIDATION_ERROR' });
+      }
+    }
     const change = body.data.amount_received - total;
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
@@ -802,6 +825,8 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           ...(isCredito ? {} : { paid_at: new Date(), paid_by: req.user.userId }),
           amount_received: body.data.amount_received,
           change_amount: change,
+          split_cash: body.data.split ? body.data.split.cash : null,
+          split_transfer: body.data.split ? body.data.split.transfer : null,
           updated_at: new Date(),
         },
         select: buildOrderSelect(false),
@@ -812,7 +837,9 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           action_type: 'cobro',
           notes: isCredito
             ? `Pedido cerrado a crédito. Monto acordado: $${body.data.amount_received}. Pendiente de pago.`
-            : `Pago confirmado. Recibido: $${body.data.amount_received}. Cambio: $${change}`,
+            : body.data.split
+              ? `Pago confirmado (dividido). Efectivo: $${body.data.split.cash}. Transferencia: $${body.data.split.transfer}.`
+              : `Pago confirmado. Recibido: $${body.data.amount_received}. Cambio: $${change}`,
         },
       });
       return order;

@@ -89,16 +89,22 @@ async function start() {
   });
 
   await fastify.register(rateLimit, {
-    max: 60,
+    // Was 60/min - real usage kept hitting it ("rate limit exceeded, retry in N
+    // seconds") during completely normal staff work, not abuse: opening a pedido
+    // modal alone fires 4-5 requests (order, chat, employees, products, cierre-
+    // status), and doing that across several tickets in a short stretch - exactly
+    // what checking on multiple orders in a row looks like - blew through 60/min
+    // fast. Matches the webhook route's own override below (300/min); still a
+    // real ceiling per single authenticated user, just one an actual busy shift
+    // won't hit by just working normally.
+    max: 300,
     timeWindow: '1 minute',
     // Per-user instead of per-IP - an office/shared connection shouldn't have every
     // user drawing from the same bucket. This global hook runs before the per-route
     // `authenticate` preHandler, so req.user isn't populated yet; decode (not verify -
     // this is just a bucketing key, not an auth decision) the bearer token directly.
     // Falls back to IP for unauthenticated requests (public form, login - those have
-    // their own tighter per-route limits already). 60/min covers the busiest
-    // dashboard/inbox polling (30s intervals, several open modals) with headroom for
-    // socket-triggered refetches.
+    // their own tighter per-route limits already).
     keyGenerator: (req) => {
       const auth = req.headers.authorization;
       if (auth?.startsWith('Bearer ')) {

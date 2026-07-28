@@ -155,14 +155,25 @@ async function ingestMessage(
   // Auto-reply welcome message on first message of the day, immediately followed by
   // the form-link message - the two used to be separate actions (welcome automatic,
   // form link a manual "Formulario" button click) but a customer's very first
-  // contact now gets both without staff having to do anything. Sent as two
-  // independent attempts (not chained) - a failed welcome send must not also skip
-  // the form link, arguably the more useful of the two if the greeting didn't land.
+  // contact now gets both without staff having to do anything.
+  //
+  // Fire-and-forget relative to THIS webhook handler (not awaited below - Meta
+  // expects a fast 200 OK, not one held open behind 4 sequential message sends),
+  // but everything INSIDE this one async IIFE is now strictly sequential: welcome
+  // fully sent+recorded before the form-link sequence even starts. Previously the
+  // welcome send and the form-link sequence were two INDEPENDENT `.then()` chains
+  // started back to back - both real network calls to Meta with unpredictable
+  // latency, so which one actually landed on the client's phone first was a race,
+  // not the intended bienvenida -> aviso -> link -> seguimiento order. A failed
+  // welcome send still lets the form-link sequence run (own try/catch) - the more
+  // useful of the two shouldn't be skipped just because the greeting didn't land.
   if (isFirstMessageToday && org.welcome_message) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
-      provider.sendText(phone, org.welcome_message)
-        .then(async ({ messageId }) => {
+      (async () => {
+        type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+        try {
+          const { messageId } = await provider.sendText(phone, org.welcome_message!);
           const autoReply = await fastify.prisma.ticketMessage.create({
             data: {
               ticket_id: ticket.id,
@@ -172,13 +183,11 @@ async function ingestMessage(
               sent_at: new Date(),
             },
           });
-          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
             message: { ...autoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: autoReply.sent_at.toISOString(), sent_by_name: null },
           });
-        })
-        .catch(async (err) => {
+        } catch (err) {
           fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando auto-respuesta');
           // Same reasoning as inbox.ts's /reply and public.ts's confirmations - a
           // failed send (e.g. no active 24h WhatsApp session and no approved template)
@@ -186,28 +195,26 @@ async function ingestMessage(
           const failedAutoReply = await fastify.prisma.ticketMessage.create({
             data: {
               ticket_id: ticket.id, direction: 'out', text: org.welcome_message!,
-              sent_at: new Date(), failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255),
+              sent_at: new Date(), failed_reason: String((err as any)?.message ?? 'Error desconocido Meta API').slice(0, 255),
             },
           });
-          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
             message: { ...failedAutoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedAutoReply.sent_at.toISOString(), sent_by_name: null },
           });
-        });
+        }
 
-      // No sentByUserId - this is an automated send, not a staff click. public.ts's
-      // /submit already falls back to the first active admin/encargado when
-      // attributing an order to a token with no sentByUserId, so an order placed
-      // through this auto-sent link still gets a real name in "registered_by".
-      generateFormLinkUrl(fastify, ticket.id, org.id)
-        .then(async (url) => {
-          // Two separate WhatsApp messages, sent in order, not one combined block -
+        // No sentByUserId - this is an automated send, not a staff click. public.ts's
+        // /submit already falls back to the first active admin/encargado when
+        // attributing an order to a token with no sentByUserId, so an order placed
+        // through this auto-sent link still gets a real name in "registered_by".
+        try {
+          const url = await generateFormLinkUrl(fastify, ticket.id, org.id);
+          // Three separate WhatsApp messages, sent in order, not one combined block -
           // the notice+bank-account text alone is already long, and appending the
           // link to it produced a single message long enough to risk mangling on
           // some phones/keyboards; splitting also lets the client forward/copy just
           // the link without dragging the notice along.
-          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
           const sendAndRecord = async (text: string) => {
             const sent = await provider.sendText(phone, text);
             const msg = await fastify.prisma.ticketMessage.create({
@@ -221,8 +228,7 @@ async function ingestMessage(
           await sendAndRecord(buildFormLinkWarningMessage());
           await sendAndRecord(url);
           await sendAndRecord(buildFormLinkFollowUpMessage());
-        })
-        .catch(async (err) => {
+        } catch (err) {
           fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando formulario automático');
           // url generation itself could theoretically throw (DB write failure) before
           // there's any text to record - still worth a visible failure marker with
@@ -230,15 +236,15 @@ async function ingestMessage(
           const failedFormLink = await fastify.prisma.ticketMessage.create({
             data: {
               ticket_id: ticket.id, direction: 'out', text: 'Formulario de pedido',
-              sent_at: new Date(), failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255),
+              sent_at: new Date(), failed_reason: String((err as any)?.message ?? 'Error desconocido Meta API').slice(0, 255),
             },
           });
-          type MediaType = 'pdf' | 'image' | 'audio' | 'video';
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
             message: { ...failedFormLink, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedFormLink.sent_at.toISOString(), sent_by_name: null },
           });
-        });
+        }
+      })();
     }
   }
   type MediaType = 'pdf' | 'image' | 'audio' | 'video';
