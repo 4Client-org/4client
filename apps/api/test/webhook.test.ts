@@ -249,6 +249,52 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(metaCalled).toBe(false);
   });
 
+  // The whole point of raw_payload: Railway's own log retention turned out too
+  // short to catch this exact glitch after the fact (confirmed live) - the
+  // database is now the only durable place to see what Meta actually sent.
+  it('every inbound message persists the ENTIRE webhook POST body verbatim in raw_payload - on the message always, and on the ticket only at creation time', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-raw-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId } });
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const waMsgId1 = `wamid.raw1-${randomUUID()}`;
+    const firstPayload = messagePayload(wppPhoneId, phone, 'Primer mensaje', waMsgId1);
+
+    const res1 = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: firstPayload,
+    });
+    expect(res1.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const msg1 = await app.prisma.ticketMessage.findUniqueOrThrow({ where: { wpp_message_id: waMsgId1 } });
+    // Both should hold the exact same payload that created the ticket.
+    expect(ticket.raw_payload).toEqual(firstPayload);
+    expect(msg1.raw_payload).toEqual(firstPayload);
+
+    // A SECOND message on the same (now-existing) ticket - its own raw_payload
+    // must be captured too, but the TICKET's founding raw_payload must NOT be
+    // overwritten by this later, different payload.
+    const waMsgId2 = `wamid.raw2-${randomUUID()}`;
+    const secondPayload = messagePayload(wppPhoneId, phone, 'Segundo mensaje', waMsgId2);
+    const res2 = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: secondPayload,
+    });
+    expect(res2.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const msg2 = await app.prisma.ticketMessage.findUniqueOrThrow({ where: { wpp_message_id: waMsgId2 } });
+    expect(msg2.raw_payload).toEqual(secondPayload);
+
+    const ticketAfter = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(ticketAfter.raw_payload).toEqual(firstPayload); // unchanged, still the founding one
+  });
+
   it('an inbound image message is resolved (media id -> temp URL -> bytes) and stored with media_type/media_url set, never Meta\'s own temp URL', async () => {
     // No welcome_message on this org - keeps the auto-reply/form-link send paths
     // out of the way so only the image-ingestion fetch calls happen below.

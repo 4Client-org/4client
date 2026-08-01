@@ -79,6 +79,12 @@ async function ingestMessage(
   // (every attempt would fail against Meta anyway - no point burning 3 calls
   // and 3 failed_reason rows to learn that).
   noWppNumber = false,
+  // The ENTIRE webhook POST body this message arrived in, verbatim - stored on
+  // both the ticket (only if this message is what creates it - see below) and
+  // every inbound TicketMessage row, so there's a durable, queryable record of
+  // exactly what Meta sent regardless of how short log retention turns out to
+  // be. `unknown` on purpose - never parsed/typed, just persisted as-is.
+  rawPayload?: unknown,
 ) {
   // Find org by phone_number_id
   const org = await fastify.prisma.organization.findFirst({
@@ -135,6 +141,7 @@ async function ingestMessage(
         last_message_at: sentAt,
         unread_count: 1,
         no_wpp_number: noWppNumber,
+        raw_payload: rawPayload as any,
       },
     });
   } else {
@@ -166,6 +173,7 @@ async function ingestMessage(
       media_type: media?.type ?? null,
       wpp_message_id: waMsgId,
       sent_at: sentAt,
+      raw_payload: rawPayload as any,
     },
     include: { sender: { select: { id: true, name: true } } },
   });
@@ -292,6 +300,7 @@ async function ingestImageMessage(
   waMsgId: string,
   sentAt: Date,
   noWppNumber = false,
+  rawPayload?: unknown,
 ) {
   const org = await fastify.prisma.organization.findFirst({
     where: { wpp_meta_phone_id: phoneNumberId, active: true },
@@ -319,7 +328,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       image.caption ? String(image.caption).slice(0, 4096) : null,
-      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber,
+      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber, rawPayload,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
@@ -333,7 +342,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
-      waMsgId, sentAt, undefined, noWppNumber,
+      waMsgId, sentAt, undefined, noWppNumber, rawPayload,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
   }
 }
@@ -359,6 +368,7 @@ async function ingestBinaryMediaMessage(
   waMsgId: string,
   sentAt: Date,
   noWppNumber = false,
+  rawPayload?: unknown,
 ) {
   const label = MEDIA_KIND_LABEL[kind];
   const org = await fastify.prisma.organization.findFirst({
@@ -390,7 +400,7 @@ async function ingestBinaryMediaMessage(
       : null;
     await ingestMessage(
       fastify, phoneNumberId, phone, name, text,
-      waMsgId, sentAt, { url: token, type: kind }, noWppNumber,
+      waMsgId, sentAt, { url: token, type: kind }, noWppNumber, rawPayload,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, `WPP: error descargando ${label} entrante`);
@@ -399,7 +409,7 @@ async function ingestBinaryMediaMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       `El cliente envió un ${label}, pero no se pudo descargar. Pídele que lo reenvíe.`,
-      waMsgId, sentAt, undefined, noWppNumber,
+      waMsgId, sentAt, undefined, noWppNumber, rawPayload,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, `WPP: error registrando fallback de ${label}`));
   }
 }
@@ -419,13 +429,14 @@ async function ingestLocationMessage(
   waMsgId: string,
   sentAt: Date,
   noWppNumber = false,
+  rawPayload?: unknown,
 ) {
   const label = [location.name, location.address].filter(Boolean).join(' - ');
   const text = label ? `Ubicación: ${label}` : 'Ubicación compartida';
   const mapsLink = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
   await ingestMessage(
     fastify, phoneNumberId, phone, name, text,
-    waMsgId, sentAt, { url: mapsLink, type: 'location' }, noWppNumber,
+    waMsgId, sentAt, { url: mapsLink, type: 'location' }, noWppNumber, rawPayload,
   );
 }
 
@@ -574,38 +585,38 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           const name  = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
 
           if (msg.type === 'image' && msg.image?.id) {
-            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber)
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber, payload)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
             continue;
           }
 
           if (msg.type === 'audio' && msg.audio?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'audio', msg.audio, msg.id, sentAt, noWppNumber)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'audio', msg.audio, msg.id, sentAt, noWppNumber, payload)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo audio'));
             continue;
           }
 
           if (msg.type === 'video' && msg.video?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'video', msg.video, msg.id, sentAt, noWppNumber)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'video', msg.video, msg.id, sentAt, noWppNumber, payload)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo video'));
             continue;
           }
 
           if (msg.type === 'document' && msg.document?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'document', msg.document, msg.id, sentAt, noWppNumber)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'document', msg.document, msg.id, sentAt, noWppNumber, payload)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo documento'));
             continue;
           }
 
           if (msg.type === 'location' && msg.location) {
-            ingestLocationMessage(fastify, metadata.phone_number_id, phone, name, msg.location, msg.id, sentAt, noWppNumber)
+            ingestLocationMessage(fastify, metadata.phone_number_id, phone, name, msg.location, msg.id, sentAt, noWppNumber, payload)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo ubicación'));
             continue;
           }
 
           if (!msg.text?.body) continue;
           const text = String(msg.text.body).slice(0, 4096);
-          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber)
+          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber, payload)
             .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }
 
