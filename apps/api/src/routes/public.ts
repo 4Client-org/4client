@@ -630,7 +630,27 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
     // ── New order path ──
     // Colombia UTC-5 local date for fecha
-    const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+    let todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+
+    // A client's own form submission has no idea whether staff already ran
+    // cierre for today (e.g. closed early evening while the business was still
+    // actually taking orders) - orders.ts's own staff-side POST / already
+    // guards against creating a new order on an already-closed day (see
+    // findDayClose there), this route just never had the same check. Without
+    // it, a late order lands on a day that already had its ONE cierre pass -
+    // nothing will ever force-decide it, so it sits forever unlocked and
+    // draggable on a day everyone already reconciled and moved past. Rolling
+    // forward one day mirrors exactly what cierre.ts's own "mañana" deferral
+    // already does for a pending order at cierre time - this order genuinely
+    // belongs to the next open business day, not a closed one.
+    const alreadyClosed = await fastify.prisma.dailyClose.findUnique({
+      where: { org_id_fecha: { org_id: ticket.org_id, fecha: todayLocal } },
+    });
+    if (alreadyClosed) {
+      const tomorrow = new Date(todayLocal);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      todayLocal = tomorrow;
+    }
 
     // Cap NEW orders generated per form link, PER DAY - the token stays valid for 7
     // days with no revocation, so without this a single leaked/shared link could
