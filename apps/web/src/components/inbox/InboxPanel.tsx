@@ -9,7 +9,17 @@ import { colombiaDateStr, formatChatTimestamp, formatChatDateDivider } from '../
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
-import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
+import ChatAudio from '../ui/ChatAudio';
+import ChatVideo from '../ui/ChatVideo';
+import ChatDocument from '../ui/ChatDocument';
+import ChatLocation from '../ui/ChatLocation';
+import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
+
+// Sidebar preview text for the ticket list - the real content (photo/audio/etc)
+// only renders once the conversation is actually open.
+const MEDIA_PREVIEW_LABEL: Record<string, string> = {
+  image: 'Foto', audio: 'Audio', video: 'Video', document: 'Documento', location: 'Ubicación',
+};
 
 // Safe URL regex - no backtracking ambiguity, no ReDoS risk
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
@@ -108,35 +118,13 @@ export default function InboxPanel() {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const sendImageMut = useMutation({
-    mutationFn: (payload: { data: string; mime_type: string }) =>
-      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${selectedId}/send-image`, payload),
-    onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['inbox-convo', selectedId] });
-      qc.invalidateQueries({ queryKey: ['inbox'] });
-      if (res?.wpp_status === 'failed') {
-        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
-      } else if (res?.wpp_status === 'no_credentials') {
-        toast('Foto guardada. WPP sin configurar - revisa DevTools - WPP', true);
-      }
-    },
-    onError: (e: any) => toast(e.message, true),
-  });
+  const { pickAndSend, isPending: sendMediaPending } = useSendChatMedia(selectedId ?? undefined, [['inbox-convo', selectedId], ['inbox']]);
 
-  async function handlePickImage(e: ChangeEvent<HTMLInputElement>) {
+  async function handlePickMedia(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) {
-      toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true);
-      return;
-    }
-    if (file.size > CHAT_IMAGE_MAX_BYTES) {
-      toast('La foto pesa más de 5 MB', true);
-      return;
-    }
-    const data = await fileToBase64(file);
-    sendImageMut.mutate({ data, mime_type: file.type });
+    await pickAndSend(file);
   }
 
   // Keeps the chat pinned to the bottom, not just when a new message arrives but
@@ -234,7 +222,7 @@ export default function InboxPanel() {
               {lastMsg && (
                 <div className="inbox-item-preview">
                   {lastMsg.direction === 'out' ? '› ' : ''}
-                  {lastMsg.media_type === 'image' ? 'Foto' : lastMsg.text}
+                  {MEDIA_PREVIEW_LABEL[lastMsg.media_type as string] ?? lastMsg.text}
                 </div>
               )}
             </div>
@@ -298,9 +286,12 @@ export default function InboxPanel() {
                     {isOut && (
                       <div className="chat-bub-who">{msg.sender?.name ?? 'Sistema'}</div>
                     )}
-                    {msg.media_type === 'image'
-                      ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
-                      : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
+                    {msg.media_type === 'image' && <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                    {msg.media_type === 'audio' && <ChatAudio token={msg.media_url} />}
+                    {msg.media_type === 'video' && <ChatVideo token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                    {msg.media_type === 'document' && <ChatDocument token={msg.media_url} filename={msg.media_caption} caption={msg.media_caption ? msg.text : null} />}
+                    {msg.media_type === 'location' && <ChatLocation url={msg.media_url} label={msg.text} />}
+                    {!msg.media_type && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div className="chat-bub-time" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                       {formatMsgTime(msg.sent_at)}
                       {isOut && msg.wpp_message_id && (
@@ -316,11 +307,11 @@ export default function InboxPanel() {
 
           {/* Reply bar */}
           <div className="inbox-reply">
-            <input ref={fileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handlePickImage} style={{ display: 'none' }} />
+            <input ref={fileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handlePickMedia} style={{ display: 'none' }} />
             <button
-              title="Adjuntar foto"
+              title="Adjuntar foto, audio, video o documento"
               onClick={() => fileInputRef.current?.click()}
-              disabled={sendImageMut.isPending}
+              disabled={sendMediaPending}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 6px', display: 'flex', alignItems: 'center' }}
             >
               <Paperclip size={19} />

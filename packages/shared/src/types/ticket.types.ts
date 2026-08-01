@@ -1,5 +1,5 @@
 export type MessageDirection = 'in' | 'out';
-export type MediaType = 'pdf' | 'image' | 'audio' | 'video';
+export type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
 
 export interface TicketMessage {
   id: string;
@@ -22,6 +22,7 @@ export interface Ticket {
   id: string;
   org_id: string;
   phone: string;
+  no_wpp_number: boolean;
   customer_name: string | null;
   unread_count: number;
   last_message_at: string | null;

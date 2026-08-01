@@ -14,7 +14,11 @@ import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
-import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
+import ChatAudio from '../ui/ChatAudio';
+import ChatVideo from '../ui/ChatVideo';
+import ChatDocument from '../ui/ChatDocument';
+import ChatLocation from '../ui/ChatLocation';
+import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -554,28 +558,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   });
 
   const chatFileInputRef = useRef<HTMLInputElement>(null);
-  const sendImageMut = useMutation({
-    mutationFn: (payload: { data: string; mime_type: string }) =>
-      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${order?.ticket_id}/send-image`, payload),
-    onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['inbox-convo', order?.ticket_id] });
-      if (res?.wpp_status === 'failed') {
-        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
-      } else if (res?.wpp_status === 'no_credentials') {
-        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
-      }
-    },
-    onError: (e: any) => toast(e.message, true),
-  });
+  const { pickAndSend: pickAndSendChatMedia, isPending: sendMediaPending } = useSendChatMedia(order?.ticket_id, [['inbox-convo', order?.ticket_id]]);
 
   async function handleChatPickImage(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
-    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
-    const data = await fileToBase64(file);
-    sendImageMut.mutate({ data, mime_type: file.type });
+    await pickAndSendChatMedia(file);
   }
 
   const formLinkMut = useMutation({
@@ -1017,9 +1006,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       {isOut && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
-                      {msg.media_type === 'image'
-                        ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
-                        : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
+                      {msg.media_type === 'image' && <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                      {msg.media_type === 'audio' && <ChatAudio token={msg.media_url} />}
+                      {msg.media_type === 'video' && <ChatVideo token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                      {msg.media_type === 'document' && <ChatDocument token={msg.media_url} filename={msg.media_caption} caption={msg.media_caption ? msg.text : null} />}
+                      {msg.media_type === 'location' && <ChatLocation url={msg.media_url} label={msg.text} />}
+                      {!msg.media_type && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {formatChatTimestamp(msg.sent_at)}
                         {isOut && msg.wpp_message_id && (
@@ -1042,11 +1034,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               display: 'flex', gap: 6, padding: '8px 8px',
               borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
             }}>
-              <input ref={chatFileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handleChatPickImage} style={{ display: 'none' }} />
+              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
               <button
-                title="Adjuntar foto"
+                title="Adjuntar foto, audio, video o documento"
                 onClick={() => chatFileInputRef.current?.click()}
-                disabled={sendImageMut.isPending}
+                disabled={sendMediaPending}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
               >
                 <Paperclip size={16} />
@@ -1133,6 +1125,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                     <div><span style={{ color: 'var(--gt)' }}>Vuelto: </span><strong>{fmtCOP(Number(order.change_amount ?? 0))}</strong></div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Purely informational - a client can freely have more than one crédito
+                order at once, paid or not (admin's own call), this never blocks
+                editing/closing THIS order. Only flags OTHER orders on this same
+                ticket, not this one itself - if you're already looking at the
+                unpaid crédito order, you don't need to be told about it. */}
+            {chatData?.orders?.some((o: any) => o.payment_method === 'credito' && !o.paid && o.id !== order.id) && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={15} /> Este cliente tiene un pedido a crédito no pagado.
               </div>
             )}
 

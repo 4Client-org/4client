@@ -385,4 +385,98 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(inbound.media_url).toBeNull();
     expect(inbound.text).toContain('no se pudo descargar');
   });
+
+  it('an inbound voice note (audio/ogg) is resolved and stored with media_type "audio", same resolve-then-download shape as an image', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-audio-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    const mediaId = `media-audio-${randomUUID()}`;
+    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
+    // Real OGG magic bytes ("OggS") - WhatsApp voice notes are audio/ogg;codecs=opus.
+    const fakeBytes = new TextEncoder().encode('OggS' + '\x00'.repeat(10));
+
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith(`/${mediaId}`)) {
+        return new Response(JSON.stringify({ url: tempUrl, mime_type: 'audio/ogg; codecs=opus' }), { status: 200 });
+      }
+      if (url === tempUrl) return new Response(fakeBytes, { status: 200 });
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-audio',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: wppPhoneId, display_phone_number: '' },
+            contacts: [{ profile: { name: 'Cliente Audio' }, wa_id: phone }],
+            messages: [{
+              from: phone, id: `wamid.audio-${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)),
+              type: 'audio', audio: { id: mediaId, mime_type: 'audio/ogg; codecs=opus' },
+            }],
+          },
+        }],
+      }],
+    };
+
+    const res = await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
+    expect(inbound.media_type).toBe('audio');
+    expect(inbound.media_url).toMatch(/^[0-9a-f]{40}\.ogg$/);
+  });
+
+  it('an inbound location never touches Meta\'s media API at all - stored directly from the coordinates in the webhook payload', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-loc-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    let metaCalled = false;
+    global.fetch = (async () => { metaCalled = true; return new Response('{}', { status: 200 }); }) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-loc',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: wppPhoneId, display_phone_number: '' },
+            contacts: [{ profile: { name: 'Cliente Ubicacion' }, wa_id: phone }],
+            messages: [{
+              from: phone, id: `wamid.loc-${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)),
+              type: 'location', location: { latitude: 4.6097, longitude: -74.0817, name: 'Casa' },
+            }],
+          },
+        }],
+      }],
+    };
+
+    const res = await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 300));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
+    expect(inbound.media_type).toBe('location');
+    expect(inbound.media_url).toBe('https://maps.google.com/?q=4.6097,-74.0817');
+    expect(inbound.text).toContain('Casa');
+    expect(metaCalled).toBe(false);
+  });
 });

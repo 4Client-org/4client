@@ -99,6 +99,106 @@ export class MetaCloudProvider {
     return { messageId: data.messages[0].id };
   }
 
+  // WhatsApp's audio message type has no caption field at all (unlike image/
+  // video/document) - Meta's API silently ignores one if sent, so there's
+  // nothing to accept here.
+  async sendAudio(to: string, mediaId: string): Promise<{ messageId: string }> {
+    const res = await fetch(`${META_API_BASE}/${this.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'audio',
+        audio: { id: mediaId },
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Meta API sendAudio failed (${res.status}): ${JSON.stringify(err)}`);
+    }
+    const data = await res.json() as { messages: [{ id: string }] };
+    return { messageId: data.messages[0].id };
+  }
+
+  async sendVideo(to: string, mediaId: string, caption?: string): Promise<{ messageId: string }> {
+    const res = await fetch(`${META_API_BASE}/${this.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'video',
+        video: { id: mediaId, ...(caption ? { caption } : {}) },
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Meta API sendVideo failed (${res.status}): ${JSON.stringify(err)}`);
+    }
+    const data = await res.json() as { messages: [{ id: string }] };
+    return { messageId: data.messages[0].id };
+  }
+
+  // `filename` is what shows up as the file's name on the client's phone - without
+  // it WhatsApp falls back to something generic/blank, since our own storage
+  // token (the only "name" Meta ever sees otherwise) is a meaningless hex string.
+  async sendDocument(to: string, mediaId: string, filename: string, caption?: string): Promise<{ messageId: string }> {
+    const res = await fetch(`${META_API_BASE}/${this.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'document',
+        document: { id: mediaId, filename, ...(caption ? { caption } : {}) },
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Meta API sendDocument failed (${res.status}): ${JSON.stringify(err)}`);
+    }
+    const data = await res.json() as { messages: [{ id: string }] };
+    return { messageId: data.messages[0].id };
+  }
+
+  // The one outbound media type with no uploadMedia step at all - a location is
+  // just coordinates in the message body itself, nothing to upload to Meta first.
+  async sendLocation(to: string, latitude: number, longitude: number, name?: string, address?: string): Promise<{ messageId: string }> {
+    const res = await fetch(`${META_API_BASE}/${this.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'location',
+        location: { latitude, longitude, ...(name ? { name } : {}), ...(address ? { address } : {}) },
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Meta API sendLocation failed (${res.status}): ${JSON.stringify(err)}`);
+    }
+    const data = await res.json() as { messages: [{ id: string }] };
+    return { messageId: data.messages[0].id };
+  }
+
   async markAsRead(messageId: string): Promise<void> {
     await fetch(`${META_API_BASE}/${this.phoneNumberId}/messages`, {
       method: 'POST',

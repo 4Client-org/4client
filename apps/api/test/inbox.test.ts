@@ -273,6 +273,73 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(stored).toHaveLength(0);
   });
 
+  it('POST /:ticketId/send-audio stores and sends a voice note - no caption field at all (WhatsApp audio messages don\'t support one)', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230007', customer_name: 'Cliente Audio Saliente' } });
+    const fakeMediaId = `media-id-audio-${Date.now()}`;
+    const fakeWamid = `wamid.AUD${Date.now()}`;
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith('/media')) return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
+      return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+    }) as any;
+
+    // Real OGG magic bytes ("OggS").
+    const oggBytes = Buffer.from('OggS' + '\x00'.repeat(10)).toString('base64');
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-audio`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: oggBytes, mime_type: 'audio/ogg' },
+    });
+    expect(res.statusCode).toBe(201);
+    const msg = res.json().data;
+    expect(msg.media_type).toBe('audio');
+    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.ogg$/);
+
+    await new Promise((r) => setTimeout(r, 200));
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+    expect(stored!.failed_reason).toBeNull();
+  });
+
+  it('POST /:ticketId/send-document stores the filename (in media_caption, no dedicated column) and sends it referencing that filename so it doesn\'t show up nameless on the client\'s phone', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230008', customer_name: 'Cliente Documento' } });
+    const fakeMediaId = `media-id-doc-${Date.now()}`;
+    const fakeWamid = `wamid.DOC${Date.now()}`;
+    global.fetch = (async (url: string) => {
+      if (String(url).endsWith('/media')) return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
+      return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+    }) as any;
+
+    const pdfBytes = Buffer.from('%PDF-1.4 fake but real header').toString('base64');
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-document`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: pdfBytes, mime_type: 'application/pdf', filename: 'factura-001.pdf' },
+    });
+    expect(res.statusCode).toBe(201);
+    const msg = res.json().data;
+    expect(msg.media_type).toBe('document');
+    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.pdf$/);
+    expect(msg.media_caption).toBe('factura-001.pdf');
+
+    await new Promise((r) => setTimeout(r, 200));
+    const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
+    expect(stored!.wpp_message_id).toBe(fakeWamid);
+  });
+
+  it('POST /:ticketId/send-document rejects a missing filename', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230009', customer_name: 'Cliente Documento Sin Nombre' } });
+    const pdfBytes = Buffer.from('%PDF-1.4 fake but real header').toString('base64');
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-document`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { data: pdfBytes, mime_type: 'application/pdf' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('GET /media/:token rejects a malformed token and a well-formed but never-issued one', async () => {
     const malformed = await app.inject({
       method: 'GET', url: '/api/v1/inbox/media/not-a-real-token',
