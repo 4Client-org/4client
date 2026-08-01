@@ -121,6 +121,15 @@ model Ticket {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   org_id             String    @db.Uuid
   phone              String    @db.VarChar(20)
+  // Set only when Meta's webhook delivered a message with an empty/missing sender
+  // phone number (a rare, confirmed-real Meta-side glitch - webhook.ts still logs
+  // the raw payload when this happens, but Meta itself gives no way to look up
+  // what it sent after the fact). `phone` gets a random unique placeholder
+  // ("no-<16 hex>") instead of staying empty, so this ticket doesn't collide with
+  // a later, equally-broken message under the same org - there is genuinely no
+  // way to reply to this customer, so the UI shows a clear warning instead of a
+  // normal (but silently unreachable) chat.
+  no_wpp_number      Boolean   @default(false)
   customer_name      String?   @db.VarChar(200)
   wpp_thread_id      String?   @db.VarChar(200)
   unread_count       Int       @default(0)

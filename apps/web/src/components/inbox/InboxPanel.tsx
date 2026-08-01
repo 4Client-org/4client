@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -262,6 +262,12 @@ export default function InboxPanel() {
             </div>
           </div>
 
+          {selectedTicket?.no_wpp_number && (
+            <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+            </div>
+          )}
+
           {/* Messages */}
           <div className="inbox-messages" ref={chatScrollRef}>
            <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -289,8 +295,8 @@ export default function InboxPanel() {
                     </div>
                   )}
                   <div className={`chat-bub ${isOut ? 'out' : 'in'}`}>
-                    {isOut && msg.sender?.name && (
-                      <div className="chat-bub-who">{msg.sender.name}</div>
+                    {isOut && (
+                      <div className="chat-bub-who">{msg.sender?.name ?? 'Sistema'}</div>
                     )}
                     {msg.media_type === 'image'
                       ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />

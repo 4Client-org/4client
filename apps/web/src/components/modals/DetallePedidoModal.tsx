@@ -868,7 +868,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // `locked` alone no longer means read-only - admin/dev can still fully edit a
   // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
   // is cerrado (diaCerrado still freezes everyone, admin included).
-  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera' || order.client_deleted;
+  // A crédito order still awaiting payment is exempt from the locked/encargado
+  // block too - cobro sets locked:true immediately for every payment method, but
+  // for crédito specifically the order isn't actually done: the client can still
+  // come back to pay, ask questions, etc, and encargado needs to keep handling it
+  // normally (move it, edit it) same as before it closed. Only the ADMIN-only
+  // "marcar crédito pagado" action (below) settles the debt for real - once that
+  // happens `order.paid` flips true and this exemption stops applying, same as
+  // any other closed order from then on. Confirmed bug: a real crédito order was
+  // reachable by admin only the moment it closed, encargado couldn't touch it.
+  const creditoSinPagar = order.payment_method === 'credito' && !order.paid;
+  const readOnly = (locked && !canEditLocked && !creditoSinPagar) || diaCerrado || order.status === 'papelera' || order.client_deleted;
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -971,6 +981,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             </div>
 
+            {chatData?.no_wpp_number && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+              </div>
+            )}
+
             {/* Messages */}
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 6px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -998,8 +1014,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
                     }}>
-                      {isOut && msg.sender?.name && (
-                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
+                      {isOut && (
+                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
                       {msg.media_type === 'image'
                         ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
@@ -1140,7 +1156,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {locked && !canEditLocked && (
+            {locked && !canEditLocked && !creditoSinPagar && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Solo el administrador puede modificar este pedido cerrado. Puedes agregar una observación abajo.
               </div>

@@ -178,7 +178,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const explicit = ticket.form_link_sent_by
       ? await fastify.prisma.user.findFirst({ where: { id: ticket.form_link_sent_by, org_id: ticket.org_id } })
       : null;
-    if (explicit) return { user: explicit, label: explicit.name };
+    if (explicit) return { user: explicit, label: explicit.name, isAuto: false };
     const fallback = await fastify.prisma.user.findFirst({
       where: { org_id: ticket.org_id, active: true, role: { in: ['admin', 'encargado'] } },
       orderBy: { created_at: 'asc' },
@@ -190,7 +190,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // clicked "enviar formulario" - webhook.ts's welcome flow has no
     // sentByUserId) read as if that person had done something they hadn't,
     // which is exactly what caused a false "¿me vulneraron el sistema?" alarm.
-    return { user: fallback, label: 'el sistema (formulario enviado automáticamente)' };
+    // `isAuto` is what callers must check before writing TicketMessage.sent_by -
+    // that column feeds the chat bubble's sender name directly (unlike the
+    // history/notes text above, which always uses `label`), so it must stay
+    // null for an auto-send instead of pointing at `fallback`'s real account,
+    // or the same false-attribution problem resurfaces on every chat reload.
+    return { user: fallback, label: 'el sistema (formulario enviado automáticamente)', isAuto: true };
   }
 
   // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever sees the
@@ -339,7 +344,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       return sendInvalidToken(err, reply);
     }
 
-    const { user: actorUser, label: actorLabel } = await resolveActorUser(ticket);
+    const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
     // Fetch product prices from catalog - needed either way (new order or merge)
@@ -530,7 +535,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const msgText = `*Tu pedido #${updated.num} fue actualizado*\n${lines.join('\n')}\n\n_Fecha: ${formatFechaLong(updated.fecha)}_\n_Dirección: ${sanitizeForWhatsApp(updated.address)}_\n_Método de pago: ${updatedPaymentLabel}_\n\n_El encargado revisará los cambios._`;
 
         const message = await fastify.prisma.ticketMessage.create({
-          data: { ticket_id: ticket.id, direction: 'out', text: msgText, sent_at: new Date(), sent_by: actorUser.id },
+          data: { ticket_id: ticket.id, direction: 'out', text: msgText, sent_at: new Date(), sent_by: actorIsAuto ? null : actorUser.id },
         });
         await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { last_message_at: new Date() } });
 
@@ -574,7 +579,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           message: {
             id: message.id, ticket_id: ticket.id, direction: 'out' as const, text: message.text,
             media_url: null, media_type: null, media_caption: null,
-            sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
+            sent_by: actorIsAuto ? null : actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
             sent_at: message.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: failedReason,
           },
         });
@@ -589,7 +594,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         if (!body.data.payment_method && (!updated.payment_method || updated.payment_method === 'sin_asignar')) {
           const promptText = '¿Efectivo o transferencia?';
           const promptMessage = await fastify.prisma.ticketMessage.create({
-            data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorUser.id },
+            data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorIsAuto ? null : actorUser.id },
           });
           let promptWppMessageId: string | null = null;
           let promptFailedReason: string | null = null;
@@ -613,7 +618,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             message: {
               id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
               media_url: null, media_type: null, media_caption: null,
-              sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
+              sent_by: actorIsAuto ? null : actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
               sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
             },
           });
@@ -688,7 +693,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         direction: 'out',
         text: msgText,
         sent_at: new Date(),
-        sent_by: actorUser.id,
+        sent_by: actorIsAuto ? null : actorUser.id,
       },
     });
 
@@ -757,7 +762,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         direction: 'out' as const,
         text: message.text,
         media_url: null, media_type: null, media_caption: null,
-        sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
+        sent_by: actorIsAuto ? null : actorUser.id, sent_by_name: actorLabel, wpp_message_id: wppMessageId,
         sent_at: message.sent_at.toISOString(),
         delivered: false, read_by_client: false, failed_reason: failedReason,
       },
@@ -771,7 +776,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     if (!body.data.payment_method) {
       const promptText = '¿Efectivo o transferencia?';
       const promptMessage = await fastify.prisma.ticketMessage.create({
-        data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorUser.id },
+        data: { ticket_id: ticket.id, direction: 'out', text: promptText, sent_at: new Date(), sent_by: actorIsAuto ? null : actorUser.id },
       });
       let promptWppMessageId: string | null = null;
       let promptFailedReason: string | null = null;
@@ -795,7 +800,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         message: {
           id: promptMessage.id, ticket_id: ticket.id, direction: 'out' as const, text: promptText,
           media_url: null, media_type: null, media_caption: null,
-          sent_by: actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
+          sent_by: actorIsAuto ? null : actorUser.id, sent_by_name: actorLabel, wpp_message_id: promptWppMessageId,
           sent_at: promptMessage.sent_at.toISOString(), delivered: false, read_by_client: false, failed_reason: promptFailedReason,
         },
       });

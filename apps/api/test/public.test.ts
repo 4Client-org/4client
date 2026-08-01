@@ -521,6 +521,50 @@ describe('public form routes', () => {
     const createEntry = order.history.find(h => h.action_type === 'create');
     expect(createEntry?.notes).toContain(adminName);
     expect(createEntry?.actor_id).toBe(adminId);
+
+    // The "recibido" confirmation the CLIENT sees in the chat must also credit the
+    // real staff member who actually sent the link (sent_by feeds the chat
+    // bubble's sender name via TicketMessage.sender) - distinct from order_history
+    // (checked above), which is a separate write this same route makes.
+    const confirmation = await app.prisma.ticketMessage.findFirst({
+      where: { ticket_id: ticketId, direction: 'out', text: { contains: 'Atribucion' } },
+    });
+    expect(confirmation?.sent_by).toBe(adminId);
+  });
+
+  // The bug this guards against: a link the SYSTEM sent automatically (nobody
+  // clicked "enviar formulario") used to stamp a real fallback admin's id onto
+  // sent_by - fine for the required order_history/registered_by FK, but wrong
+  // for TicketMessage.sent_by, which the chat bubble reads directly as "who sent
+  // this" and would show that admin's name as if they'd personally typed it.
+  it('an order created through an AUTO-sent link (no staff member clicked "enviar formulario") never attributes the confirmation message to a real staff account', async () => {
+    const autoTicket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119900', customer_name: 'Cliente Auto' } });
+    // No sentByUserId - mirrors webhook.ts's auto-send-after-welcome, which never
+    // passes one.
+    const autoToken = await issueFormToken(app, autoTicket.id, orgId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/public/submit',
+      payload: { token: autoToken, device_token: 'device-auto', address: 'Calle Auto 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const order = await app.prisma.order.findUniqueOrThrow({
+      where: { id: res.json().data.orderId },
+      include: { history: true },
+    });
+    // registered_by/actor_id still need a REAL user id (required FK, not
+    // nullable) - only the human-readable text and TicketMessage.sent_by change.
+    expect(order.registered_by).toBeTruthy();
+    const createEntry = order.history.find(h => h.action_type === 'create');
+    expect(createEntry?.notes).toContain('el sistema');
+    expect(createEntry?.notes).not.toContain(adminName);
+
+    const confirmation = await app.prisma.ticketMessage.findFirst({
+      where: { ticket_id: autoTicket.id, direction: 'out', text: { contains: 'recibido desde el formulario' } },
+    });
+    expect(confirmation?.sent_by).toBeNull();
   });
 
   describe('POST /public/order/:orderId/delete - client cancels their own order', () => {

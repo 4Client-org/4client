@@ -821,8 +821,15 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       const order = await tx.order.update({
         where: { id },
         data: {
+          // paid_at/paid_by always set here, crédito included - they record WHO
+          // CLOSED the order and WHEN, which is what "Cerrado por"/"Hora cierre"
+          // in the UI actually shows. `paid` (not these two) is the real signal
+          // for whether money has actually come in - for crédito it stays false
+          // here on purpose, only PATCH /:id/credito-pagado below flips it, and
+          // that route must NOT touch paid_at/paid_by again (would overwrite the
+          // real close time with the later settlement time and lose it).
           status: 'cerrado', paid: !isCredito, locked: true,
-          ...(isCredito ? {} : { paid_at: new Date(), paid_by: req.user.userId }),
+          paid_at: new Date(), paid_by: req.user.userId,
           amount_received: body.data.amount_received,
           change_amount: change,
           split_cash: body.data.split ? body.data.split.cash : null,
@@ -869,9 +876,14 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
+      // paid_at/paid_by NOT touched here - they already hold the real close
+      // time/actor from POST /:id/cobro above; overwriting them with this later
+      // settlement moment would lose "Cerrado por"/"Hora cierre"'s actual answer.
+      // Who/when this settlement itself happened is still recorded below, in
+      // OrderHistory.
       const order = await tx.order.update({
         where: { id },
-        data: { paid: true, paid_at: new Date(), paid_by: req.user.userId },
+        data: { paid: true },
         select: buildOrderSelect(false),
       });
       await tx.orderHistory.create({

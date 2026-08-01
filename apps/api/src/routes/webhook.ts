@@ -60,6 +60,13 @@ async function ingestMessage(
   // resolvable whenever staff actually open the chat, not just for the ~5 minutes
   // Meta's URL would have lived.
   media?: { url: string; type: 'image' },
+  // True when `phone` is a synthesized placeholder (Meta delivered this message
+  // with no real sender number) - see the dispatcher above. Marks the ticket so
+  // staff see a clear warning instead of a normal-looking but silently
+  // unreachable chat, and skips the auto welcome/link send below entirely
+  // (every attempt would fail against Meta anyway - no point burning 3 calls
+  // and 3 failed_reason rows to learn that).
+  noWppNumber = false,
 ) {
   // Find org by phone_number_id
   const org = await fastify.prisma.organization.findFirst({
@@ -115,6 +122,7 @@ async function ingestMessage(
         fecha: todayLocal,
         last_message_at: sentAt,
         unread_count: 1,
+        no_wpp_number: noWppNumber,
       },
     });
   } else {
@@ -167,7 +175,7 @@ async function ingestMessage(
   // not the intended bienvenida -> aviso -> link -> seguimiento order. A failed
   // welcome send still lets the form-link sequence run (own try/catch) - the more
   // useful of the two shouldn't be skipped just because the greeting didn't land.
-  if (isFirstMessageToday && org.welcome_message) {
+  if (isFirstMessageToday && org.welcome_message && !noWppNumber) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
       (async () => {
@@ -273,6 +281,7 @@ async function ingestImageMessage(
   image: { id: string; caption?: string },
   waMsgId: string,
   sentAt: Date,
+  noWppNumber = false,
 ) {
   const org = await fastify.prisma.organization.findFirst({
     where: { wpp_meta_phone_id: phoneNumberId, active: true },
@@ -300,7 +309,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       image.caption ? String(image.caption).slice(0, 4096) : null,
-      waMsgId, sentAt, { url: token, type: 'image' },
+      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
@@ -314,7 +323,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
-      waMsgId, sentAt,
+      waMsgId, sentAt, undefined, noWppNumber,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
   }
 }
@@ -425,6 +434,13 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
 
     const payload = req.body as MetaWebhookPayload;
 
+    // The exact JSON Meta sent, before any of our own parsing/interpretation -
+    // Meta itself keeps no delivery history to look this up after the fact (not
+    // even in their own dashboard), so this is the ONLY place this is ever
+    // recoverable. Confirmed the hard way: a message arrived with an empty
+    // sender phone number and there was nothing left to inspect afterward.
+    fastify.log.info({ rawPayload: payload }, 'WPP: webhook payload recibido');
+
     // Always return 200 fast - Meta retries if we're slow or error
     reply.status(200).send({ ok: true });
 
@@ -443,18 +459,27 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           // Reject replayed messages older than 10 minutes
           if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
 
-          const phone = String(msg.from ?? '').slice(0, 20);
+          const rawPhone = String(msg.from ?? '').slice(0, 20);
+          // A confirmed-real (if rare) Meta glitch: msg.from can arrive empty while
+          // the rest of the message (text, contacts[] profile name) is otherwise
+          // intact. `phone` still needs SOME unique value (@@unique([org_id, phone])
+          // on Ticket) - a random placeholder that can never collide with a real
+          // number OR a previous ghost ticket, instead of leaving it '' and
+          // creating a ticket that's indistinguishable from a normal, reachable one
+          // right up until every reply to it fails.
+          const noWppNumber = rawPhone.length === 0;
+          const phone = noWppNumber ? `no-${crypto.randomBytes(8).toString('hex')}` : rawPhone;
           const name  = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
 
           if (msg.type === 'image' && msg.image?.id) {
-            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt)
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
             continue;
           }
 
           if (!msg.text?.body) continue;
           const text = String(msg.text.body).slice(0, 4096);
-          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt)
+          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber)
             .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }
 

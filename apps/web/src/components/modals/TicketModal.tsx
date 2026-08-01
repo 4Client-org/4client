@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
@@ -239,6 +239,12 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             </div>
           </div>
 
+          {ticket?.no_wpp_number && (
+            <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+            </div>
+          )}
+
           {/* Messages - scrollable */}
           <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
            <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -265,8 +271,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                     padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                     boxShadow: '0 1px 2px rgba(0,0,0,.1)',
                   }}>
-                    {isOut && msg.sender?.name && (
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
+                    {isOut && (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                     )}
                     {msg.media_type === 'image'
                       ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />

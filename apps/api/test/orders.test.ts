@@ -418,6 +418,41 @@ describe('orders routes', () => {
       expect(cobro.json().data.status).toBe('cerrado');
       expect(cobro.json().data.locked).toBe(true);
       expect(cobro.json().data.paid).toBe(false);
+
+      // paid_by/paid_at record WHO CLOSED the order and WHEN, not who paid - for
+      // crédito those are two different moments/actors, but "Cerrado por"/"Hora
+      // cierre" in the UI reads exactly these two fields. Leaving them null until
+      // credito-pagado (days later, admin-only) meant a crédito order showed
+      // "Desconocido" with no hora the entire time it sat unpaid.
+      const after = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(after.paid_by).not.toBeNull();
+      expect(after.paid_at).not.toBeNull();
+    });
+
+    it('PATCH /orders/:id/credito-pagado does NOT overwrite paid_by/paid_at - they still reflect who closed it at cobro time, not who settled it later', async () => {
+      const adminEmail = `credito-admin3-${Date.now()}@example.com`;
+      await createTestUser(app.prisma, orgAId, 'admin', 'CreditoAdminPass3!', { email: adminEmail });
+      const creditoAdminToken = await login(app, adminEmail, 'CreditoAdminPass3!');
+
+      const order = await createCreditoOrder();
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.id}/cobro`,
+        headers: authHeader(encargadoToken),
+        payload: { amount_received: 8000, password: ENCARGADO_PASS },
+      });
+      const atClose = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+
+      await new Promise((r) => setTimeout(r, 20));
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/orders/${order.id}/credito-pagado`,
+        headers: authHeader(creditoAdminToken),
+      });
+      const afterSettle = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+
+      expect(afterSettle.paid_by).toBe(atClose.paid_by);
+      expect(afterSettle.paid_at?.getTime()).toBe(atClose.paid_at?.getTime());
     });
 
     it('PATCH /orders/:id/credito-pagado settles it - paid flips to true, paid_by/paid_at stamped, and it can\'t be settled twice', async () => {

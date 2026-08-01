@@ -189,7 +189,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound).toHaveLength(4);
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].wpp_message_id).toBeTruthy();
-    expect(outbound[1].text).toContain('ESTE LINK ES SOLO');
+    expect(outbound[1].text).toContain('solo para tu pedido');
     expect(outbound[1].text).toContain('Cuenta de ahorros');
     expect(outbound[1].text).not.toContain('http');
     expect(outbound[1].wpp_message_id).toBeTruthy();
@@ -205,6 +205,48 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     // static text blob that happens to contain the right words.
     const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
     expect(updatedTicket.form_token_min_iat).not.toBeNull();
+  });
+
+  // Confirmed-real Meta glitch (not a hypothetical): a message arrived once with
+  // msg.from empty while the rest of the payload (contacts[] profile name, text)
+  // was intact - the resulting ticket was reachable by nobody (every automated
+  // send failed against Meta with "the parameter to is required"), and there was
+  // no raw payload saved anywhere to even confirm what Meta actually sent.
+  it('a message with an empty sender phone (msg.from = "") gets a unique placeholder phone, is flagged no_wpp_number, and never attempts the welcome/link auto-send', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { welcome_message: 'Hola, bienvenido a Fruver San Gabriel', wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    let metaCalled = false;
+    global.fetch = (async () => { metaCalled = true; return new Response(JSON.stringify({ messages: [{ id: 'unused' }] }), { status: 200 }); }) as any;
+
+    const waMsgId = `wamid.in-${randomUUID()}`;
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: messagePayload(wppPhoneId, '', 'Hola para pedir un domicilio', waMsgId),
+    });
+    expect(res.statusCode).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    const message = await app.prisma.ticketMessage.findUniqueOrThrow({
+      where: { wpp_message_id: waMsgId },
+      include: { ticket: true },
+    });
+    expect(message.ticket.no_wpp_number).toBe(true);
+    // Unique, never the empty string that would collide with a later ghost ticket
+    // under the same org (@@unique([org_id, phone])).
+    expect(message.ticket.phone).toMatch(/^no-[0-9a-f]{16}$/);
+
+    // No welcome, no form-link sequence, no failed_reason rows - the customer's
+    // own message is the ONLY row on this ticket, and Meta's API was never called.
+    const allMessages = await app.prisma.ticketMessage.findMany({ where: { ticket_id: message.ticket.id } });
+    expect(allMessages).toHaveLength(1);
+    expect(metaCalled).toBe(false);
   });
 
   it('an inbound image message is resolved (media id -> temp URL -> bytes) and stored with media_type/media_url set, never Meta\'s own temp URL', async () => {

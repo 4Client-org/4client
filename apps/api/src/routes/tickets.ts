@@ -36,7 +36,14 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
           select: { id: true, num: true, status: true, paid: true },
         },
       },
-      orderBy: { created_at: 'asc' },
+      // last_message_at, not created_at - a ticket is one row per phone forever, so
+      // a returning customer's created_at is from whenever they FIRST ever wrote
+      // (possibly weeks ago), which sorted them ahead of every genuinely new
+      // conversation today regardless of when they actually wrote today. ASC keeps
+      // the existing "longest waiting first" intent, just on the field that
+      // actually reflects recent activity (updated on every inbound/outbound
+      // message in webhook.ts/inbox.ts).
+      orderBy: { last_message_at: 'asc' },
     });
 
     // Deduplicate by phone: keep only the first per phone (prefer fecha match over deferred_to match)

@@ -301,6 +301,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </button>
               )}
             </div>
+            {convoData?.no_wpp_number && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+              </div>
+            )}
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number, arr: any[]) => {
