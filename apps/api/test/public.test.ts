@@ -601,6 +601,13 @@ describe('public form routes', () => {
     // not forced closed, nothing special about it once it lands there.
     expect(order.status).toBe('nuevo');
     expect(order.locked).toBe(false);
+
+    // The ticket (chat card) must move with it - otherwise the board shows the
+    // chat sitting on today with no order under it, and the order only visible
+    // on tomorrow's board instead.
+    const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: dayCloseTicket.id } });
+    expect(updatedTicket.fecha.toISOString().split('T')[0]).toBe(tomorrow.toISOString().split('T')[0]);
+    expect(updatedTicket.deferred_to).toBeNull();
   });
 
   describe('POST /public/order/:orderId/delete - client cancels their own order', () => {

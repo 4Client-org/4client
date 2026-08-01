@@ -650,6 +650,16 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const tomorrow = new Date(todayLocal);
       tomorrow.setDate(tomorrow.getDate() + 1);
       todayLocal = tomorrow;
+      // The ticket (chat) itself must move with its new order, or the board
+      // shows two inconsistent things: the chat card sitting on today (wherever
+      // the client's last WhatsApp message left it) with no order under it, and
+      // the actual order only visible on tomorrow's board instead. Same
+      // fecha/deferred_to update webhook.ts already does on every inbound
+      // message, just triggered here by the order roll instead of a message.
+      await fastify.prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { fecha: todayLocal, deferred_to: null },
+      });
     }
 
     // Cap NEW orders generated per form link, PER DAY - the token stays valid for 7
