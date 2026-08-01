@@ -122,14 +122,23 @@ model Ticket {
   org_id             String    @db.Uuid
   phone              String    @db.VarChar(20)
   // Set only when Meta's webhook delivered a message with an empty/missing sender
-  // phone number (a rare, confirmed-real Meta-side glitch - webhook.ts still logs
-  // the raw payload when this happens, but Meta itself gives no way to look up
-  // what it sent after the fact). `phone` gets a random unique placeholder
-  // ("no-<16 hex>") instead of staying empty, so this ticket doesn't collide with
-  // a later, equally-broken message under the same org - there is genuinely no
-  // way to reply to this customer, so the UI shows a clear warning instead of a
-  // normal (but silently unreachable) chat.
+  // phone number (a rare, confirmed-real Meta-side glitch - webhook.ts now
+  // persists the raw payload in raw_payload below, since Meta itself gives no
+  // way to look up what it sent after the fact, and Railway's own log
+  // retention turned out too short to rely on for this). `phone` gets a random
+  // unique placeholder ("no-<16 hex>") instead of staying empty, so this
+  // ticket doesn't collide with a later, equally-broken message under the same
+  // org - there is genuinely no way to reply to this customer, so the UI shows
+  // a clear warning instead of a normal (but silently unreachable) chat.
   no_wpp_number      Boolean   @default(false)
+  // The exact webhook POST body that CREATED this ticket (the first message
+  // ever received from this phone) - never overwritten on later messages, this
+  // is specifically "what did Meta send us that first time", for diagnosing
+  // exactly this kind of glitch after the fact. Every individual message's own
+  // raw payload lives on TicketMessage.raw_payload below instead - this column
+  // is just the founding one, kept here for a quick look without having to
+  // find/join the ticket's first message.
+  raw_payload        Json?
   customer_name      String?   @db.VarChar(200)
   wpp_thread_id      String?   @db.VarChar(200)
   unread_count       Int       @default(0)
@@ -209,6 +218,14 @@ model TicketMessage {
   media_caption  String?  @db.VarChar(500)
   sent_by        String?  @db.Uuid
   wpp_message_id String?  @unique @db.VarChar(200)
+  // The exact webhook POST body Meta sent for THIS message (inbound only - an
+  // outbound row is something WE generated, there's no "raw payload from Meta"
+  // to capture for it). Kept forever, not just logged - Railway's own log
+  // retention turned out too short to catch a rare glitch (a message arriving
+  // with an empty sender phone number) after the fact, and Meta itself keeps
+  // no delivery history at all. This is the only durable record of exactly
+  // what Meta sent, byte for byte, whenever something needs investigating.
+  raw_payload    Json?
   // The message's OWN timestamp - for inbound, Meta's reported client-side send
   // time (webhook.ts's `msg.timestamp`); for outbound, roughly when we sent it.
   // NEVER used for chat ordering (see created_at below) - only for the label
