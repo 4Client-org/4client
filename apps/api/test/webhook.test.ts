@@ -295,6 +295,68 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(ticketAfter.raw_payload).toEqual(firstPayload); // unchanged, still the founding one
   });
 
+  // Exact shape captured live from production raw_payload (WhatsApp usernames /
+  // BSUID rollout, June 2026) - confirmed via Meta's own docs that `from`/`wa_id`
+  // can be omitted entirely once a contact enables a username, replaced by
+  // from_user_id/user_id instead. This must NOT be treated as the "no phone at
+  // all" glitch (no_wpp_number) - the customer IS reachable, just via this
+  // different identifier.
+  it('a message with no `from`/`wa_id` at all, only from_user_id/user_id (WhatsApp username/BSUID), is NOT flagged no_wpp_number - the BSUID becomes the ticket\'s phone, and replies go out via Meta\'s `recipient` field instead of `to`', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-bsuid-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { welcome_message: 'Hola, bienvenido', wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+
+    const bsuid = 'CO.919210307886008';
+    const capturedBodies: any[] = [];
+    global.fetch = (async (_url: string, opts?: any) => {
+      if (opts?.body) capturedBodies.push(JSON.parse(opts.body));
+      return new Response(JSON.stringify({ messages: [{ id: `wamid.out-${randomUUID()}` }] }), { status: 200 });
+    }) as any;
+
+    const waMsgId = `wamid.bsuid-${randomUUID()}`;
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-bsuid',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: wppPhoneId, display_phone_number: '573042752444' },
+            contacts: [{ profile: { name: ',,✨✨', username: 'iris.05.22' }, user_id: bsuid }],
+            messages: [{
+              from_user_id: bsuid, id: waMsgId, timestamp: String(Math.floor(Date.now() / 1000)),
+              type: 'text', text: { body: 'Hola buenos días' },
+            }],
+          },
+        }],
+      }],
+    };
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone: bsuid } });
+    expect(ticket.no_wpp_number).toBe(false);
+    expect(ticket.raw_payload).toEqual(payload);
+
+    // The auto-welcome fired (org has welcome_message) - confirm the outbound
+    // Meta API call used `recipient`, never `to`, for this BSUID.
+    expect(capturedBodies.length).toBeGreaterThan(0);
+    for (const body of capturedBodies) {
+      expect(body.recipient).toBe(bsuid);
+      expect(body.to).toBeUndefined();
+    }
+  });
+
   it('an inbound image message is resolved (media id -> temp URL -> bytes) and stored with media_type/media_url set, never Meta\'s own temp URL', async () => {
     // No welcome_message on this org - keeps the auto-reply/form-link send paths
     // out of the way so only the image-ingestion fetch calls happen below.

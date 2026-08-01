@@ -2,6 +2,18 @@ import { decryptSecret } from '../../lib/crypto.js';
 
 const META_API_BASE = 'https://graph.facebook.com/v22.0';
 
+// WhatsApp usernames / Business-Scoped User ID (BSUID) rollout, June 2026 - a
+// contact with a username enabled can have no reachable phone number at all,
+// only a BSUID (format "CC.<up to 128 alphanumeric chars>", e.g.
+// "CO.919210307886008" - see webhook.ts's own notes on where this comes from
+// and Ticket.phone in schema.prisma, which now stores either kind
+// interchangeably). Meta's send API takes the SAME message body either way,
+// just under a different key: `to` for a real phone number, `recipient` for
+// a BSUID - this is the one place that distinction actually matters.
+function toOrRecipient(identifier: string): { to: string } | { recipient: string } {
+  return /^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(identifier) ? { recipient: identifier } : { to: identifier };
+}
+
 export class MetaCloudProvider {
   constructor(
     private readonly phoneNumberId: string,
@@ -18,7 +30,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'text',
         text: { preview_url: false, body: text },
       }),
@@ -86,7 +98,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'image',
         image: { id: mediaId, ...(caption ? { caption } : {}) },
       }),
@@ -112,7 +124,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'audio',
         audio: { id: mediaId },
       }),
@@ -135,7 +147,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'video',
         video: { id: mediaId, ...(caption ? { caption } : {}) },
       }),
@@ -161,7 +173,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'document',
         document: { id: mediaId, filename, ...(caption ? { caption } : {}) },
       }),
@@ -186,7 +198,7 @@ export class MetaCloudProvider {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        ...toOrRecipient(to),
         type: 'location',
         location: { latitude, longitude, ...(name ? { name } : {}), ...(address ? { address } : {}) },
       }),

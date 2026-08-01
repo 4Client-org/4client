@@ -120,7 +120,17 @@ model Employee {
 model Ticket {
   id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   org_id             String    @db.Uuid
-  phone              String    @db.VarChar(20)
+  // Not always a real phone number anymore - since Meta's WhatsApp usernames /
+  // Business-Scoped User ID (BSUID) rollout (June 2026), a user with a
+  // username enabled can arrive with NO phone number at all, only a BSUID
+  // instead (format "CC.<up to 128 alphanumeric chars>", e.g.
+  // "CO.919210307886008" - widened from 20 to fit). webhook.ts stores
+  // whichever identifier Meta actually gave us (msg.from, or msg.from_user_id
+  // when that's all there is) - meta-cloud.ts detects the BSUID shape at send
+  // time and uses Meta's `recipient` field instead of `to` for it, same
+  // message otherwise. Only when BOTH are missing does this fall back to our
+  // own unreachable "no-<hex>" placeholder (see no_wpp_number below).
+  phone              String    @db.VarChar(150)
   // Set only when Meta's webhook delivered a message with an empty/missing sender
   // phone number (a rare, confirmed-real Meta-side glitch - webhook.ts now
   // persists the raw payload in raw_payload below, since Meta itself gives no
@@ -276,7 +286,9 @@ model Order {
   // Null for orders with no ticket (channel 'call') or created before this field
   // existed - callers fall back to `customer_name` in that case.
   client_contact_name String? @db.VarChar(200)
-  customer_phone  String?   @db.VarChar(20)
+  // Widened to match Ticket.phone - always copied straight from there
+  // (orders.ts), so it needs the same room for a BSUID.
+  customer_phone  String?   @db.VarChar(150)
   address         String
   channel         String    @default("whatsapp") @db.VarChar(20)
   payment_method  String    @db.VarChar(20)

@@ -19,9 +19,25 @@ interface MetaWebhookPayload {
       value: {
         messaging_product: string;
         metadata: { phone_number_id: string; display_phone_number: string };
-        contacts?: Array<{ profile: { name: string }; wa_id: string }>;
+        // wa_id/user_id both optional - Meta's WhatsApp usernames rollout
+        // (BSUID, June 2026) means a contact can arrive with only ONE of
+        // them, never both missing at once for a real message. `username`
+        // (nested under profile, alongside the display name) is the actual
+        // @handle for a BSUID-identified user - `name` alone for these tends
+        // to be short/decorative (emoji, punctuation) and not very useful on
+        // its own.
+        contacts?: Array<{ profile: { name: string; username?: string }; wa_id?: string; user_id?: string }>;
         messages?: Array<{
-          from: string;
+          // Real phone number - omitted when the sender has WhatsApp
+          // usernames enabled and from_user_id is present instead (see
+          // MetaWebhookPayload's own note above).
+          from?: string;
+          // BSUID form of the sender - the only identifier present for a
+          // username-enabled contact once `from` is omitted. Format
+          // "CC.<up to 128 alphanumeric chars>" (e.g. "CO.919210307886008") -
+          // meta-cloud.ts sends to this the same way as a phone number, just
+          // via Meta's `recipient` field instead of `to`.
+          from_user_id?: string;
           id: string;
           timestamp: string;
           type: string;
@@ -572,17 +588,26 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           // Reject replayed messages older than 10 minutes
           if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
 
-          const rawPhone = String(msg.from ?? '').slice(0, 20);
-          // A confirmed-real (if rare) Meta glitch: msg.from can arrive empty while
-          // the rest of the message (text, contacts[] profile name) is otherwise
-          // intact. `phone` still needs SOME unique value (@@unique([org_id, phone])
-          // on Ticket) - a random placeholder that can never collide with a real
-          // number OR a previous ghost ticket, instead of leaving it '' and
-          // creating a ticket that's indistinguishable from a normal, reachable one
-          // right up until every reply to it fails.
-          const noWppNumber = rawPhone.length === 0;
-          const phone = noWppNumber ? `no-${crypto.randomBytes(8).toString('hex')}` : rawPhone;
-          const name  = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
+          // Real phone number first, then the BSUID (WhatsApp usernames,
+          // June 2026 - see MetaWebhookPayload's own notes) as a fallback -
+          // a username-enabled contact can arrive with ONLY from_user_id, no
+          // phone at all. Confirmed real via raw_payload on production
+          // tickets: Meta sent `from_user_id: "CO.919210307886008"` with no
+          // `from` field whatsoever.
+          const rawIdentifier = String(msg.from || msg.from_user_id || '').slice(0, 150);
+          // Only when NEITHER is present (a separate, rarer glitch - see the
+          // no_wpp_number comment on the Ticket model) is this customer
+          // actually unreachable. `phone` still needs SOME unique value
+          // (@@unique([org_id, phone]) on Ticket) - a random placeholder that
+          // can never collide with a real number/BSUID OR a previous ghost
+          // ticket, instead of leaving it '' and creating a ticket that's
+          // indistinguishable from a normal, reachable one right up until
+          // every reply to it fails.
+          const noWppNumber = rawIdentifier.length === 0;
+          const phone = noWppNumber ? `no-${crypto.randomBytes(8).toString('hex')}` : rawIdentifier;
+          const contact = contacts?.find(c =>
+            (msg.from && c.wa_id === msg.from) || (msg.from_user_id && c.user_id === msg.from_user_id));
+          const name = String(contact?.profile.name ?? rawIdentifier ?? '').slice(0, 200);
 
           if (msg.type === 'image' && msg.image?.id) {
             ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber, payload)

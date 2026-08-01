@@ -56,7 +56,10 @@ const orderItemSchema = z.object({
 const createOrderSchema = z.object({
   ticket_id:      z.string().uuid().optional(),
   customer_name:  z.string().min(1).max(200),
-  customer_phone: z.string().max(20).optional(),
+  // 150, not 20 - matches Ticket.phone/Order.customer_phone's own widened
+  // column (a WhatsApp Business-Scoped User ID can be up to 131 chars, not
+  // just a real phone number - see schema.prisma's own comment).
+  customer_phone: z.string().max(150).optional(),
   // Not required at creation - only enforced at closing time (POST /:id/cobro
   // already checks it), so an order can be opened/dispatched before an address is
   // confirmed and only has to be filled in before it's actually closed.
@@ -91,7 +94,10 @@ const updateOrderSchema = z.object({
   // a ticket-less order (channel 'call', no ticket_id) - there's no ticket to source
   // a phone from, so the PATCH handler below allows this field through ONLY in that
   // case (checked against `existing.ticket_id`, not a client-supplied flag).
-  customer_phone: z.string().max(20).optional(),
+  // 150, not 20 - matches Ticket.phone/Order.customer_phone's own widened
+  // column (a WhatsApp Business-Scoped User ID can be up to 131 chars, not
+  // just a real phone number - see schema.prisma's own comment).
+  customer_phone: z.string().max(150).optional(),
   address:        z.string().max(500).optional(),
   payment_method: z.enum(['sin_asignar', 'cash', 'transfer', 'cod', 'credito']).optional(),
   employee_id:    z.string().uuid().nullable().optional(),
