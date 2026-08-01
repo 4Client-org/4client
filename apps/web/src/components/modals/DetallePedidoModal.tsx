@@ -14,7 +14,11 @@ import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
-import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
+import ChatAudio from '../ui/ChatAudio';
+import ChatVideo from '../ui/ChatVideo';
+import ChatDocument from '../ui/ChatDocument';
+import ChatLocation from '../ui/ChatLocation';
+import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { ConfirmModal } from '../ui/ConfirmModal';
@@ -554,28 +558,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   });
 
   const chatFileInputRef = useRef<HTMLInputElement>(null);
-  const sendImageMut = useMutation({
-    mutationFn: (payload: { data: string; mime_type: string }) =>
-      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${order?.ticket_id}/send-image`, payload),
-    onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['inbox-convo', order?.ticket_id] });
-      if (res?.wpp_status === 'failed') {
-        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
-      } else if (res?.wpp_status === 'no_credentials') {
-        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
-      }
-    },
-    onError: (e: any) => toast(e.message, true),
-  });
+  const { pickAndSend: pickAndSendChatMedia, isPending: sendMediaPending } = useSendChatMedia(order?.ticket_id, [['inbox-convo', order?.ticket_id]]);
 
   async function handleChatPickImage(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
-    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
-    const data = await fileToBase64(file);
-    sendImageMut.mutate({ data, mime_type: file.type });
+    await pickAndSendChatMedia(file);
   }
 
   const formLinkMut = useMutation({
@@ -868,7 +857,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // `locked` alone no longer means read-only - admin/dev can still fully edit a
   // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
   // is cerrado (diaCerrado still freezes everyone, admin included).
-  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera' || order.client_deleted;
+  // A crédito order still awaiting payment is exempt from the locked/encargado
+  // block too - cobro sets locked:true immediately for every payment method, but
+  // for crédito specifically the order isn't actually done: the client can still
+  // come back to pay, ask questions, etc, and encargado needs to keep handling it
+  // normally (move it, edit it) same as before it closed. Only the ADMIN-only
+  // "marcar crédito pagado" action (below) settles the debt for real - once that
+  // happens `order.paid` flips true and this exemption stops applying, same as
+  // any other closed order from then on. Confirmed bug: a real crédito order was
+  // reachable by admin only the moment it closed, encargado couldn't touch it.
+  const creditoSinPagar = order.payment_method === 'credito' && !order.paid;
+  const readOnly = (locked && !canEditLocked && !creditoSinPagar) || diaCerrado || order.status === 'papelera' || order.client_deleted;
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -971,6 +970,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             </div>
 
+            {chatData?.no_wpp_number && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+              </div>
+            )}
+
             {/* Messages */}
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 6px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -998,12 +1003,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
                     }}>
-                      {isOut && msg.sender?.name && (
-                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
+                      {isOut && (
+                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
-                      {msg.media_type === 'image'
-                        ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
-                        : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
+                      {msg.media_type === 'image' && <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                      {msg.media_type === 'audio' && <ChatAudio token={msg.media_url} />}
+                      {msg.media_type === 'video' && <ChatVideo token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                      {msg.media_type === 'document' && <ChatDocument token={msg.media_url} filename={msg.media_caption} caption={msg.media_caption ? msg.text : null} />}
+                      {msg.media_type === 'location' && <ChatLocation url={msg.media_url} label={msg.text} />}
+                      {!msg.media_type && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {formatChatTimestamp(msg.sent_at)}
                         {isOut && msg.wpp_message_id && (
@@ -1026,11 +1034,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               display: 'flex', gap: 6, padding: '8px 8px',
               borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
             }}>
-              <input ref={chatFileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handleChatPickImage} style={{ display: 'none' }} />
+              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
               <button
-                title="Adjuntar foto"
+                title="Adjuntar foto, audio, video o documento"
                 onClick={() => chatFileInputRef.current?.click()}
-                disabled={sendImageMut.isPending}
+                disabled={sendMediaPending}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
               >
                 <Paperclip size={16} />
@@ -1120,6 +1128,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
+            {/* Purely informational - a client can freely have more than one crédito
+                order at once, paid or not (admin's own call), this never blocks
+                editing/closing THIS order. Only flags OTHER orders on this same
+                ticket, not this one itself - if you're already looking at the
+                unpaid crédito order, you don't need to be told about it. */}
+            {chatData?.orders?.some((o: any) => o.payment_method === 'credito' && !o.paid && o.id !== order.id) && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={15} /> Este cliente tiene un pedido a crédito no pagado.
+              </div>
+            )}
+
             {order.client_deleted && (
               <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1140,7 +1159,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {locked && !canEditLocked && (
+            {locked && !canEditLocked && !creditoSinPagar && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Solo el administrador puede modificar este pedido cerrado. Puedes agregar una observación abajo.
               </div>

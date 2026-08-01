@@ -58,10 +58,9 @@ export async function generateFormLinkUrl(
 // mangle it in transit, and it meant the client couldn't forward/copy just the
 // link on its own without carrying this whole notice along with it.
 export function buildFormLinkWarningMessage(): string {
-  return '*ESTE LINK ES SOLO PARA HACER TU PEDIDO Y HACER SEGUIMIENTO DE TUS PEDIDOS. '
-    + 'NUNCA TE PEDIREMOS DINERO NI DATOS BANCARIOS NI INFORMACIÓN CONFIDENCIAL.*'
-    + '\n\n*Este link estará activo por 24 horas.*'
-    + '\n\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
+  return '*Este link es solo para tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
+    + '\n*Válido por 24 horas.*'
+    + '\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
 }
 
 // Sent as a THIRD message, right after the link itself (see callers) - the

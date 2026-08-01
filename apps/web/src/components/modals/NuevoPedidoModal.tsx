@@ -1,8 +1,13 @@
-import { Fragment, useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle } from 'lucide-react';
+import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import ChatImage from '../ui/ChatImage';
+import ChatAudio from '../ui/ChatAudio';
+import ChatVideo from '../ui/ChatVideo';
+import ChatDocument from '../ui/ChatDocument';
+import ChatLocation from '../ui/ChatLocation';
+import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
@@ -154,6 +159,15 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     onError: (e: any) => toast(e.message ?? 'Error al enviar', true),
   });
 
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const { pickAndSend: pickAndSendChatMedia, isPending: sendMediaPending } = useSendChatMedia(ticketId, [['inbox-convo', ticketId], ['inbox']]);
+  async function handleChatPickMedia(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await pickAndSendChatMedia(file);
+  }
+
   const blockLinkMut = useMutation({
     mutationFn: () => api.post(`/inbox/${ticketId}/form-link/revoke`, {}),
     onSuccess: () => toast('Link bloqueado - el cliente ya no puede usarlo'),
@@ -301,6 +315,11 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </button>
               )}
             </div>
+            {convoData?.no_wpp_number && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+              </div>
+            )}
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {liveMessages.map((m: any, i: number, arr: any[]) => {
@@ -317,9 +336,12 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   </div>
                 )}
                 <div className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
-                  {m.media_type === 'image'
-                    ? <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>
-                    : <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
+                  {m.media_type === 'image' && <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
+                  {m.media_type === 'audio' && <div className="chat-bubble"><ChatAudio token={m.media_url} /></div>}
+                  {m.media_type === 'video' && <div className="chat-bubble"><ChatVideo token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
+                  {m.media_type === 'document' && <div className="chat-bubble"><ChatDocument token={m.media_url} filename={m.media_caption} caption={m.media_caption ? m.text : null} /></div>}
+                  {m.media_type === 'location' && <div className="chat-bubble"><ChatLocation url={m.media_url} label={m.text} /></div>}
+                  {!m.media_type && <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
                   {(m.sent_at || m.created_at) && (
                     <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
                       {formatChatTimestamp(m.sent_at ?? m.created_at)}
@@ -336,6 +358,15 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             </div>
             {/* Reply input */}
             <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>
+              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickMedia} style={{ display: 'none' }} />
+              <button
+                title="Adjuntar foto, audio, video o documento"
+                onClick={() => chatFileInputRef.current?.click()}
+                disabled={sendMediaPending}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+              >
+                <Paperclip size={17} />
+              </button>
               <textarea
                 rows={2}
                 placeholder="Escribe un mensaje... (Enter para enviar)"
@@ -378,6 +409,15 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             {ticketId && (
               <div style={{ background: 'var(--vc)', border: '2px solid var(--vm)', color: 'var(--vd)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Smartphone size={14} /> Pedido vinculado al ticket de WhatsApp
+              </div>
+            )}
+            {/* Purely informational - a client can freely accumulate more than one
+                unpaid crédito order at once (admin's own call), this never blocks
+                creating/editing/closing this new one. Just a heads-up so encargado
+                knows to check with admin if needed. */}
+            {convoData?.orders?.some((o: any) => o.payment_method === 'credito' && !o.paid) && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={14} /> Este cliente tiene un pedido a crédito no pagado.
               </div>
             )}
             <div className="frow">

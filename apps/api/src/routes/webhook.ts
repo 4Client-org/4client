@@ -3,7 +3,13 @@ import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../lib/formLink.js';
-import { storeMedia, detectImageMime } from '../lib/media.js';
+import {
+  storeMedia, detectImageMime, detectMediaMime,
+  isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime,
+} from '../lib/media.js';
+
+// Shared across every place a stored TicketMessage's media kind needs naming.
+type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
 
 interface MetaWebhookPayload {
   object: string;
@@ -21,6 +27,10 @@ interface MetaWebhookPayload {
           type: string;
           text?: { body: string };
           image?: { id: string; mime_type?: string; caption?: string; sha256?: string };
+          audio?: { id: string; mime_type?: string };
+          video?: { id: string; mime_type?: string; caption?: string };
+          document?: { id: string; mime_type?: string; caption?: string; filename?: string };
+          location?: { latitude: number; longitude: number; name?: string; address?: string };
         }>;
         // Delivery/read receipts for OUTBOUND messages we sent, keyed by the same
         // `id` Meta gave that message when we sent it (stored as wpp_message_id).
@@ -55,11 +65,20 @@ async function ingestMessage(
   text: string | null,
   waMsgId: string,
   sentAt: Date,
-  // Set only for an inbound photo - `media.url` is OUR OWN opaque storage token
-  // (see lib/media.ts), never Meta's own short-lived media URL, so it stays
-  // resolvable whenever staff actually open the chat, not just for the ~5 minutes
-  // Meta's URL would have lived.
-  media?: { url: string; type: 'image' },
+  // Set for any inbound media - `media.url` is OUR OWN opaque storage token (see
+  // lib/media.ts) for image/audio/video/document, never Meta's own short-lived
+  // media URL, so it stays resolvable whenever staff actually open the chat, not
+  // just for the ~5 minutes Meta's URL would have lived. For 'location' it's a
+  // plain Google Maps link instead (no file to store - the coordinates arrive
+  // directly in the webhook payload, nothing to download).
+  media?: { url: string; type: MediaType },
+  // True when `phone` is a synthesized placeholder (Meta delivered this message
+  // with no real sender number) - see the dispatcher above. Marks the ticket so
+  // staff see a clear warning instead of a normal-looking but silently
+  // unreachable chat, and skips the auto welcome/link send below entirely
+  // (every attempt would fail against Meta anyway - no point burning 3 calls
+  // and 3 failed_reason rows to learn that).
+  noWppNumber = false,
 ) {
   // Find org by phone_number_id
   const org = await fastify.prisma.organization.findFirst({
@@ -115,6 +134,7 @@ async function ingestMessage(
         fecha: todayLocal,
         last_message_at: sentAt,
         unread_count: 1,
+        no_wpp_number: noWppNumber,
       },
     });
   } else {
@@ -167,11 +187,10 @@ async function ingestMessage(
   // not the intended bienvenida -> aviso -> link -> seguimiento order. A failed
   // welcome send still lets the form-link sequence run (own try/catch) - the more
   // useful of the two shouldn't be skipped just because the greeting didn't land.
-  if (isFirstMessageToday && org.welcome_message) {
+  if (isFirstMessageToday && org.welcome_message && !noWppNumber) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
       (async () => {
-        type MediaType = 'pdf' | 'image' | 'audio' | 'video';
         try {
           const { messageId } = await provider.sendText(phone, org.welcome_message!);
           const autoReply = await fastify.prisma.ticketMessage.create({
@@ -247,7 +266,6 @@ async function ingestMessage(
       })();
     }
   }
-  type MediaType = 'pdf' | 'image' | 'audio' | 'video';
   const socketMsg = {
     ...message,
     direction: message.direction as 'in' | 'out',
@@ -273,6 +291,7 @@ async function ingestImageMessage(
   image: { id: string; caption?: string },
   waMsgId: string,
   sentAt: Date,
+  noWppNumber = false,
 ) {
   const org = await fastify.prisma.organization.findFirst({
     where: { wpp_meta_phone_id: phoneNumberId, active: true },
@@ -300,7 +319,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       image.caption ? String(image.caption).slice(0, 4096) : null,
-      waMsgId, sentAt, { url: token, type: 'image' },
+      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
@@ -314,9 +333,100 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
-      waMsgId, sentAt,
+      waMsgId, sentAt, undefined, noWppNumber,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
   }
+}
+
+const MEDIA_KIND_LABEL: Record<'audio' | 'video' | 'document', string> = {
+  audio: 'audio', video: 'video', document: 'documento',
+};
+const MEDIA_KIND_VALIDATOR: Record<'audio' | 'video' | 'document', (mime: string) => boolean> = {
+  audio: isSupportedAudioMime, video: isSupportedVideoMime, document: isSupportedDocumentMime,
+};
+
+// Same resolve-then-download shape as ingestImageMessage above, generalized for
+// the three media kinds that all go through Meta's media-id resolution (audio,
+// video, document) - only the byte-signature check (detectMediaMime vs
+// detectImageMime) and the mime allow-list actually differ per kind.
+async function ingestBinaryMediaMessage(
+  fastify: FastifyInstance,
+  phoneNumberId: string,
+  phone: string,
+  name: string,
+  kind: 'audio' | 'video' | 'document',
+  media: { id: string; caption?: string; filename?: string },
+  waMsgId: string,
+  sentAt: Date,
+  noWppNumber = false,
+) {
+  const label = MEDIA_KIND_LABEL[kind];
+  const org = await fastify.prisma.organization.findFirst({
+    where: { wpp_meta_phone_id: phoneNumberId, active: true },
+  });
+  if (!org) {
+    fastify.log.warn({ phoneNumberId }, `WPP: no org for phone_number_id (${label})`);
+    return;
+  }
+  const provider = MetaCloudProvider.fromOrg(org);
+  if (!provider) {
+    fastify.log.warn({ orgId: org.id }, `WPP: ${label} entrante descartado - org sin credenciales Meta`);
+    return;
+  }
+
+  try {
+    const { url, mimeType } = await provider.getMediaUrl(media.id);
+    if (!MEDIA_KIND_VALIDATOR[kind](mimeType)) {
+      throw new Error(`unsupported ${label} mime type reported by Meta: ${mimeType}`);
+    }
+    const buffer = await provider.downloadMedia(url);
+    const realMime = detectMediaMime(buffer, mimeType);
+    if (!realMime) throw new Error(`downloaded media does not look like a real ${label} (Meta reported ${mimeType})`);
+    const token = await storeMedia(buffer, realMime);
+    // Caption if the type carries one, else the original filename (documents) -
+    // never both, and never a raw unbounded string either way.
+    const text = media.caption ? String(media.caption).slice(0, 4096)
+      : media.filename ? String(media.filename).slice(0, 500)
+      : null;
+    await ingestMessage(
+      fastify, phoneNumberId, phone, name, text,
+      waMsgId, sentAt, { url: token, type: kind }, noWppNumber,
+    );
+  } catch (err) {
+    fastify.log.error({ err, phone }, `WPP: error descargando ${label} entrante`);
+    // Same reasoning as ingestImageMessage's own fallback - a download failure
+    // must still leave a visible row in the chat, not just a server log line.
+    await ingestMessage(
+      fastify, phoneNumberId, phone, name,
+      `El cliente envió un ${label}, pero no se pudo descargar. Pídele que lo reenvíe.`,
+      waMsgId, sentAt, undefined, noWppNumber,
+    ).catch(err2 => fastify.log.error({ err: err2, phone }, `WPP: error registrando fallback de ${label}`));
+  }
+}
+
+// Unlike every other media type, a location never goes through Meta's media-id
+// resolution at all - the coordinates arrive directly in the webhook payload, so
+// there's nothing to download or verify. Stored as a plain Google Maps link in
+// media_url (safe to expose directly, unlike a photo - it's just numbers, not a
+// file staff need auth-gated serving for) so every chat view can render/open it
+// the exact same way it already renders any other media_url.
+async function ingestLocationMessage(
+  fastify: FastifyInstance,
+  phoneNumberId: string,
+  phone: string,
+  name: string,
+  location: { latitude: number; longitude: number; name?: string; address?: string },
+  waMsgId: string,
+  sentAt: Date,
+  noWppNumber = false,
+) {
+  const label = [location.name, location.address].filter(Boolean).join(' - ');
+  const text = label ? `Ubicación: ${label}` : 'Ubicación compartida';
+  const mapsLink = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
+  await ingestMessage(
+    fastify, phoneNumberId, phone, name, text,
+    waMsgId, sentAt, { url: mapsLink, type: 'location' }, noWppNumber,
+  );
 }
 
 // Updates delivered/read_by_client/failed_reason on an OUTBOUND message we already
@@ -425,6 +535,13 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
 
     const payload = req.body as MetaWebhookPayload;
 
+    // The exact JSON Meta sent, before any of our own parsing/interpretation -
+    // Meta itself keeps no delivery history to look this up after the fact (not
+    // even in their own dashboard), so this is the ONLY place this is ever
+    // recoverable. Confirmed the hard way: a message arrived with an empty
+    // sender phone number and there was nothing left to inspect afterward.
+    fastify.log.info({ rawPayload: payload }, 'WPP: webhook payload recibido');
+
     // Always return 200 fast - Meta retries if we're slow or error
     reply.status(200).send({ ok: true });
 
@@ -437,24 +554,58 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
         const { metadata, contacts, messages, statuses } = change.value;
 
         for (const msg of messages ?? []) {
-          if (msg.type !== 'text' && msg.type !== 'image') continue;
+          const SUPPORTED_TYPES = ['text', 'image', 'audio', 'video', 'document', 'location'];
+          if (!SUPPORTED_TYPES.includes(msg.type)) continue;
 
           const sentAt = new Date(parseInt(msg.timestamp) * 1000);
           // Reject replayed messages older than 10 minutes
           if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
 
-          const phone = String(msg.from ?? '').slice(0, 20);
+          const rawPhone = String(msg.from ?? '').slice(0, 20);
+          // A confirmed-real (if rare) Meta glitch: msg.from can arrive empty while
+          // the rest of the message (text, contacts[] profile name) is otherwise
+          // intact. `phone` still needs SOME unique value (@@unique([org_id, phone])
+          // on Ticket) - a random placeholder that can never collide with a real
+          // number OR a previous ghost ticket, instead of leaving it '' and
+          // creating a ticket that's indistinguishable from a normal, reachable one
+          // right up until every reply to it fails.
+          const noWppNumber = rawPhone.length === 0;
+          const phone = noWppNumber ? `no-${crypto.randomBytes(8).toString('hex')}` : rawPhone;
           const name  = String(contacts?.find(c => c.wa_id === msg.from)?.profile.name ?? msg.from ?? '').slice(0, 200);
 
           if (msg.type === 'image' && msg.image?.id) {
-            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt)
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
+            continue;
+          }
+
+          if (msg.type === 'audio' && msg.audio?.id) {
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'audio', msg.audio, msg.id, sentAt, noWppNumber)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo audio'));
+            continue;
+          }
+
+          if (msg.type === 'video' && msg.video?.id) {
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'video', msg.video, msg.id, sentAt, noWppNumber)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo video'));
+            continue;
+          }
+
+          if (msg.type === 'document' && msg.document?.id) {
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'document', msg.document, msg.id, sentAt, noWppNumber)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo documento'));
+            continue;
+          }
+
+          if (msg.type === 'location' && msg.location) {
+            ingestLocationMessage(fastify, metadata.phone_number_id, phone, name, msg.location, msg.id, sentAt, noWppNumber)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo ubicación'));
             continue;
           }
 
           if (!msg.text?.body) continue;
           const text = String(msg.text.body).slice(0, 4096);
-          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt)
+          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber)
             .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }
 

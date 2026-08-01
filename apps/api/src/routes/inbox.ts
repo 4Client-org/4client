@@ -3,12 +3,18 @@ import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
-import { storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime } from '../lib/media.js';
+import {
+  storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime,
+  isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime, detectMediaMime,
+} from '../lib/media.js';
 
-// 5MB - Meta's own limit for an outbound WhatsApp image message; enforced here too
-// so an oversized upload fails fast with a clear message instead of getting
-// rejected only after already being stored in R2 and sent to Meta's media endpoint.
+// Meta's own outbound size limits per media type - enforced here too so an
+// oversized upload fails fast with a clear message instead of getting rejected
+// only after already stored in R2 and sent to Meta's media endpoint.
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
   // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
@@ -253,6 +259,187 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         });
     }
 
+    return reply.status(201).send({ data: message, wpp_status });
+  });
+
+  // Shared tail for every outbound-media route below (audio/video/document) -
+  // upload bytes to Meta, send referencing the resulting media id, then update
+  // this TicketMessage row with the real wpp_message_id (or failed_reason on
+  // error) and tell any connected staff. Fired in the background by every
+  // caller, same as send-image's own inline version of this - not factored out
+  // there too, to avoid touching an already-working route.
+  function trackOutboundMediaSend(
+    fastify: FastifyInstance, orgId: string, ticketId: string, messageId: string,
+    sendPromise: Promise<{ messageId: string }>,
+  ) {
+    sendPromise
+      .then(async ({ messageId: wppMessageId }) => {
+        await fastify.prisma.ticketMessage.update({ where: { id: messageId }, data: { wpp_message_id: wppMessageId } });
+        fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
+          ticketId, messageId, delivered: false, read_by_client: false, failed_reason: null,
+        });
+      })
+      .catch(async (err: any) => {
+        const wpp_error = err?.message ?? 'Error desconocido Meta API';
+        fastify.log.error({ err, ticketId }, 'WPP: error enviando media via Meta API');
+        const failed = await fastify.prisma.ticketMessage.update({
+          where: { id: messageId },
+          data: { failed_reason: String(wpp_error).slice(0, 255) },
+          select: { delivered: true, read_by_client: true, failed_reason: true },
+        });
+        fastify.io.to(`org:${orgId}`).emit('ticket:message-status', { ticketId, messageId, ...failed });
+      });
+  }
+
+  // POST /api/v1/inbox/:ticketId/send-audio - staff sends a voice note/audio file.
+  // WhatsApp's audio type has no caption field at all (see meta-cloud.ts's
+  // sendAudio) - nothing to accept here beyond the file itself.
+  fastify.post('/:ticketId/send-audio', {
+    preHandler: [authenticate],
+    bodyLimit: Math.ceil(MAX_AUDIO_BYTES * 1.4) + 100_000,
+  }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({
+      data: z.string().min(1),
+      mime_type: z.enum(['audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/amr']),
+    }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+    if (!isSupportedAudioMime(body.data.mime_type)) {
+      return reply.status(400).send({ error: 'Tipo de audio no soportado', code: 'VALIDATION_ERROR' });
+    }
+
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId }, include: { org: true } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const buffer = Buffer.from(body.data.data, 'base64');
+    if (buffer.length === 0) return reply.status(400).send({ error: 'Audio vacío', code: 'VALIDATION_ERROR' });
+    if (buffer.length > MAX_AUDIO_BYTES) {
+      return reply.status(400).send({ error: 'Audio demasiado grande (máx 16 MB)', code: 'VALIDATION_ERROR' });
+    }
+    const realMime = detectMediaMime(buffer, body.data.mime_type);
+    if (!realMime) return reply.status(400).send({ error: 'El archivo no es un audio válido del tipo indicado', code: 'VALIDATION_ERROR' });
+
+    const token = await storeMedia(buffer, body.data.mime_type);
+    const message = await fastify.prisma.ticketMessage.create({
+      data: { ticket_id: ticketId, direction: 'out', media_url: token, media_type: 'audio', sent_by: req.user.userId },
+      include: { sender: { select: { id: true, name: true } } },
+    });
+    fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
+    if (!provider) {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, audio solo guardado en BD');
+    } else {
+      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendAudio(ticket.phone, mediaId)));
+    }
+    return reply.status(201).send({ data: message, wpp_status });
+  });
+
+  // POST /api/v1/inbox/:ticketId/send-video - staff sends a video, optional caption.
+  fastify.post('/:ticketId/send-video', {
+    preHandler: [authenticate],
+    bodyLimit: Math.ceil(MAX_VIDEO_BYTES * 1.4) + 100_000,
+  }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({
+      data: z.string().min(1),
+      mime_type: z.enum(['video/mp4', 'video/3gpp']),
+      caption: z.string().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+    if (!isSupportedVideoMime(body.data.mime_type)) {
+      return reply.status(400).send({ error: 'Tipo de video no soportado', code: 'VALIDATION_ERROR' });
+    }
+
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId }, include: { org: true } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const buffer = Buffer.from(body.data.data, 'base64');
+    if (buffer.length === 0) return reply.status(400).send({ error: 'Video vacío', code: 'VALIDATION_ERROR' });
+    if (buffer.length > MAX_VIDEO_BYTES) {
+      return reply.status(400).send({ error: 'Video demasiado grande (máx 16 MB)', code: 'VALIDATION_ERROR' });
+    }
+    const realMime = detectMediaMime(buffer, body.data.mime_type);
+    if (!realMime) return reply.status(400).send({ error: 'El archivo no es un video válido del tipo indicado', code: 'VALIDATION_ERROR' });
+
+    const token = await storeMedia(buffer, body.data.mime_type);
+    const caption = body.data.caption?.trim() || null;
+    const message = await fastify.prisma.ticketMessage.create({
+      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: token, media_type: 'video', media_caption: caption, sent_by: req.user.userId },
+      include: { sender: { select: { id: true, name: true } } },
+    });
+    fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
+    if (!provider) {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, video solo guardado en BD');
+    } else {
+      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendVideo(ticket.phone, mediaId, caption ?? undefined)));
+    }
+    return reply.status(201).send({ data: message, wpp_status });
+  });
+
+  // POST /api/v1/inbox/:ticketId/send-document - staff sends a PDF, optional caption.
+  fastify.post('/:ticketId/send-document', {
+    preHandler: [authenticate],
+    bodyLimit: Math.ceil(MAX_DOCUMENT_BYTES * 1.4) + 100_000,
+  }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({
+      data: z.string().min(1),
+      mime_type: z.enum(['application/pdf']),
+      filename: z.string().min(1).max(200),
+      caption: z.string().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+    if (!isSupportedDocumentMime(body.data.mime_type)) {
+      return reply.status(400).send({ error: 'Tipo de documento no soportado', code: 'VALIDATION_ERROR' });
+    }
+
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId }, include: { org: true } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const buffer = Buffer.from(body.data.data, 'base64');
+    if (buffer.length === 0) return reply.status(400).send({ error: 'Documento vacío', code: 'VALIDATION_ERROR' });
+    if (buffer.length > MAX_DOCUMENT_BYTES) {
+      return reply.status(400).send({ error: 'Documento demasiado grande (máx 100 MB)', code: 'VALIDATION_ERROR' });
+    }
+    const realMime = detectMediaMime(buffer, body.data.mime_type);
+    if (!realMime) return reply.status(400).send({ error: 'El archivo no es un documento válido del tipo indicado', code: 'VALIDATION_ERROR' });
+
+    const token = await storeMedia(buffer, body.data.mime_type);
+    const caption = body.data.caption?.trim() || null;
+    const filename = body.data.filename.trim();
+    const message = await fastify.prisma.ticketMessage.create({
+      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: token, media_type: 'document', media_caption: filename, sent_by: req.user.userId },
+      include: { sender: { select: { id: true, name: true } } },
+    });
+    fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
+    if (ticket.unread_count > 0) {
+      await fastify.prisma.ticket.update({ where: { id: ticketId }, data: { unread_count: 0 } });
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
+    }
+
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
+    if (!provider) {
+      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, documento solo guardado en BD');
+    } else {
+      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendDocument(ticket.phone, mediaId, filename, caption ?? undefined)));
+    }
     return reply.status(201).send({ data: message, wpp_status });
   });
 

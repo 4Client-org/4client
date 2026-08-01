@@ -1,9 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
-import { fileToBase64, CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MIME_TYPES } from '../../lib/fileToBase64';
+import ChatAudio from '../ui/ChatAudio';
+import ChatVideo from '../ui/ChatVideo';
+import ChatDocument from '../ui/ChatDocument';
+import ChatLocation from '../ui/ChatLocation';
+import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
@@ -118,29 +122,13 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const sendImageMut = useMutation({
-    mutationFn: (payload: { data: string; mime_type: string }) =>
-      api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/send-image`, payload),
-    onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['ticket', ticketId, fecha] });
-      qc.invalidateQueries({ queryKey: ['tickets'] });
-      if (res?.wpp_status === 'failed') {
-        toast(`Foto guardada pero falló el envío a WhatsApp: ${res.wpp_error ?? 'error Meta API'}`, true);
-      } else if (res?.wpp_status === 'no_credentials') {
-        toast('Foto guardada, pero este negocio no tiene WhatsApp conectado', true);
-      }
-    },
-    onError: (e: any) => toast(e.message, true),
-  });
+  const { pickAndSend, isPending: sendMediaPending } = useSendChatMedia(ticketId, [['ticket', ticketId, fecha], ['tickets']]);
 
-  async function handlePickImage(e: ChangeEvent<HTMLInputElement>) {
+  async function handlePickMedia(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!CHAT_IMAGE_MIME_TYPES.includes(file.type)) { toast('Solo se pueden enviar fotos JPG, PNG o WEBP', true); return; }
-    if (file.size > CHAT_IMAGE_MAX_BYTES) { toast('La foto pesa más de 5 MB', true); return; }
-    const data = await fileToBase64(file);
-    sendImageMut.mutate({ data, mime_type: file.type });
+    await pickAndSend(file);
   }
 
   const formLinkMut = useMutation({
@@ -239,6 +227,12 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             </div>
           </div>
 
+          {ticket?.no_wpp_number && (
+            <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
+            </div>
+          )}
+
           {/* Messages - scrollable */}
           <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
            <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -265,12 +259,15 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                     padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                     boxShadow: '0 1px 2px rgba(0,0,0,.1)',
                   }}>
-                    {isOut && msg.sender?.name && (
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender.name}</div>
+                    {isOut && (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                     )}
-                    {msg.media_type === 'image'
-                      ? <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />
-                      : <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
+                    {msg.media_type === 'image' && <ChatImage token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                    {msg.media_type === 'audio' && <ChatAudio token={msg.media_url} />}
+                    {msg.media_type === 'video' && <ChatVideo token={msg.media_url} caption={msg.media_caption ?? msg.text} />}
+                    {msg.media_type === 'document' && <ChatDocument token={msg.media_url} filename={msg.media_caption} caption={msg.media_caption ? msg.text : null} />}
+                    {msg.media_type === 'location' && <ChatLocation url={msg.media_url} label={msg.text} />}
+                    {!msg.media_type && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                     <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                       {formatChatTimestamp(msg.sent_at)}
                       {isOut && msg.wpp_message_id && (
@@ -294,11 +291,11 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             display: 'flex', gap: 6, alignItems: 'flex-end',
             borderTop: '1px solid #D0D8D0', flexShrink: 0,
           }}>
-            <input ref={fileInputRef} type="file" accept={CHAT_IMAGE_MIME_TYPES.join(',')} onChange={handlePickImage} style={{ display: 'none' }} />
+            <input ref={fileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handlePickMedia} style={{ display: 'none' }} />
             <button
-              title="Adjuntar foto"
+              title="Adjuntar foto, audio, video o documento"
               onClick={() => fileInputRef.current?.click()}
-              disabled={sendImageMut.isPending}
+              disabled={sendMediaPending}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)',
                 padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0,
