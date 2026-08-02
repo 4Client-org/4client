@@ -456,10 +456,11 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           {papeleraOrders.map((o: any) => {
             const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
             const clientDeleted = !!o.client_deleted;
+            const staffPapelera = o.status === 'papelera';
             return (
               <div key={o.id} className="papcard" onClick={() => onOpenOrder(o.id)}
                 title="Ver detalle - quién lo envió a la papelera y cuándo"
-                style={{ cursor: 'pointer', ...(clientDeleted ? { border: '1.5px solid var(--r)' } : {}) }}>
+                style={{ cursor: 'pointer', ...((clientDeleted || staffPapelera) ? { border: '1.5px solid var(--r)' } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -473,6 +474,17 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                       onClick={(e) => { e.stopPropagation(); restoreMut.mutate(o.id); }}
                       disabled={restoreMut.isPending}
                       style={{ background: 'var(--v)', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 9px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                      Restaurar
+                    </button>
+                  </div>
+                )}
+                {staffPapelera && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--rc)', color: 'var(--r)', borderRadius: 8, padding: '5px 9px', marginBottom: 6, fontSize: 12, fontWeight: 800 }}>
+                    <span>⚠ Enviado a papelera por {o.papeleraBy?.name ?? 'alguien'}{o.papelera_reason ? `: ${o.papelera_reason}` : ''}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); restoreMut.mutate(o.id); }}
+                      disabled={restoreMut.isPending}
+                      style={{ background: 'var(--v)', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 9px', fontSize: 11, fontWeight: 800, cursor: 'pointer', flexShrink: 0 }}>
                       Restaurar
                     </button>
                   </div>

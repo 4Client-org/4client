@@ -101,6 +101,11 @@ async function ingestMessage(
   // exactly what Meta sent regardless of how short log retention turns out to
   // be. `unknown` on purpose - never parsed/typed, just persisted as-is.
   rawPayload?: unknown,
+  // The contact's BSUID (user_id), when this webhook's contacts[] entry happened
+  // to carry it ALONGSIDE a real wa_id/phone - see Ticket.bsuid's own comment.
+  // Threaded through every ingest* helper so a later BSUID-only message from the
+  // same person can still find this ticket instead of spawning a duplicate.
+  bsuidHint?: string,
 ) {
   // Find org by phone_number_id
   const org = await fastify.prisma.organization.findFirst({
@@ -133,11 +138,14 @@ async function ingestMessage(
   const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
 
   // One ticket per (org, phone), forever - not per day. A customer who wrote a month
-  // ago and writes again today continues the exact same ticket; there's no other
-  // ticket for this phone this could possibly collide with (enforced by the
-  // @@unique([org_id, phone]) constraint), so this is just find-or-create.
+  // ago and writes again today continues the exact same ticket. Also matches on
+  // `bsuid` (not just `phone`) so a person previously seen under their real phone
+  // number, whose BSUID got learned and stored on that ticket (see Ticket.bsuid),
+  // still resolves to the SAME ticket on a later message that arrives as
+  // BSUID-only - otherwise this identity split would silently recreate the exact
+  // "Vivi"/"dayis" fragmentation bug already hit once in production.
   let ticket = await fastify.prisma.ticket.findFirst({
-    where: { org_id: org.id, phone },
+    where: { org_id: org.id, OR: [{ phone }, { bsuid: phone }, ...(bsuidHint ? [{ bsuid: bsuidHint }] : [])] },
   });
 
   // Gates the welcome auto-reply - must be "first message TODAY", not "first message
@@ -158,6 +166,7 @@ async function ingestMessage(
         unread_count: 1,
         no_wpp_number: noWppNumber,
         raw_payload: rawPayload as any,
+        bsuid: bsuidHint ?? null,
       },
     });
   } else {
@@ -168,6 +177,8 @@ async function ingestMessage(
 
     // Roll it forward to today (and drop any stale "queued for a specific day" flag)
     // so the board/informe pick it up wherever the conversation actually is now.
+    // bsuid only ever gets SET here, never overwritten with null - once learned
+    // for this ticket it stays, regardless of which identifier a later message uses.
     ticket = await fastify.prisma.ticket.update({
       where: { id: ticket.id },
       data: {
@@ -176,6 +187,7 @@ async function ingestMessage(
         unread_count: { increment: 1 },
         last_message_at: sentAt,
         customer_name: name,
+        ...(bsuidHint && !ticket.bsuid ? { bsuid: bsuidHint } : {}),
       },
     });
   }
@@ -317,6 +329,7 @@ async function ingestImageMessage(
   sentAt: Date,
   noWppNumber = false,
   rawPayload?: unknown,
+  bsuidHint?: string,
 ) {
   const org = await fastify.prisma.organization.findFirst({
     where: { wpp_meta_phone_id: phoneNumberId, active: true },
@@ -344,7 +357,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       image.caption ? String(image.caption).slice(0, 4096) : null,
-      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber, rawPayload,
+      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber, rawPayload, bsuidHint,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
@@ -358,7 +371,7 @@ async function ingestImageMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
-      waMsgId, sentAt, undefined, noWppNumber, rawPayload,
+      waMsgId, sentAt, undefined, noWppNumber, rawPayload, bsuidHint,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
   }
 }
@@ -385,6 +398,7 @@ async function ingestBinaryMediaMessage(
   sentAt: Date,
   noWppNumber = false,
   rawPayload?: unknown,
+  bsuidHint?: string,
 ) {
   const label = MEDIA_KIND_LABEL[kind];
   const org = await fastify.prisma.organization.findFirst({
@@ -416,7 +430,7 @@ async function ingestBinaryMediaMessage(
       : null;
     await ingestMessage(
       fastify, phoneNumberId, phone, name, text,
-      waMsgId, sentAt, { url: token, type: kind }, noWppNumber, rawPayload,
+      waMsgId, sentAt, { url: token, type: kind }, noWppNumber, rawPayload, bsuidHint,
     );
   } catch (err) {
     fastify.log.error({ err, phone }, `WPP: error descargando ${label} entrante`);
@@ -425,7 +439,7 @@ async function ingestBinaryMediaMessage(
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
       `El cliente envió un ${label}, pero no se pudo descargar. Pídele que lo reenvíe.`,
-      waMsgId, sentAt, undefined, noWppNumber, rawPayload,
+      waMsgId, sentAt, undefined, noWppNumber, rawPayload, bsuidHint,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, `WPP: error registrando fallback de ${label}`));
   }
 }
@@ -446,13 +460,14 @@ async function ingestLocationMessage(
   sentAt: Date,
   noWppNumber = false,
   rawPayload?: unknown,
+  bsuidHint?: string,
 ) {
   const label = [location.name, location.address].filter(Boolean).join(' - ');
   const text = label ? `Ubicación: ${label}` : 'Ubicación compartida';
   const mapsLink = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
   await ingestMessage(
     fastify, phoneNumberId, phone, name, text,
-    waMsgId, sentAt, { url: mapsLink, type: 'location' }, noWppNumber, rawPayload,
+    waMsgId, sentAt, { url: mapsLink, type: 'location' }, noWppNumber, rawPayload, bsuidHint,
   );
 }
 
@@ -581,9 +596,6 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
         const { metadata, contacts, messages, statuses } = change.value;
 
         for (const msg of messages ?? []) {
-          const SUPPORTED_TYPES = ['text', 'image', 'audio', 'video', 'document', 'location'];
-          if (!SUPPORTED_TYPES.includes(msg.type)) continue;
-
           const sentAt = new Date(parseInt(msg.timestamp) * 1000);
           // Reject replayed messages older than 10 minutes
           if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
@@ -608,40 +620,60 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           const contact = contacts?.find(c =>
             (msg.from && c.wa_id === msg.from) || (msg.from_user_id && c.user_id === msg.from_user_id));
           const name = String(contact?.profile.name ?? rawIdentifier ?? '').slice(0, 200);
+          // Only meaningful when the SAME contact entry carries both a real wa_id
+          // and a BSUID user_id - see Ticket.bsuid's own comment for why this
+          // matters (prevents the same person fragmenting across two tickets).
+          const bsuidHint = contact?.wa_id && contact?.user_id ? contact.user_id : undefined;
+
+          const SUPPORTED_TYPES = ['text', 'image', 'audio', 'video', 'document', 'location'];
+          if (!SUPPORTED_TYPES.includes(msg.type)) {
+            // Previously silently dropped (`continue`, no ticket touched at all) -
+            // Meta's `reaction`/`interactive`/`sticker`/etc types are real inbound
+            // activity from a real customer and must leave SOME trace in the chat,
+            // even without being able to render the actual content. Bumps
+            // last_message_at like any other genuine inbound message (correct -
+            // this is a real arrival, not a staff/order-side side effect).
+            ingestMessage(
+              fastify, metadata.phone_number_id, phone, name,
+              `[Tipo de mensaje no soportado: ${msg.type}]`,
+              msg.id, sentAt, undefined, noWppNumber, payload, bsuidHint,
+            ).catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje no soportado'));
+            continue;
+          }
 
           if (msg.type === 'image' && msg.image?.id) {
-            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber, payload)
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
             continue;
           }
 
           if (msg.type === 'audio' && msg.audio?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'audio', msg.audio, msg.id, sentAt, noWppNumber, payload)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'audio', msg.audio, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo audio'));
             continue;
           }
 
           if (msg.type === 'video' && msg.video?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'video', msg.video, msg.id, sentAt, noWppNumber, payload)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'video', msg.video, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo video'));
             continue;
           }
 
           if (msg.type === 'document' && msg.document?.id) {
-            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'document', msg.document, msg.id, sentAt, noWppNumber, payload)
+            ingestBinaryMediaMessage(fastify, metadata.phone_number_id, phone, name, 'document', msg.document, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo documento'));
             continue;
           }
 
           if (msg.type === 'location' && msg.location) {
-            ingestLocationMessage(fastify, metadata.phone_number_id, phone, name, msg.location, msg.id, sentAt, noWppNumber, payload)
+            ingestLocationMessage(fastify, metadata.phone_number_id, phone, name, msg.location, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo ubicación'));
             continue;
           }
 
           if (!msg.text?.body) continue;
           const text = String(msg.text.body).slice(0, 4096);
-          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber, payload)
+          ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber, payload, bsuidHint)
             .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo mensaje'));
         }
 

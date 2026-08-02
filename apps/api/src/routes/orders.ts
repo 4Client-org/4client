@@ -203,10 +203,12 @@ function buildOrderSelect(includeHistory = false) {
     paid: true, paid_at: true, paid_by: true, amount_received: true,
     change_amount: true, cod_choice: true, split_cash: true, split_transfer: true, locked: true, caja_cerrada: true, notes: true,
     client_modified: true, client_deleted: true,
+    papelera_reason: true, papelera_by: true, status_before_papelera: true,
     created_at: true, updated_at: true,
     employee: { select: { id: true, name: true } },
     registeredBy: { select: { id: true, name: true } },
     paidBy: { select: { id: true, name: true } },
+    papeleraBy: { select: { id: true, name: true } },
     items: { orderBy: { sort_order: 'asc' as const } },
     observations: {
       orderBy: { created_at: 'asc' as const },
@@ -655,11 +657,53 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     return reply.send({ data: updatedWithFlags });
   });
 
+  // DELETE /api/v1/orders/:id/observations/:obsId - same author-only rule as the
+  // PATCH edit above (no admin override), so the person who wrote a note is the
+  // only one who can remove it. Applies equally to a normal observation and to
+  // the auto-created "motivo de papelera" note (PATCH /:id/status below) - that
+  // one is just a regular OrderObservation, nothing special about it once created.
+  fastify.delete('/:id/observations/:obsId', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { id, obsId } = req.params as { id: string; obsId: string };
+
+    const existing = await fastify.prisma.orderObservation.findFirst({
+      where: { id: obsId, order_id: id, org_id: req.user.orgId },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Observación no encontrada', code: 'NOT_FOUND' });
+    if (existing.author_id !== req.user.userId) {
+      return reply.status(403).send({ error: 'Solo quien escribió la observación puede eliminarla', code: 'NOT_AUTHOR' });
+    }
+
+    const updatedOrder = await fastify.prisma.$transaction(async (tx) => {
+      await tx.orderObservation.delete({ where: { id: obsId } });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'observacion_borrada', field: 'Observación',
+          value_before: existing.text, value_after: '',
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
+    });
+
+    const updatedWithFlags = { ...updatedOrder, ...(await clientChangedFlags(fastify.prisma, id)) };
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updatedWithFlags as any);
+    return reply.send({ data: updatedWithFlags });
+  });
+
   // PATCH /api/v1/orders/:id/status
   fastify.patch('/:id/status', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ status: z.enum(['nuevo', 'preparando', 'listo', 'camino', 'entregado', 'papelera']) }).safeParse(req.body);
+    const body = z.object({
+      status: z.enum(['nuevo', 'preparando', 'listo', 'camino', 'entregado', 'papelera']),
+      // Mandatory only when sending TO papelera - required so staff can never trash
+      // an order without leaving a reason behind (stays in OrderHistory even after
+      // a later restore, per PATCH /:id/restore below).
+      reason: z.string().trim().min(1).max(500).optional(),
+    }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Estado inválido', code: 'VALIDATION_ERROR' });
+    if (body.data.status === 'papelera' && !body.data.reason) {
+      return reply.status(400).send({ error: 'Debes indicar el motivo para enviar a papelera', code: 'REASON_REQUIRED' });
+    }
 
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
@@ -668,56 +712,103 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
     }
 
+    const toPapelera = body.data.status === 'papelera';
+
     const updated = await fastify.prisma.$transaction(async (tx) => {
-      const order = await tx.order.update({
+      await tx.order.update({
         where: { id },
-        data: { status: body.data.status, updated_at: new Date() },
-        select: buildOrderSelect(false),
+        data: {
+          status: body.data.status,
+          updated_at: new Date(),
+          ...(toPapelera
+            ? { papelera_reason: body.data.reason, papelera_by: req.user.userId, status_before_papelera: existing.status }
+            : {}),
+        },
       });
       await tx.orderHistory.create({
         data: {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
-          action_type: 'estado', field: 'Estado',
+          action_type: toPapelera ? 'enviado_papelera' : 'estado', field: 'Estado',
           value_before: existing.status, value_after: body.data.status,
+          notes: toPapelera ? body.data.reason : undefined,
         },
       });
-      return order;
+      // The motivo also becomes a normal OrderObservation - not just a frozen
+      // history entry - so it's visible with the author's name right alongside
+      // every other note on the order, and that same author can edit/delete it
+      // or add another one afterward, same as any other observation (per user
+      // request: same behavior as the existing cierre observation flow).
+      if (toPapelera) {
+        await tx.orderObservation.create({
+          data: {
+            org_id: req.user.orgId, order_id: id, author_id: req.user.userId,
+            text: `Enviado a papelera: ${body.data.reason}`,
+          },
+        });
+      }
+      // Re-fetched AFTER the observation create above so it's included in what
+      // gets returned/broadcast - selecting earlier (before that insert) would
+      // have shipped a payload one observation behind to every connected client.
+      return tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
     });
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:moved', { orderId: id, newStatus: body.data.status });
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updated as any);
     return reply.send({ data: updated });
   });
 
-  // PATCH /api/v1/orders/:id/restore - clears `client_deleted` on an order the
+  // PATCH /api/v1/orders/:id/restore - handles BOTH trash mechanisms: an order the
   // CLIENT deleted themselves via their form link (public.ts's own POST
-  // /order/:orderId/delete) - status is untouched by that route in the first
-  // place, so restoring is just clearing the flag, nothing to "put back" status-
-  // wise. Not for staff's own separate papelera trash action (status:'papelera',
-  // a different, unrelated concern - see PATCH /:id/status).
+  // /order/:orderId/delete, status untouched, just clears the flag) AND an order
+  // staff sent to papelera (PATCH /:id/status status:'papelera', which DOES change
+  // status - restoring puts it back in status_before_papelera). A single order can
+  // only be in one of these two states at a time in practice, but both are checked
+  // so this one route always does the right thing either way.
   fastify.patch('/:id/restore', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    if (!existing.client_deleted) return reply.status(400).send({ error: 'Este pedido no fue eliminado por el cliente', code: 'NOT_CLIENT_DELETED' });
+    const wasPapelera = existing.status === 'papelera';
+    if (!existing.client_deleted && !wasPapelera) {
+      return reply.status(400).send({ error: 'Este pedido no está eliminado ni en papelera', code: 'NOT_DELETED' });
+    }
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
       const order = await tx.order.update({
         where: { id },
-        data: { client_deleted: false, updated_at: new Date() },
+        data: {
+          client_deleted: false,
+          updated_at: new Date(),
+          ...(wasPapelera
+            ? {
+                status: existing.status_before_papelera ?? 'nuevo',
+                // Cleared, not kept - reason/who/previous-status only describe the
+                // CURRENT trip to papelera. The reason text itself survives in
+                // OrderHistory below regardless (never deleted), just no longer
+                // shown as "active" on the order. A future re-send to papelera
+                // must ask for a fresh reason, which this clearing enables.
+                papelera_reason: null,
+                papelera_by: null,
+                status_before_papelera: null,
+              }
+            : {}),
+        },
         select: buildOrderSelect(false),
       });
       await tx.orderHistory.create({
         data: {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
           action_type: 'restaurado', field: 'Estado',
-          value_before: 'Eliminado por el cliente', value_after: 'Activo',
-          notes: 'Restaurado por staff',
+          value_before: wasPapelera ? 'Enviado a papelera' : 'Eliminado por el cliente',
+          value_after: wasPapelera ? (existing.status_before_papelera ?? 'nuevo') : 'Activo',
+          notes: wasPapelera ? `Restaurado por staff (motivo original: ${existing.papelera_reason ?? 'sin motivo'})` : 'Restaurado por staff',
         },
       });
       return order;
     });
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:updated', updated as any);
+    if (wasPapelera) fastify.io.to(`org:${req.user.orgId}`).emit('order:moved', { orderId: id, newStatus: updated.status });
     return reply.send({ data: updated });
   });
 

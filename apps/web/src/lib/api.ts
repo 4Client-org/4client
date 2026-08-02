@@ -61,7 +61,7 @@ export async function tryRefresh(): Promise<boolean> {
 }
 
 async function doRefresh(): Promise<boolean> {
-  const { setAccessToken, clearAuth } = useAuthStore.getState();
+  const { setAuth, clearAuth } = useAuthStore.getState();
   try {
     const res = await fetch(`${BASE}/auth/refresh`, {
       method: 'POST',
@@ -85,7 +85,17 @@ async function doRefresh(): Promise<boolean> {
       return false;
     }
     const { data } = await res.json();
-    setAccessToken(data.accessToken);
+    // Re-sync `user` from the response too, not just the token - `rf`'s cookie
+    // identity is the source of truth for who this refresh actually belongs to.
+    // Previously only accessToken was updated here, letting a stale cached `user`
+    // (sessionStorage, otherwise never re-fetched) silently survive a refresh for
+    // a DIFFERENT identity - the confirmed cause of the "domiciliario view
+    // appears out of nowhere" report. Same field mapping LoginPage.tsx uses.
+    const apiUser = data.user as any;
+    setAuth(
+      { accessToken: data.accessToken },
+      { ...apiUser, userId: apiUser.id, orgId: apiUser.org_id, orgName: apiUser.org_name, orgSlug: apiUser.org_slug },
+    );
     return true;
   } catch (err) {
     console.error('[auth] refresh request threw (network/CORS failure, not a server response)', err);

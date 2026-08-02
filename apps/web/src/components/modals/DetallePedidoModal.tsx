@@ -264,6 +264,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     setSplitTransfer('');
   }, [showCobro]);
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
+  // Separate from confirmDlg - papelera needs a free-text reason, not just a
+  // yes/no confirm, and re-sending after a restore must ask again every time
+  // (backend clears papelera_reason on restore, so there's nothing to prefill).
+  const [papeleraReasonDlg, setPapeleraReasonDlg] = useState(false);
+  const [papeleraReasonText, setPapeleraReasonText] = useState('');
 
   useEffect(() => {
     if (!order) return;
@@ -320,6 +325,30 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       if (changedId !== orderId) return;
       if (isDirty || catalogDirty) {
         toast('Este pedido se actualizó (el cliente agregó productos) - guarda tus cambios para no perderlos');
+      }
+      // While catalogDirty, the items-hydration effect above deliberately skips
+      // re-deriving local `items` from the cache (so it doesn't blow away whatever
+      // staff is mid-typing) - but that means a concurrent client edit landing
+      // right now would otherwise be invisible to local state entirely, and a
+      // save a moment later (full delete+recreate of OrderItem, orders.ts PATCH
+      // /:id) would silently wipe it out along with its added_by_client red
+      // highlight. Merge in any item from the fresh server data that isn't
+      // already present locally (matched by product_name, the same key used
+      // everywhere else items don't carry a stable id) instead of just warning
+      // and hoping staff manually re-adds it after reading the toast.
+      if (catalogDirty && data?.id && Array.isArray(data.items)) {
+        setItems((prev: any[]) => {
+          const known = new Set(prev.map((i) => i.product_name));
+          const missing = data.items
+            .filter((i: any) => !known.has(i.product_name))
+            .map((i: any) => ({
+              product_name: i.product_name ?? '',
+              quantity_label: i.quantity_label ?? '',
+              price: String(i.price ?? ''),
+              added_by_client: true,
+            }));
+          return missing.length > 0 ? [...prev, ...missing] : prev;
+        });
       }
       // order:updated already carries the FULL fresh order (public.ts/orders.ts emit
       // the complete row) - write it straight into the cache instead of just
@@ -487,6 +516,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
+  const deleteObsMut = useMutation({
+    mutationFn: (obsId: string) => api.delete(`/orders/${orderId}/observations/${obsId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      toast('Observación eliminada');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
   const moveMut = useMutation({
     mutationFn: (status: string) => api.patch(`/orders/${orderId}/status`, { status }),
     onSuccess: () => {
@@ -496,8 +535,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
+  // `reason` is mandatory server-side (orders.ts's PATCH /:id/status 400s with
+  // REASON_REQUIRED without it) - collected via papeleraReasonDlg below, not a
+  // plain confirm() prompt, so it can be validated (non-empty) before submitting.
   const papeleraMut = useMutation({
-    mutationFn: () => api.patch(`/orders/${orderId}/status`, { status: 'papelera' }),
+    mutationFn: (reason: string) => api.patch(`/orders/${orderId}/status`, { status: 'papelera', reason }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); toast('Pedido enviado a papelera'); onClose(); },
     onError: (e: any) => toast(e.message, true),
   });
@@ -1153,6 +1195,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
+            {order.status === 'papelera' && (
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={15} /> Enviado a papelera por {(order as any).papeleraBy?.name ?? 'alguien'}
+                  {(order as any).papelera_reason ? `: ${(order as any).papelera_reason}` : ''}
+                </span>
+                {canManage && (
+                  <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
+                  </button>
+                )}
+              </div>
+            )}
+
             {!locked && diaCerrado && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Este día ya fue cerrado - vista de solo lectura.
@@ -1287,10 +1344,18 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                         <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--gt)' }}>{obs.author?.name ?? 'Desconocido'}</span>
                         {isAuthor && !isEditingThis && (
-                          <button onClick={() => { setEditingObsId(obs.id); setEditObsText(obs.text); }}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', fontSize: 12, fontWeight: 700 }}>
-                            Editar
-                          </button>
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <button onClick={() => { setEditingObsId(obs.id); setEditObsText(obs.text); }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', fontSize: 12, fontWeight: 700 }}>
+                              Editar
+                            </button>
+                            <button
+                              onClick={() => setConfirmDlg({ msg: '¿Eliminar esta observación?', onOk: () => deleteObsMut.mutate(obs.id), danger: true })}
+                              disabled={deleteObsMut.isPending}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--r)', fontSize: 12, fontWeight: 700 }}>
+                              Eliminar
+                            </button>
+                          </div>
                         )}
                       </div>
                       {isEditingThis ? (
@@ -1376,7 +1441,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               )}
               {!readOnly && !locked && canManage && order.status !== 'papelera' && (
                 <button ref={actionBtnRef(1)} onKeyDown={handleActionBtnKeyDown} className="bdel"
-                  onClick={() => setConfirmDlg({ msg: '¿Mover este pedido a la papelera?', onOk: () => papeleraMut.mutate(), danger: true })}
+                  onClick={() => { setPapeleraReasonText(''); setPapeleraReasonDlg(true); }}
                   disabled={papeleraMut.isPending || hasNegativePrice}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <Trash2 size={13} /> Papelera
@@ -1456,6 +1521,38 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                 {restoreMut.isPending ? 'Restaurando...' : <><CheckCircle size={15} /> Restaurar pedido</>}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAPELERA REASON DIALOG - mandatory free-text motivo, not a plain confirm */}
+      {papeleraReasonDlg && (
+        <div className="moverlay on" style={{ zIndex: 900 }} onClick={(e) => e.target === e.currentTarget && setPapeleraReasonDlg(false)}>
+          <div className="mwin" style={{ maxWidth: 400 }}>
+            <div className="mbody" style={{ padding: '24px 22px 20px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--n)', marginBottom: 12 }}>
+                ¿Mover este pedido a la papelera?
+              </div>
+              <textarea
+                autoFocus
+                value={papeleraReasonText}
+                onChange={(e) => setPapeleraReasonText(e.target.value)}
+                placeholder="Motivo (obligatorio)..."
+                rows={3}
+                style={{ width: '100%', resize: 'vertical', marginBottom: 16 }}
+              />
+              <div className="mactions" style={{ justifyContent: 'center' }}>
+                <button className="bsec" onClick={() => setPapeleraReasonDlg(false)}>Cancelar</button>
+                <button className="bdel"
+                  disabled={!papeleraReasonText.trim() || papeleraMut.isPending}
+                  onClick={() => {
+                    papeleraMut.mutate(papeleraReasonText.trim());
+                    setPapeleraReasonDlg(false);
+                  }}>
+                  {papeleraMut.isPending ? 'Enviando...' : 'Enviar a papelera'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

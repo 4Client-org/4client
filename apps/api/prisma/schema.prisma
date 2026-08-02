@@ -58,6 +58,7 @@ model User {
   refresh_tokens      RefreshToken[]
   orders_registered   Order[]            @relation("RegisteredBy")
   orders_paid         Order[]            @relation("PaidBy")
+  orders_papelera     Order[]            @relation("PapeleraBy")
   history_entries     OrderHistory[]
   order_observations  OrderObservation[]
   sent_messages       TicketMessage[]
@@ -141,6 +142,13 @@ model Ticket {
   // org - there is genuinely no way to reply to this customer, so the UI shows
   // a clear warning instead of a normal (but silently unreachable) chat.
   no_wpp_number      Boolean   @default(false)
+  // Secondary identifier - only set when a single webhook contact entry carried
+  // BOTH a real wa_id (stored as `phone` above) AND a BSUID user_id. Lets a LATER
+  // message from the same person that arrives with ONLY the BSUID (no `from`, just
+  // `from_user_id`) still resolve to this same ticket instead of spawning a
+  // duplicate - the exact "Vivi"/"dayis" fragmentation bug this org already hit
+  // once, being closed off structurally. Never overwrites a value already set.
+  bsuid              String?   @unique @db.VarChar(150)
   // The exact webhook POST body that CREATED this ticket (the first message
   // ever received from this phone) - never overwritten on later messages, this
   // is specifically "what did Meta send us that first time", for diagnosing
@@ -336,6 +344,14 @@ model Order {
   // Excluded from cierre/dashboard totals wherever it matters (treated as if it
   // doesn't exist for accounting purposes) but still visible on the live board.
   client_deleted  Boolean   @default(false)
+  // Staff-initiated trash (PATCH /:id/status status:'papelera') - unlike
+  // client_deleted above, this ALSO changes `status`, so these three fields record
+  // what to restore back to. All three are cleared together on restore; a
+  // subsequent re-send to papelera repopulates them and requires a fresh reason
+  // (never carried over from a prior trip to papelera).
+  papelera_reason        String?  @db.VarChar(500)
+  papelera_by            String?  @db.Uuid
+  status_before_papelera String?  @db.VarChar(20)
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 
@@ -344,6 +360,7 @@ model Order {
   employee     Employee?      @relation(fields: [employee_id], references: [id])
   registeredBy User           @relation("RegisteredBy", fields: [registered_by], references: [id])
   paidBy       User?          @relation("PaidBy", fields: [paid_by], references: [id])
+  papeleraBy   User?          @relation("PapeleraBy", fields: [papelera_by], references: [id])
   items        OrderItem[]
   history      OrderHistory[]
   observations OrderObservation[]

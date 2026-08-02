@@ -158,7 +158,29 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });
 
     reply.setCookie('rf', newRaw, cookieOpts(req));
-    return reply.send({ data: { accessToken } });
+    // Return the full `user` object too, not just accessToken - the `rf` cookie
+    // proves who this token actually belongs to, so this is the one place a
+    // stale/desynced cached `user` on the frontend (sessionStorage, never
+    // re-fetched otherwise) gets corrected back to match. Without this, a refresh
+    // could silently keep showing a DIFFERENT identity's cached role/name against
+    // a freshly-issued token for someone else on the same browser.
+    return reply.send({
+      data: {
+        accessToken,
+        user: {
+          id: stored.user.id,
+          org_id: stored.user.org_id,
+          org_name: stored.user.org.name,
+          org_slug: stored.user.org.slug,
+          email: stored.user.email,
+          name: stored.user.name,
+          role: stored.user.role,
+          active: stored.user.active,
+          last_login: stored.user.last_login,
+          created_at: stored.user.created_at,
+        },
+      },
+    });
   });
 
   // POST /api/v1/auth/logout

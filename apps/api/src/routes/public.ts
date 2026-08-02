@@ -537,7 +537,11 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const message = await fastify.prisma.ticketMessage.create({
           data: { ticket_id: ticket.id, direction: 'out', text: msgText, sent_at: new Date(), sent_by: actorIsAuto ? null : actorUser.id },
         });
-        await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { last_message_at: new Date() } });
+        // Deliberately NOT touching ticket.last_message_at here - this is an outbound
+        // confirmation triggered by the customer editing their order via the web form,
+        // not a genuine inbound WhatsApp message. Bumping it here used to reorder the
+        // whole board's "first arrived stays on top" queue on every order edit, same
+        // bug inbox.ts's own /reply route already documents avoiding for staff replies.
 
         const provider = MetaCloudProvider.fromOrg(ticket.org);
         let wppMessageId: string | null = null;
@@ -727,10 +731,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       },
     });
 
-    await fastify.prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { last_message_at: new Date() },
-    });
+    // Deliberately NOT touching ticket.last_message_at here - see the identical note
+    // on the order-edit confirmation above; creating an order via the web form is not
+    // a genuine inbound WhatsApp message and must not reorder the board.
 
     // Actually deliver the confirmation to the client's WhatsApp - previously this only
     // wrote the message to the DB and broadcast it to staff views, so staff saw a

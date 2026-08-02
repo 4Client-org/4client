@@ -30,10 +30,14 @@ export default async function fileRoutes(fastify: FastifyInstance) {
       select: { customer_phone: true, ticket_id: true },
     });
     if (!order) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
-    const phoneLast4 = (order.customer_phone ?? '').replace(/\D/g, '').slice(-4);
-    if (phoneLast4.length !== 4) {
-      return reply.status(400).send({ error: 'El pedido no tiene un teléfono válido registrado', code: 'NO_PHONE' });
-    }
+    // BSUID-identified tickets (WhatsApp usernames, see Ticket.phone's own comment)
+    // and no_wpp_number placeholders can both fail to contain 4 real digits - this
+    // column is metadata only (the link's own token is what actually protects it,
+    // per the comment above), so a placeholder here must not block generating the
+    // factura at all. This was intermittently 400ing with NO_PHONE for exactly
+    // those customers once phone was widened to accept non-numeric identifiers.
+    const digitsOnly = (order.customer_phone ?? '').replace(/\D/g, '');
+    const phoneLast4 = digitsOnly.length >= 4 ? digitsOnly.slice(-4) : '0000';
 
     const decoded = Buffer.from(body.data.data, 'base64');
     if (decoded.length > 20 * 1024 * 1024) {

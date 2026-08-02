@@ -21,7 +21,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       // from "Informe del día" too, not only from the live board.
       fastify.prisma.order.findMany({
         where: { org_id: req.user.orgId, fecha, OR: [{ status: 'papelera' }, { client_deleted: true }] },
-        include: { items: true },
+        include: { items: true, papeleraBy: { select: { id: true, name: true } } },
       }),
       // NOT scoped to `fecha` like everything else here - a crédito order stays
       // relevant (unpaid, on this list) for as long as it takes to actually

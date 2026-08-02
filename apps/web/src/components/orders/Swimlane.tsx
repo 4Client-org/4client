@@ -24,6 +24,16 @@ interface Order {
   created_at: string; paid_at?: string | null;
   client_modified?: boolean;
   client_deleted?: boolean;
+  papelera_reason?: string | null;
+  papeleraBy?: { name: string } | null;
+  status_before_papelera?: string | null;
+}
+
+// Where a papelera order actually renders on the board - its own status is
+// literally 'papelera' (not a column), but it must still appear frozen in the
+// column it came FROM, per status_before_papelera (set by PATCH /:id/status).
+function effectiveStatus(o: Order): string {
+  return o.status === 'papelera' ? (o.status_before_papelera ?? 'nuevo') : o.status;
 }
 
 interface Props {
@@ -74,7 +84,7 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
     return minsSinceDate(ticket.created_at);
   }
 
-  const activeOrders = ticketOrders.filter(o => !o.client_deleted && !(o.paid && o.status === 'cerrado'));
+  const activeOrders = ticketOrders.filter(o => !o.client_deleted && o.status !== 'papelera' && !(o.paid && o.status === 'cerrado'));
   if (activeOrders.length === 0) return 0;
   const firstActiveMs = activeOrders.reduce(
     (min, o) => Math.min(min, new Date(o.created_at).getTime()),
@@ -91,10 +101,10 @@ function ticketElapsedMins(ticket: Ticket, ticketOrders: Order[]): number {
 // that's a different concern (an unanswered customer, not an unworked order) and
 // wasn't part of this ask.
 function isOrderUrg(order: Order): boolean {
-  // client_deleted excluded - "se hace de cuenta que no existe" for urgency too;
-  // it gets its own distinct red "Eliminado por el cliente" treatment instead
+  // client_deleted/papelera excluded - "se hace de cuenta que no existe" for
+  // urgency too; both get their own distinct red banner treatment instead
   // (see renderCard), not the zona-roja pulse.
-  return !order.client_deleted && !order.paid && order.status !== 'cerrado';
+  return !order.client_deleted && order.status !== 'papelera' && !order.paid && order.status !== 'cerrado';
 }
 
 function isTicketUrg(ticket: Ticket, ticketOrders: Order[]): boolean {
@@ -187,7 +197,11 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
       || (linkedTicket?.phone.includes(search) ?? false);
   }
 
-  const filteredOrders = orders.filter((o) => o.status !== 'papelera' && orderMatchesSearch(o));
+  // papelera orders are NOT excluded here anymore - they still render on the
+  // board (frozen, in status_before_papelera's column), just non-draggable.
+  // Only the Papelera *tab* elsewhere in the app is a separate, additional
+  // listing - this board view is the other place they're now also visible.
+  const filteredOrders = orders.filter((o) => orderMatchesSearch(o));
 
   // A ticket shows if IT matches (name/phone) OR any of its own orders match
   // (domiciliario, pago, dirección, monto, etc.) - previously these were two
@@ -197,7 +211,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
   const filteredTickets = tickets.filter((t) => {
     if (!searchNorm) return true;
     if (normalizeSearch(t.customer_name).includes(searchNorm) || t.phone.includes(search)) return true;
-    return orders.some((o) => o.ticket_id === t.id && o.status !== 'papelera' && orderMatchesSearch(o));
+    return orders.some((o) => o.ticket_id === t.id && orderMatchesSearch(o));
   });
 
   function moveNext(order: Order) {
@@ -245,6 +259,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     if (!order || order.status === targetStatus) { drag.current = null; return; }
     if (order.locked) { toast('Pedido bloqueado', true); drag.current = null; return; }
     if (order.client_deleted) { toast('El cliente eliminó este pedido - restáuralo primero', true); drag.current = null; return; }
+    if (order.status === 'papelera') { toast('Este pedido está en papelera - restáuralo primero', true); drag.current = null; return; }
     if (targetStatus === 'cerrado') {
       // A $0 total (every item agotado) is legitimate and closeable - no pre-check
       // blocking it here, same as moveNext above.
@@ -259,7 +274,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
   }
 
   const ordersByStatus = STATUS_ORDER.reduce((acc, s) => {
-    acc[s] = filteredOrders.filter((o) => o.status === s);
+    acc[s] = filteredOrders.filter((o) => effectiveStatus(o) === s);
     return acc;
   }, {} as Record<string, Order[]>);
 
@@ -307,19 +322,25 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     // pending a staff decision (Restaurar / Mantener eliminado), opened via the
     // same detail modal, which pops the decision dialog automatically.
     const clientDeleted = !!ord.client_deleted;
+    // Staff's own trash action (PATCH /:id/status status:'papelera') - unlike
+    // client_deleted, this DOES change `status`, but the card still renders in
+    // status_before_papelera's column (effectiveStatus above) rather than
+    // vanishing from the board, same frozen-in-place treatment as client_deleted.
+    const isPapelera = ord.status === 'papelera';
+    const trashed = clientDeleted || isPapelera;
 
     return (
       <div
         className="dc-card"
         style={{
           position: 'relative',
-          borderLeftColor: clientDeleted ? '#DC2626' : COL_COLORS[ord.status],
-          cursor: (ord.locked || frozen || clientDeleted) ? 'default' : 'grab',
+          borderLeftColor: trashed ? '#DC2626' : COL_COLORS[effectiveStatus(ord)],
+          cursor: (ord.locked || frozen || trashed) ? 'default' : 'grab',
           opacity: frozen ? 0.72 : 1,
-          ...(clientDeleted ? { background: '#FEF2F2', borderColor: '#FECACA' } : {}),
+          ...(trashed ? { background: '#FEF2F2', borderColor: '#FECACA' } : {}),
         }}
-        draggable={!ord.locked && !frozen && !clientDeleted}
-        onDragStart={(e) => !frozen && !clientDeleted && handleDragStart(e, ord, ticketId)}
+        draggable={!ord.locked && !frozen && !trashed}
+        onDragStart={(e) => !frozen && !trashed && handleDragStart(e, ord, ticketId)}
         onClick={() => setDetailId(ord.id)}
       >
         {ord.client_modified && (
@@ -375,6 +396,15 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             <AlertTriangle size={10} /> Eliminado por el cliente
           </div>
         )}
+        {isPapelera && (
+          <div style={{
+            fontSize: 10, fontWeight: 800, color: '#DC2626', background: '#FEE2E2',
+            padding: '3px 7px', borderRadius: 20, marginBottom: 5,
+            display: 'flex', alignItems: 'center', gap: 4, width: 'fit-content',
+          }}>
+            <AlertTriangle size={10} /> Enviado a papelera por {ord.papeleraBy?.name ?? 'alguien'}
+          </div>
+        )}
         <div className="dc-prod">
           {visibleItems.map((i) => `${i.product_name ?? ''} ${i.quantity_label ?? ''}`.trim()).join(', ')}
           {hasMore && (
@@ -415,7 +445,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
         <div className="dc-tot">{fmtCOP(total)}</div>
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
-            disabled={ord.locked || frozen || clientDeleted || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
+            disabled={ord.locked || frozen || trashed || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); movePrev(ord); }}>
             <ChevronLeft size={14} />
           </button>
@@ -423,7 +453,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
             <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />Ver
           </button>
           <button className="dc-btn" title={ord.status === 'entregado' ? 'Cerrar pedido' : 'Avanzar'}
-            disabled={ord.locked || frozen || clientDeleted || ord.status === 'cerrado' || moveOrder.isPending}
+            disabled={ord.locked || frozen || trashed || ord.status === 'cerrado' || moveOrder.isPending}
             onClick={(e) => { e.stopPropagation(); moveNext(ord); }}>
             <ChevronRight size={14} />
           </button>
@@ -659,7 +689,7 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                 </div>
 
                 {STATUS_ORDER.map((s) => {
-                  const ordsInStatus = ticketOrders.filter((o) => o.status === s);
+                  const ordsInStatus = ticketOrders.filter((o) => effectiveStatus(o) === s);
                   return (
                     <div key={s} className="slane-scell"
                       style={{ background: COL_BG[s] }}
