@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -21,6 +21,7 @@ import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
+import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
@@ -269,6 +270,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // (backend clears papelera_reason on restore, so there's nothing to prefill).
   const [papeleraReasonDlg, setPapeleraReasonDlg] = useState(false);
   const [papeleraReasonText, setPapeleraReasonText] = useState('');
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
 
   useEffect(() => {
     if (!order) return;
@@ -1047,11 +1050,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   )}
                   <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
                     <div style={{
+                      position: 'relative',
                       background: isOut ? '#DCF8C6' : '#fff',
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
-                    }}>
+                    }}
+                      onMouseEnter={() => setHoveredMsgId(msg.id)}
+                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
                       {isOut && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
@@ -1067,6 +1073,19 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                           <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                         )}
                       </div>
+                      {hoveredMsgId === msg.id && (
+                        <button
+                          title="Reenviar a otro chat"
+                          onClick={() => setForwardMsg(msg)}
+                          style={{
+                            position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
+                            width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
+                            background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gt)', padding: 0,
+                          }}>
+                          <Forward size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   </Fragment>
@@ -1689,6 +1708,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
           </div>
         </div>
+      )}
+
+      {forwardMsg && order?.ticket_id && (
+        <ForwardMessageModal message={forwardMsg} currentTicketId={order.ticket_id} onClose={() => setForwardMsg(null)} />
       )}
     </div>
   );
