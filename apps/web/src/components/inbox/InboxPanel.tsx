@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip, AlertTriangle } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -41,8 +41,15 @@ function renderText(text: string) {
 export default function InboxPanel() {
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  // Matches the backend's own gate (tickets.ts PATCH /:id, requireRole('admin') -
+  // 'dev' bypasses every requireRole check, see middleware/auth.ts).
+  const isAdmin = user?.role === 'admin' || user?.role === 'dev';
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [editingTicket, setEditingTicket] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -117,6 +124,23 @@ export default function InboxPanel() {
     onError: (e: any) => toast(e.message, true),
   });
 
+  // Renames a ticket and/or corrects its associated phone number - propagates to
+  // every order already linked (tickets.ts's PATCH /:id), so a full refresh of
+  // orders/tickets/dashboard is needed too, not just this sidebar/conversation.
+  const renameMut = useMutation({
+    mutationFn: (body: { customer_name?: string; phone?: string }) => api.patch(`/tickets/${selectedId}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['inbox-convo', selectedId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      setEditingTicket(false);
+      toast('Chat actualizado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pickAndSend, isPending: sendMediaPending } = useSendChatMedia(selectedId ?? undefined, [['inbox-convo', selectedId], ['inbox']]);
 
@@ -152,6 +176,9 @@ export default function InboxPanel() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [selectedId]);
+
+  // Switching chats must not leave a stale rename form open against the wrong ticket.
+  useEffect(() => { setEditingTicket(false); }, [selectedId]);
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -245,12 +272,49 @@ export default function InboxPanel() {
         <div className="inbox-chat">
           {/* Chat header */}
           <div className="inbox-chat-head">
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>
-                {selectedTicket?.customer_name || formatPhoneDisplay(selectedTicket?.phone)}
+            {editingTicket ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                <input className="fi2" value={editName} onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Nombre del cliente" maxLength={200} />
+                <input className="fi2" value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="Teléfono (déjalo igual si no lo vas a cambiar)" maxLength={150} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="bpri" disabled={renameMut.isPending}
+                    onClick={() => {
+                      const body: { customer_name?: string; phone?: string } = {};
+                      if (editName.trim() && editName.trim() !== selectedTicket?.customer_name) body.customer_name = editName.trim();
+                      if (editPhone.trim() && editPhone.trim() !== selectedTicket?.phone) body.phone = editPhone.trim();
+                      if (Object.keys(body).length === 0) { setEditingTicket(false); return; }
+                      renameMut.mutate(body);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <CheckCircle size={13} /> {renameMut.isPending ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button className="bsec" onClick={() => setEditingTicket(false)}>Cancelar</button>
+                </div>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
-            </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16 }}>
+                    {selectedTicket?.customer_name || formatPhoneDisplay(selectedTicket?.phone)}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
+                </div>
+                {isAdmin && (
+                  <button
+                    onClick={() => {
+                      setEditName(selectedTicket?.customer_name ?? '');
+                      setEditPhone(selectedTicket?.phone ?? '');
+                      setEditingTicket(true);
+                    }}
+                    title="Renombrar chat / corregir número"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', display: 'flex', alignItems: 'center', padding: 3 }}>
+                    <Pencil size={14} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {selectedTicket?.no_wpp_number && (
