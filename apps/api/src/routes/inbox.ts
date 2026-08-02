@@ -168,6 +168,113 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ data: message, wpp_status });
   });
 
+  // POST /api/v1/inbox/messages/:messageId/forward - reenvía un mensaje existente
+  // (texto o cualquier media) a uno o varios OTROS chats, sin que el navegador del
+  // staff tenga que volver a descargar/subir el archivo - la media ya vive en
+  // nuestro propio storage bajo un token reutilizable (storeMedia genera un token
+  // random, no por contenido, así que varias filas TicketMessage pueden apuntar
+  // al mismo media_url sin problema; GET /media/:token no exige un dueño único).
+  // Solo se leen los bytes de vuelta (loadMedia) cuando hay que volver a subirlos
+  // A META - la fila nueva en nuestra BD reutiliza el token tal cual.
+  fastify.post('/messages/:messageId/forward', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { messageId } = req.params as { messageId: string };
+    const body = z.object({ targetTicketIds: z.array(z.string().uuid()).min(1).max(20) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Selecciona al menos un chat', code: 'VALIDATION_ERROR' });
+
+    const source = await fastify.prisma.ticketMessage.findFirst({
+      where: { id: messageId, ticket: { org_id: req.user.orgId } },
+    });
+    if (!source) return reply.status(404).send({ error: 'Mensaje no encontrado', code: 'NOT_FOUND' });
+
+    // Reenviarse a sí mismo no tiene sentido - filtrado también en el frontend,
+    // pero nunca confiado solo a eso.
+    const targetIds = body.data.targetTicketIds.filter((id) => id !== source.ticket_id);
+    if (targetIds.length === 0) {
+      return reply.status(400).send({ error: 'Elige un chat distinto al actual', code: 'VALIDATION_ERROR' });
+    }
+
+    const targets = await fastify.prisma.ticket.findMany({
+      where: { id: { in: targetIds }, org_id: req.user.orgId },
+      include: { org: true },
+    });
+    const foundIds = new Set(targets.map((t) => t.id));
+    const missing = targetIds.filter((id) => !foundIds.has(id));
+
+    // Los bytes solo se necesitan para volver a subirlos a Meta por CADA
+    // destino (un media id no es reutilizable entre envíos) - una sola lectura,
+    // no una por destino.
+    const isLocation = source.media_type === 'location';
+    const hasUploadableMedia = !!source.media_type && !isLocation;
+    const buffer = hasUploadableMedia ? await loadMedia(source.media_url!) : null;
+    const mimeType = source.media_url ? mimeTypeForToken(source.media_url) : null;
+    // "https://maps.google.com/?q=LAT,LNG" - formato fijo que webhook.ts siempre
+    // genera (ingestLocationMessage) - único lugar que ya arma este link.
+    const locationMatch = isLocation ? source.media_url?.match(/\?q=(-?[\d.]+),(-?[\d.]+)/) : null;
+
+    let forwarded = 0;
+    for (const target of targets) {
+      const message = await fastify.prisma.ticketMessage.create({
+        data: {
+          ticket_id: target.id, direction: 'out',
+          text: source.text, media_url: source.media_url, media_type: source.media_type,
+          media_caption: source.media_caption, sent_by: req.user.userId,
+        },
+        include: { sender: { select: { id: true, name: true } } },
+      });
+      forwarded++;
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId: target.id, message: message as any });
+      if (target.unread_count > 0) {
+        await fastify.prisma.ticket.update({ where: { id: target.id }, data: { unread_count: 0 } });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId: target.id, count: 0 });
+      }
+
+      const provider = MetaCloudProvider.fromOrg(target.org);
+      if (!provider) {
+        fastify.log.warn({ ticketId: target.id }, 'WPP: org sin credenciales Meta, reenvío solo guardado en BD');
+        continue;
+      }
+
+      if (!source.media_type) {
+        // Texto plano - mismo patrón que /reply.
+        provider.sendText(target.phone, source.text ?? '')
+          .then(async ({ messageId: wppMessageId }) => {
+            await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: wppMessageId } });
+            fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+              ticketId: target.id, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+            });
+          })
+          .catch(async (err: any) => {
+            fastify.log.error({ err, ticketId: target.id }, 'WPP: error reenviando texto via Meta API');
+            const failed = await fastify.prisma.ticketMessage.update({
+              where: { id: message.id },
+              data: { failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255) },
+              select: { delivered: true, read_by_client: true, failed_reason: true },
+            });
+            fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', { ticketId: target.id, messageId: message.id, ...failed });
+          });
+      } else if (isLocation && locationMatch) {
+        const [, lat, lng] = locationMatch;
+        trackOutboundMediaSend(fastify, req.user.orgId, target.id, message.id,
+          provider.sendLocation(target.phone, Number(lat), Number(lng)));
+      } else if (hasUploadableMedia && buffer && mimeType) {
+        const kind = source.media_type as 'image' | 'audio' | 'video' | 'document';
+        const caption = source.text ?? undefined;
+        trackOutboundMediaSend(fastify, req.user.orgId, target.id, message.id,
+          provider.uploadMedia(buffer, mimeType).then((mediaId) => {
+            if (kind === 'image') return provider.sendImage(target.phone, mediaId, caption);
+            if (kind === 'video') return provider.sendVideo(target.phone, mediaId, caption);
+            if (kind === 'document') return provider.sendDocument(target.phone, mediaId, source.media_caption ?? 'archivo', caption);
+            return provider.sendAudio(target.phone, mediaId);
+          }));
+      }
+    }
+
+    return reply.status(201).send({ data: { forwarded, failed: missing } });
+  });
+
   // POST /api/v1/inbox/:ticketId/send-image - staff sends a photo, todos los roles
   // (same access as /reply). Base64 in the JSON body, same shape as files.ts's
   // POST /invoice, rather than multipart - no new upload-parsing dependency needed
