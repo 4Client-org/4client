@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { acquireDayLock } from '../lib/orderNumbering.js';
 
 export default async function cierreRoutes(fastify: FastifyInstance) {
   // GET /api/v1/cierre/status?fecha=2026-06-15 - any authenticated role (encargado
@@ -121,25 +122,55 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
 
     // Aplicar decisiones y cerrar caja en transacción
     await fastify.prisma.$transaction(async (tx) => {
+      // Pedidos pospuestos a mañana - RENUMERADOS ahí en el orden de su num
+      // original (el que era #13 hoy es el primero de mañana, el #24 el
+      // segundo, etc), no arrastran su número viejo. Antes conservaban el num
+      // original, lo que dejaba el número de mañana empezando altísimo (si algo
+      // quedaba en 24, todo 1-23 libre se perdía ese día completo). Ahora
+      // mañana simplemente sigue el consecutivo normal (1, 2, 3... luego los
+      // pedidos nuevos del día siguen en 4, 5, 6...), sin huecos que rellenar.
+      //
+      // acquireDayLock serializa esto contra CUALQUIER otra creación de pedido
+      // para ese mismo org+mañana (createOrderWithRetryNum adquiere el mismo
+      // lock) - un pedido que un cliente meta por el formulario esa misma noche
+      // y este cierre no pueden terminar asignándose el mismo número.
+      const mananaOrderIds = Object.entries(decisions)
+        .filter(([orderId, decision]) => decision === 'manana' && validOrderIds.has(orderId))
+        .map(([orderId]) => orderId)
+        .sort((a, b) => {
+          const na = parseInt(pendientes.find(p => p.id === a)?.num ?? '0', 10);
+          const nb = parseInt(pendientes.find(p => p.id === b)?.num ?? '0', 10);
+          return na - nb;
+        });
+
+      if (mananaOrderIds.length > 0) {
+        await acquireDayLock(tx, req.user.orgId, tomorrow);
+        const tomorrowExisting = await tx.order.findMany({ where: { org_id: req.user.orgId, fecha: tomorrow }, select: { num: true } });
+        let nextTomorrowNum = tomorrowExisting.reduce((max, o) => Math.max(max, parseInt(o.num, 10) || 0), 0) + 1;
+
+        for (const orderId of mananaOrderIds) {
+          const existingOrder = pendientes.find(p => p.id === orderId)!;
+          const newNum = String(nextTomorrowNum++).padStart(3, '0');
+          const marker = `pasado_manana:${fechaStr}`;
+          const newNotes = existingOrder.notes ? `${existingOrder.notes}\n${marker}` : marker;
+          await tx.order.update({ where: { id: orderId, org_id: req.user.orgId }, data: { fecha: tomorrow, num: newNum, notes: newNotes } });
+          // Move the whole conversation along with the order - otherwise the order
+          // shows up tomorrow but its ticket doesn't, and the swimlane (which groups
+          // orders under their ticket) never renders it at all.
+          if (existingOrder.ticket_id) {
+            await tx.ticket.update({ where: { id: existingOrder.ticket_id }, data: { deferred_to: tomorrow } });
+          }
+          await tx.orderHistory.create({
+            data: { org_id: req.user.orgId, order_id: orderId, actor_id: req.user.userId, action_type: 'cierre', notes: `Movido a mañana en cierre de caja (pedido #${existingOrder.num} pasa a ser #${newNum})` },
+          });
+        }
+      }
+
       for (const [orderId, decision] of Object.entries(decisions)) {
         // Skip any IDs not from this org's pendientes list
         if (!validOrderIds.has(orderId)) continue;
 
-        if (decision === 'manana') {
-          const existingOrder = pendientes.find(p => p.id === orderId);
-          const marker = `pasado_manana:${fechaStr}`;
-          const newNotes = existingOrder?.notes ? `${existingOrder.notes}\n${marker}` : marker;
-          await tx.order.update({ where: { id: orderId, org_id: req.user.orgId }, data: { fecha: tomorrow, notes: newNotes } });
-          // Move the whole conversation along with the order - otherwise the order
-          // shows up tomorrow but its ticket doesn't, and the swimlane (which groups
-          // orders under their ticket) never renders it at all.
-          if (existingOrder?.ticket_id) {
-            await tx.ticket.update({ where: { id: existingOrder.ticket_id }, data: { deferred_to: tomorrow } });
-          }
-          await tx.orderHistory.create({
-            data: { org_id: req.user.orgId, order_id: orderId, actor_id: req.user.userId, action_type: 'cierre', notes: 'Movido a mañana en cierre de caja' },
-          });
-        } else if (decision === 'forzar_cierre') {
+        if (decision === 'forzar_cierre') {
           // "Cerrar sin cobro" - dead/unmanaged, not a real sale. Must NOT set
           // paid/paid_at/paid_by: those mean money actually changed hands, which
           // didn't happen here. Only status+locked, so it freezes like any other
