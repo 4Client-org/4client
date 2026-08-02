@@ -17,8 +17,12 @@ const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
-  // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
-  fastify.get('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  // GET /api/v1/inbox - lista de todas las conversaciones, admin y encargado
+  // (antes solo admin - bug real reportado: un cliente a crédito escribió y
+  // solo el admin pudo verlo en Chats WPP porque el encargado ni siquiera
+  // podía abrir este panel, sin relación real con que fuera a crédito - todo
+  // encargado estaba bloqueado de TODOS los chats aquí, siempre).
+  fastify.get('/', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const query = z.object({ page: z.coerce.number().default(1) }).parse(req.query);
 
     const allTickets = await fastify.prisma.ticket.findMany({
