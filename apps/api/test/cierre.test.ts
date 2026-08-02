@@ -116,11 +116,14 @@ describe('cierre routes', () => {
     expectedTomorrow.setDate(expectedTomorrow.getDate() + 1);
     expect(updated!.fecha.toISOString().split('T')[0]).toBe(expectedTomorrow.toISOString().split('T')[0]);
 
-    // original notes preserved, marker appended - NOT overwritten
-    const marker = `pasado_manana:${fecha}`;
+    // original notes preserved, marker appended - NOT overwritten. Marker now
+    // embeds the ORIGINAL num too (":${order.num}") - order.num here is what
+    // the fresh order got at creation, before this same cierre renumbered it.
+    const marker = `pasado_manana:${fecha}:${order.num}`;
     expect(updated!.notes).toContain(originalNotes);
     expect(updated!.notes).toContain(marker);
     expect(updated!.notes).toBe(`${originalNotes}\n${marker}`);
+    expect(updated!.num).toBe('001');
   });
 
   it('a phone can only ever have one ticket per org (@@unique(org_id, phone)) - deferring to "manana" just re-flags the same row, never forks a second one', async () => {
