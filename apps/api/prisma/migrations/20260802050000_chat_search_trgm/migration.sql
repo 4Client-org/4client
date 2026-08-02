@@ -11,8 +11,18 @@ CREATE EXTENSION IF NOT EXISTS unaccent;
 -- IMMUTABLE. Same function is used both in the index definition below AND in
 -- every query against it - the expressions must match exactly for the planner
 -- to actually use the index.
-CREATE OR REPLACE FUNCTION immutable_unaccent(text) RETURNS text AS $$
-  SELECT unaccent('unaccent', $1)
+--
+-- Named parameter + fully schema-qualified public.unaccent(...) call,
+-- single-argument form - confirmed the hard way that a positional `$1` with
+-- a bare (non-schema-qualified) `unaccent($1)` call fails with "function
+-- unaccent(text) does not exist" at CREATE INDEX time on some Postgres
+-- setups (reproduced on Railway's managed Postgres) even though the exact
+-- same call resolves fine as a standalone top-level query - a function-
+-- inlining/resolution quirk, not a real missing overload (`\df unaccent`
+-- shows both the 1-arg and 2-arg forms present). This form is what actually
+-- works everywhere it's been tried.
+CREATE OR REPLACE FUNCTION immutable_unaccent(input text) RETURNS text AS $$
+  SELECT public.unaccent(input);
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT;
 
 -- gin_trgm_ops supports LIKE/ILIKE pattern matching via the index (not just
