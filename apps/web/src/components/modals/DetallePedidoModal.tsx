@@ -909,17 +909,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // `locked` alone no longer means read-only - admin/dev can still fully edit a
   // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
   // is cerrado (diaCerrado still freezes everyone, admin included).
-  // A crédito order still awaiting payment is exempt from the locked/encargado
-  // block too - cobro sets locked:true immediately for every payment method, but
-  // for crédito specifically the order isn't actually done: the client can still
-  // come back to pay, ask questions, etc, and encargado needs to keep handling it
-  // normally (move it, edit it) same as before it closed. Only the ADMIN-only
-  // "marcar crédito pagado" action (below) settles the debt for real - once that
-  // happens `order.paid` flips true and this exemption stops applying, same as
-  // any other closed order from then on. Confirmed bug: a real crédito order was
-  // reachable by admin only the moment it closed, encargado couldn't touch it.
-  const creditoSinPagar = order.payment_method === 'credito' && !order.paid;
-  const readOnly = (locked && !canEditLocked && !creditoSinPagar) || diaCerrado || order.status === 'papelera' || order.client_deleted;
+  // A crédito order follows the exact same closed-order rule as every other
+  // payment method, by explicit design decision - once cobro sets locked:true,
+  // only admin/dev can modify it, full stop. encargado keeps full control up
+  // through creating/moving/editing/closing (cobro) the order - closing it is
+  // itself an encargado-allowed action (orders.ts's POST /:id/cobro) - but once
+  // closed, the only encargado-facing surface is the read-only view, same as
+  // any other closed order. (An earlier version of this code exempted an unpaid
+  // crédito order from this rule - reverted per explicit instruction: "una vez
+  // cerrado en board solo el admin puede modificar ese y cualquier otro pedido
+  // cerrado", i.e. no special case for crédito.)
+  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera' || order.client_deleted;
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -1254,7 +1254,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {locked && !canEditLocked && !creditoSinPagar && (
+            {locked && !canEditLocked && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Solo el administrador puede modificar este pedido cerrado. Puedes agregar una observación abajo.
               </div>
