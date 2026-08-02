@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
 import ChatVideo from '../ui/ChatVideo';
 import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
+import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -44,6 +45,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const accessToken = useAuthStore((s) => s.accessToken);
   const [reply, setReply] = useState('');
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
   // Orders shown here must be scoped to the day currently being viewed on the board
@@ -254,11 +257,14 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 )}
                 <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
                   <div style={{
+                    position: 'relative',
                     background: isOut ? '#DCF8C6' : '#fff',
                     borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                     padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                     boxShadow: '0 1px 2px rgba(0,0,0,.1)',
-                  }}>
+                  }}
+                    onMouseEnter={() => setHoveredMsgId(msg.id)}
+                    onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
                     {isOut && (
                       <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                     )}
@@ -274,6 +280,19 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                         <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                       )}
                     </div>
+                    {hoveredMsgId === msg.id && (
+                      <button
+                        title="Reenviar a otro chat"
+                        onClick={() => setForwardMsg(msg)}
+                        style={{
+                          position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
+                          width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
+                          background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gt)', padding: 0,
+                        }}>
+                        <Forward size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 </Fragment>
@@ -416,6 +435,10 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           onConfirm={() => { blockLinkMut.mutate(); setShowBlockConfirm(false); }}
           onCancel={() => setShowBlockConfirm(false)}
         />
+      )}
+
+      {forwardMsg && (
+        <ForwardMessageModal message={forwardMsg} currentTicketId={ticketId} onClose={() => setForwardMsg(null)} />
       )}
     </div>
   );
