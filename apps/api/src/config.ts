@@ -27,6 +27,12 @@ const envSchema = z.object({
   SENTRY_DSN:                z.string().optional(),
   SEED_ADMIN_PASS:           z.string().min(8).default('admin123'),
   SEED_DEV_PASS:             z.string().min(8).default('josejose'),
+  RESEND_API_KEY:            z.string().optional(),
+  // Explicit opt-in, not derived from RAILWAY_ENVIRONMENT_NAME - this scopes the
+  // login verification-code step to dev only for now (per the original ask),
+  // toggled directly in Railway's env vars for that one environment rather than
+  // inferred from an environment NAME string that could be renamed/duplicated.
+  REQUIRE_2FA:               z.coerce.boolean().default(false),
 });
 
 const parsed = envSchema.safeParse(process.env);
