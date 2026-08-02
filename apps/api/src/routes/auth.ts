@@ -117,10 +117,14 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
     }
 
-    // Currently dev-only (config.REQUIRE_2FA, toggled per-environment in Railway,
-    // not derived from RAILWAY_ENVIRONMENT_NAME - see config.ts's own comment).
-    // Production keeps logging in exactly as before this existed.
-    if (!config.REQUIRE_2FA) {
+    // Two gates, both must pass: config.REQUIRE_2FA (per-environment master
+    // switch, Railway env var) AND role === 'dev' (per-user - only the single
+    // 'dev' role account needs this extra step; admin/encargado/domiciliario
+    // keep logging in exactly as before, in every environment). Explicit
+    // instruction: 2FA is for one specific account, not a org-wide rollout -
+    // gating on role instead of e.g. a hardcoded email survives that account's
+    // email changing later without needing a code change.
+    if (!config.REQUIRE_2FA || user.role !== 'dev') {
       return issueSession(fastify, req, reply, user);
     }
 
