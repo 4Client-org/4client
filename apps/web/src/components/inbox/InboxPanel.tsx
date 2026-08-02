@@ -271,7 +271,7 @@ export default function InboxPanel() {
     <div className="inbox-wrap">
       {/* LEFT SIDEBAR */}
       <div className="inbox-sidebar">
-        <div style={{ padding: '12px 16px', borderBottom: '2px solid var(--brd)', background: 'var(--vc)' }}>
+        <div className="inbox-sidebar-header" style={{ padding: '12px 16px', borderBottom: '2px solid var(--brd)', background: 'var(--vc)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 14, color: 'var(--vd)', marginBottom: 10 }}>
             <MessageSquare size={16} /> Conversaciones WPP
           </div>
@@ -288,7 +288,8 @@ export default function InboxPanel() {
                 onChange={(e) => setSearchQuery(e.target.value)} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <DatePickerES value={searchDate} onChange={setSearchDate} />
+              <DatePickerES value={searchDate} onChange={setSearchDate} placeholder="Fecha"
+                className="fsel fsel-sm" />
               {/* DatePickerES always displays SOME date (defaults to "hoy" when
                   `value` is empty - it was built for the board's always-has-a-date
                   view selector, not an optional filter) - this makes it obvious
@@ -308,6 +309,7 @@ export default function InboxPanel() {
           </div>
         </div>
 
+        <div className="inbox-sidebar-list">
         {searchActive ? (
           <>
             {searchResults.length === 0 && (
@@ -379,6 +381,7 @@ export default function InboxPanel() {
             })}
           </>
         )}
+        </div>
       </div>
 
       {/* RIGHT CHAT PANEL */}
