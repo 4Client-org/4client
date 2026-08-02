@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { Prisma, type PrismaClient } from '@prisma/client';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { sanitizeForWhatsApp } from '../lib/sanitize.js';
 import { sortByCategoryOrder } from '../lib/categoryOrder.js';
 import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
+import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 
 // Max orders a single form link (ticket) may generate - a link can stay valid up to
 // 24h, so this caps spam from a leaked/shared link.
@@ -28,36 +28,6 @@ function formatFechaLong(fecha: Date): string {
   return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('es-CO', {
     day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Bogota',
   });
-}
-
-// Computes the next sequential order number for org+fecha and creates the order,
-// retrying on a unique-constraint collision (@@unique([org_id, num, fecha])).
-//
-// Uses MAX(num)+1, not COUNT(*)+1 - a deferred order (cierre.ts, decision "manana")
-// keeps its ORIGINAL num when its fecha moves to the next day, so COUNT(*)+1 can guess
-// a num that's already occupied by one of those, and since count doesn't change
-// between retries with no concurrent insert, every retry recomputed the exact same
-// doomed num and collided identically until attempts ran out (see orders.ts, same fix).
-async function createOrderWithRetryNum<T>(
-  prisma: PrismaClient,
-  orgId: string,
-  fecha: Date,
-  createFn: (num: string) => Promise<T>,
-): Promise<T> {
-  const MAX_ATTEMPTS = 5;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const existing = await prisma.order.findMany({ where: { org_id: orgId, fecha }, select: { num: true } });
-    const maxNum = existing.reduce((max, o) => Math.max(max, parseInt(o.num, 10) || 0), 0);
-    const num = String(maxNum + attempt).padStart(3, '0');
-    try {
-      return await createFn(num);
-    } catch (error) {
-      const isCollision = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-      if (!isCollision || attempt === MAX_ATTEMPTS) throw error;
-    }
-  }
-  // Unreachable, but keeps TS happy about a guaranteed return/throw.
-  throw new Error('No se pudo generar un número de pedido único');
 }
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -739,8 +709,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
     const orderItems = newItemsData.map((item, idx) => ({ ...item, sort_order: idx }));
 
-    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (num) =>
-      fastify.prisma.order.create({
+    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (tx, num) =>
+      tx.order.create({
         data: {
           org_id: ticket.org_id,
           ticket_id: ticket.id,
