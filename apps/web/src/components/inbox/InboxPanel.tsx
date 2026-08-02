@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
 import { colombiaDateStr, formatChatTimestamp, formatChatDateDivider } from '../../lib/format';
+import { normalizeSearch } from '../../lib/normalize';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -56,6 +57,14 @@ export default function InboxPanel() {
   const [editingTicket, setEditingTicket] = useState(false);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  // Forward-message - hoveredMsgId only drives which bubble shows its forward
+  // icon (mouse-based, since .chat-bub is a plain CSS class with no built-in
+  // hover-reveal slot to hook a child element into). forwardMsg holds the
+  // actual message being forwarded, null when the picker modal is closed.
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
+  const [forwardSearch, setForwardSearch] = useState('');
+  const [forwardSelected, setForwardSelected] = useState<Set<string>>(new Set());
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -143,6 +152,19 @@ export default function InboxPanel() {
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       setEditingTicket(false);
       toast('Chat actualizado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  const forwardMut = useMutation({
+    mutationFn: (targetTicketIds: string[]) =>
+      api.post<{ data: { forwarded: number; failed: string[] } }>(`/inbox/messages/${forwardMsg.id}/forward`, { targetTicketIds }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      toast(`Reenviado a ${res.data.forwarded} chat${res.data.forwarded === 1 ? '' : 's'}`);
+      setForwardMsg(null);
+      setForwardSelected(new Set());
+      setForwardSearch('');
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -355,7 +377,10 @@ export default function InboxPanel() {
                       {formatChatDateDivider(msg.created_at ?? msg.sent_at)}
                     </div>
                   )}
-                  <div className={`chat-bub ${isOut ? 'out' : 'in'}`}>
+                  <div className={`chat-bub ${isOut ? 'out' : 'in'}`}
+                    style={{ position: 'relative' }}
+                    onMouseEnter={() => setHoveredMsgId(msg.id)}
+                    onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
                     {isOut && (
                       <div className="chat-bub-who">{msg.sender?.name ?? 'Sistema'}</div>
                     )}
@@ -371,6 +396,19 @@ export default function InboxPanel() {
                         <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                       )}
                     </div>
+                    {hoveredMsgId === msg.id && (
+                      <button
+                        title="Reenviar a otro chat"
+                        onClick={() => { setForwardMsg(msg); setForwardSelected(new Set()); setForwardSearch(''); }}
+                        style={{
+                          position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
+                          width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
+                          background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gt)', padding: 0,
+                        }}>
+                        <Forward size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -400,6 +438,62 @@ export default function InboxPanel() {
               <Send size={16} style={{ display: 'inline', verticalAlign: 'middle' }} />
               {' '}Enviar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* FORWARD MODAL - same moverlay/mwin shell every other modal in the app
+          uses, built here directly since none of the existing ones support a
+          search + multi-select checkbox list. */}
+      {forwardMsg && (
+        <div className="moverlay on" style={{ zIndex: 900 }} onClick={(e) => e.target === e.currentTarget && setForwardMsg(null)}>
+          <div className="mwin" style={{ maxWidth: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="mbody" style={{ padding: '20px 20px 14px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}>Reenviar a...</div>
+              <input
+                className="fi2"
+                placeholder="Buscar chat..."
+                value={forwardSearch}
+                onChange={(e) => setForwardSearch(e.target.value)}
+                style={{ marginBottom: 10 }}
+                autoFocus
+              />
+              <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, border: '1px solid var(--brd)', borderRadius: 8 }}>
+                {tickets
+                  .filter((t: any) => t.id !== selectedId)
+                  .filter((t: any) => {
+                    const q = normalizeSearch(forwardSearch);
+                    if (!q) return true;
+                    return normalizeSearch(t.customer_name ?? '').includes(q) || (t.phone ?? '').includes(forwardSearch);
+                  })
+                  .map((t: any) => {
+                    const checked = forwardSelected.has(t.id);
+                    return (
+                      <label key={t.id}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--brd)', cursor: 'pointer', fontSize: 13 }}>
+                        <input type="checkbox" checked={checked}
+                          onChange={() => setForwardSelected((prev) => {
+                            const next = new Set(prev);
+                            checked ? next.delete(t.id) : next.add(t.id);
+                            return next;
+                          })} />
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{t.customer_name || formatPhoneDisplay(t.phone)}</div>
+                          <div style={{ color: 'var(--gt)', fontSize: 12 }}>{formatPhoneDisplay(t.phone)}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+              </div>
+              <div className="mactions" style={{ marginTop: 14 }}>
+                <button className="bsec" onClick={() => setForwardMsg(null)}>Cancelar</button>
+                <button className="bpri"
+                  disabled={forwardSelected.size === 0 || forwardMut.isPending}
+                  onClick={() => forwardMut.mutate([...forwardSelected])}>
+                  {forwardMut.isPending ? 'Reenviando...' : `Reenviar a (${forwardSelected.size})`}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
