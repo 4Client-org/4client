@@ -79,6 +79,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         customer_name: body.data.customer_name ?? body.data.phone,
         fecha: today,
         last_message_at: new Date(),
+        last_activity_at: new Date(),
       },
     });
 

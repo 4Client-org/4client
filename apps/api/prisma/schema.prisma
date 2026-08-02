@@ -160,7 +160,20 @@ model Ticket {
   customer_name      String?   @db.VarChar(200)
   wpp_thread_id      String?   @db.VarChar(200)
   unread_count       Int       @default(0)
+  // Deliberately INBOUND-only (real WhatsApp messages from the customer, never
+  // staff replies or automated sends - see inbox.ts/public.ts's own comments)
+  // - this is what tickets.ts's board ordering uses, and it must stay that way:
+  // "first to arrive stays first" would break if a staff reply bumped it.
   last_message_at    DateTime? @db.Timestamptz
+  // Separate from last_message_at above on purpose - the Chats WPP panel
+  // (inbox.ts) wants normal WhatsApp-app behavior instead (most recent activity
+  // in EITHER direction floats to top, so replying to an old chat brings it back
+  // up). Maintained by a DB trigger (see migration
+  // 20260802000000_ticket_last_activity), not application code - there are 14+
+  // separate TicketMessage.create() call sites across webhook.ts/inbox.ts/
+  // public.ts (inbound AND outbound), and a trigger can't be accidentally
+  // forgotten at the next one the way a 15th manual bump site could be.
+  last_activity_at   DateTime? @db.Timestamptz
   fecha              DateTime  @default(now()) @db.Date
   deferred_to        DateTime? @db.Date
   created_at         DateTime  @default(now()) @db.Timestamptz

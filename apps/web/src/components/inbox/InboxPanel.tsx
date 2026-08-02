@@ -214,7 +214,10 @@ export default function InboxPanel() {
                     <span className="inbox-unread">{t.unread_count}</span>
                   )}
                   <span className="inbox-item-time">
-                    {t.last_message_at ? formatSidebarTime(t.last_message_at) : ''}
+                    {/* Last activity in EITHER direction (including a staff reply),
+                        not just the last inbound message - matches the list's own
+                        order (inbox.ts orders by last_activity_at too). */}
+                    {(t.last_activity_at ?? t.last_message_at) ? formatSidebarTime(t.last_activity_at ?? t.last_message_at) : ''}
                   </span>
                 </div>
               </div>

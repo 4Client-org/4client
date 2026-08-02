@@ -30,7 +30,11 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
           select: { id: true, num: true, status: true, paid: true },
         },
       },
-      orderBy: { last_message_at: 'desc' },
+      // last_activity_at, not last_message_at - this panel wants normal WhatsApp-app
+      // behavior (most recent activity in EITHER direction floats to top, so
+      // replying to an old chat brings it back up). last_message_at is reserved for
+      // the board's fixed arrival order - see schema.prisma's comment on both fields.
+      orderBy: { last_activity_at: 'desc' },
       take: 500,
     });
 
