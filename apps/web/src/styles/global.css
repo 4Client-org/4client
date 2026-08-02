@@ -360,7 +360,7 @@ input,select,textarea{font-family:var(--f);}
 
 /* INBOX / WA CHAT PANEL */
 .inbox-wrap{display:flex;flex:1;min-height:0;overflow:hidden;background:var(--b);border:1.5px solid var(--brd);border-radius:var(--rad);margin-top:8px;}
-.inbox-sidebar{width:400px;border-right:2px solid var(--brd);flex-shrink:0;background:var(--b);display:flex;flex-direction:column;overflow:hidden;}
+.inbox-sidebar{width:400px;border-right:2px solid var(--brd);flex-shrink:0;background:var(--b);display:flex;flex-direction:column;min-height:0;}
 /* Header (search bar + date filter) stays OUTSIDE the scrollable list on
    purpose - DatePickerES's popup is an absolutely-positioned descendant, and an
    ancestor with overflow:auto/hidden clips it to its own box no matter how high
@@ -368,7 +368,7 @@ input,select,textarea{font-family:var(--f);}
    element, the calendar popup got clipped at the sidebar's own edge instead of
    floating over the chat panel like it's supposed to. */
 .inbox-sidebar-header{flex-shrink:0;}
-.inbox-sidebar-list{flex:1;overflow-y:auto;}
+.inbox-sidebar-list{flex:1;min-height:0;overflow-y:auto;}
 .inbox-item{padding:13px 16px;border-bottom:1px solid var(--brd);cursor:pointer;transition:background .12s;position:relative;}
 .inbox-item:hover{background:var(--bg);}
 .inbox-item.sel{background:var(--vc);border-right:3px solid var(--v);}
