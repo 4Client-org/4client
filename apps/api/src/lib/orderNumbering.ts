@@ -15,18 +15,36 @@ function nthSmallestUnused(used: Set<number>, n: number): number {
   return candidate;
 }
 
+// Shared with cierre.ts's own defer-renumbering (same org+day numbering space,
+// must serialize against each other too - a client's late-night form order
+// rolling forward onto "tomorrow" at the exact moment staff runs cierre and
+// defers pending orders onto that same "tomorrow" is a real race, not a
+// theoretical one).
+export function dayLockKey(orgId: string, fecha: Date): string {
+  return `${orgId}:${fecha.toISOString().split('T')[0]}`;
+}
+
+// Transaction-scoped advisory lock (releases itself on commit/rollback, no
+// manual unlock) - see createOrderWithRetryNum's own comment for the full
+// reasoning. hashtextextended (bigint) rather than hashtext (int4) - wider hash,
+// less chance of two unrelated org+day pairs colliding onto the same lock key.
+export async function acquireDayLock(tx: Prisma.TransactionClient, orgId: string, fecha: Date): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${dayLockKey(orgId, fecha)}, 0))`;
+}
+
 // Computes the smallest unused positive integer order number for org+fecha and
 // creates the order via `createFn(tx, num)`, run inside a Postgres advisory lock
 // scoped to that exact org+day.
 //
-// Gap-fills on purpose: a deferred order (cierre.ts, decision "mañana") keeps its
-// ORIGINAL num when its fecha moves to the next day, so a day's number space can
-// already have high numbers "occupied" (e.g. 13 and 24 carried in from
-// yesterday) well before any of today's own orders exist. The previous MAX(num)+1
-// approach treated every carried-in num as a permanent floor - once something
-// landed on 24, every unused number below it (1-12, 14-23) sat wasted for that
-// whole day. This instead always fills 1, 2, 3... skipping only numbers already
-// taken that day (so with 13 and 24 already occupied: 1-12, then 14-23, then 25+).
+// Fills gaps rather than just MAX(num)+1 - in normal operation this now behaves
+// identically to MAX+1 (nothing leaves gaps anymore: a deferred order gets
+// RENUMBERED into the next day's own consecutive sequence at cierre time - see
+// cierre.ts's own comment - instead of dragging its old, possibly much higher,
+// num along with it like it used to). Smallest-unused is kept anyway as the
+// general-purpose rule rather than reverting to plain MAX+1, since it's exactly
+// as cheap and correct either way when there's no gap, but also does the right
+// thing without any special-casing in the rare case a gap DOES appear for some
+// other reason (e.g. an order moved to papelera and its num never got reused).
 //
 // Safety (non-negotiable - a numbering bug must never cross-assign one
 // customer's order number to another, or ever error out instead of just
@@ -54,11 +72,10 @@ export async function createOrderWithRetryNum<T>(
   createFn: (tx: Prisma.TransactionClient, num: string) => Promise<T>,
 ): Promise<T> {
   const MAX_ATTEMPTS = 5;
-  const lockKey = `${orgId}:${fecha.toISOString().split('T')[0]}`;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       return await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        await acquireDayLock(tx, orgId, fecha);
         const existing = await tx.order.findMany({ where: { org_id: orgId, fecha }, select: { num: true } });
         const used = new Set(existing.map(o => parseInt(o.num, 10)).filter(n => Number.isFinite(n) && n > 0));
         const candidate = nthSmallestUnused(used, attempt);

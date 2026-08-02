@@ -333,4 +333,157 @@ describe('cierre routes', () => {
     expect(createAttempt.statusCode).toBe(409);
     expect(createAttempt.json().code).toBe('DAY_CLOSED');
   });
+
+  describe('deferring to "mañana" RENUMBERS the order into tomorrow\'s own consecutive sequence', () => {
+    // Each test below needs its OWN org (cierre only ever closes the real
+    // "today", and DailyClose is unique per org+fecha - two tests closing
+    // "today" for the SAME org would 409 ALREADY_CLOSED on the second one), but
+    // signs its own token directly via fastify.jwt.sign instead of the usual
+    // freshOrgAndEncargado()/login() HTTP round-trip - POST /auth/login has its
+    // OWN tight rate limit (10/min, see auth.ts), separate from and much
+    // stricter than the app-wide default, and this file's existing tests were
+    // already close to it; 4 more real logins reliably tipped it into 429.
+    // Signing directly skips that route entirely while still producing a token
+    // the SAME @fastify/jwt secret verifies as genuine.
+    async function orgWithDirectToken(role: 'encargado' | 'admin' = 'encargado') {
+      const org = await createTestOrg(app.prisma);
+      const user = await createTestUser(app.prisma, org.id, role, 'unused-not-logged-in-1!');
+      const token = app.jwt.sign({ userId: user.id, orgId: org.id, role }, { expiresIn: '15m' });
+      return { orgId: org.id, userId: user.id, token };
+    }
+
+    it('a single deferred order becomes #001 tomorrow, not keeping its high original num', async () => {
+      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const fecha = todayColombiaStr();
+
+      // Directly seed a high num (013), same as if this were the 13th order of
+      // the day - createOrderWithRetryNum would take many creates to get there,
+      // a direct insert is equivalent and much faster for the test.
+      await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '013', customer_name: 'Cliente Alto', customer_phone: '573000000013',
+          address: 'Calle X', channel: 'call', payment_method: 'cash', status: 'nuevo', source: 'manual',
+          registered_by: adminId, fecha: new Date(fecha),
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+      const order = await app.prisma.order.findFirstOrThrow({ where: { org_id: orgId, num: '013' } });
+
+      const cierre = await app.inject({
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        payload: { fecha, decisions: { [order.id]: 'manana' } },
+      });
+      expect(cierre.statusCode).toBe(200);
+
+      const updated = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(updated.num).toBe('001');
+    });
+
+    it('#13 and #24 both deferred the same cierre become #001 and #002 tomorrow, in that order - never keeping 13/24', async () => {
+      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const fecha = todayColombiaStr();
+
+      const order13 = await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '013', customer_name: 'Cliente 13', customer_phone: '573000000013',
+          address: 'Calle X', channel: 'call', payment_method: 'cash', status: 'nuevo', source: 'manual',
+          registered_by: adminId, fecha: new Date(fecha),
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+      const order24 = await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '024', customer_name: 'Cliente 24', customer_phone: '573000000024',
+          address: 'Calle X', channel: 'call', payment_method: 'cash', status: 'nuevo', source: 'manual',
+          registered_by: adminId, fecha: new Date(fecha),
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+
+      const cierre = await app.inject({
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        payload: { fecha, decisions: { [order13.id]: 'manana', [order24.id]: 'manana' } },
+      });
+      expect(cierre.statusCode).toBe(200);
+
+      const updated13 = await app.prisma.order.findUniqueOrThrow({ where: { id: order13.id } });
+      const updated24 = await app.prisma.order.findUniqueOrThrow({ where: { id: order24.id } });
+      // The one that was FIRST (lower original num, #13) stays first tomorrow (#001) -
+      // the one that was SECOND (#24) stays second (#002), regardless of the order
+      // the decisions object happened to list them in.
+      expect(updated13.num).toBe('001');
+      expect(updated24.num).toBe('002');
+    });
+
+    it('deferred orders continue AFTER whatever already exists on tomorrow (e.g. an overnight form order), not always starting at 1', async () => {
+      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const fecha = todayColombiaStr();
+      const tomorrow = new Date(fecha);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      // Simulates a client form order that already rolled forward onto tomorrow
+      // overnight (public.ts's "already closed -> roll to tomorrow" path) before
+      // cierre even ran.
+      await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '001', customer_name: 'Cliente Nocturno', customer_phone: '573000000099',
+          address: 'Calle Nocturna', channel: 'whatsapp', payment_method: 'cash', status: 'nuevo', source: 'form',
+          registered_by: adminId, fecha: tomorrow,
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+
+      const order = await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '005', customer_name: 'Cliente Pospuesto', customer_phone: '573000000005',
+          address: 'Calle X', channel: 'call', payment_method: 'cash', status: 'nuevo', source: 'manual',
+          registered_by: adminId, fecha: new Date(fecha),
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+
+      const cierre = await app.inject({
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        payload: { fecha, decisions: { [order.id]: 'manana' } },
+      });
+      expect(cierre.statusCode).toBe(200);
+
+      const updated = await app.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      // Tomorrow already had #001 - the deferred order must NOT collide with it,
+      // continuing the consecutive sequence at #002.
+      expect(updated.num).toBe('002');
+    });
+
+    it('a brand-new order created on tomorrow AFTER cierre defers into it continues the consecutive count - no gap, no collision', async () => {
+      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const fecha = todayColombiaStr();
+      const tomorrow = new Date(fecha);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+      const order13 = await app.prisma.order.create({
+        data: {
+          org_id: orgId, num: '013', customer_name: 'Cliente 13', customer_phone: '573000000013',
+          address: 'Calle X', channel: 'call', payment_method: 'cash', status: 'nuevo', source: 'manual',
+          registered_by: adminId, fecha: new Date(fecha),
+          items: { create: [{ product_name: 'Aguacate', quantity_label: '1 kg', price: 6000, sort_order: 0 }] },
+        },
+      });
+
+      const cierre = await app.inject({
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        payload: { fecha, decisions: { [order13.id]: 'manana' } },
+      });
+      expect(cierre.statusCode).toBe(200);
+
+      const next = await app.inject({
+        method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+        payload: sampleOrderPayload({ fecha: tomorrowStr }),
+      });
+      expect(next.statusCode).toBe(201);
+      // #013 became #001 at cierre - the next NEW order on that day continues
+      // straight to #002, not #014 and not colliding with #001.
+      expect(next.json().data.num).toBe('002');
+    });
+  });
 });
