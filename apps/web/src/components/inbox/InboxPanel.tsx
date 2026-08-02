@@ -15,6 +15,12 @@ import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 
+// Backend (tickets.ts PATCH /:id) and this UI are both fully built and tested -
+// hidden for now because nobody has actually asked for this yet, not because
+// anything is broken. Flip to true to bring the pencil button back; nothing
+// else needs to change.
+const RENAME_TICKET_UI_ENABLED = false;
+
 // Sidebar preview text for the ticket list - the real content (photo/audio/etc)
 // only renders once the conversation is actually open.
 const MEDIA_PREVIEW_LABEL: Record<string, string> = {
@@ -301,7 +307,7 @@ export default function InboxPanel() {
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
                 </div>
-                {isAdmin && (
+                {RENAME_TICKET_UI_ENABLED && isAdmin && (
                   <button
                     onClick={() => {
                       setEditName(selectedTicket?.customer_name ?? '');
