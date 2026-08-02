@@ -180,6 +180,7 @@ async function ingestMessage(
         customer_name: name,
         fecha: todayLocal,
         last_message_at: sentAt,
+        first_message_today_at: sentAt,
         unread_count: 1,
         no_wpp_number: noWppNumber,
         raw_payload: rawPayload as any,
@@ -203,6 +204,11 @@ async function ingestMessage(
         deferred_to: null,
         unread_count: { increment: 1 },
         last_message_at: sentAt,
+        // Fixed for the rest of the day on the FIRST inbound message only - a
+        // second/third message today must never move this, or the board's
+        // "first to arrive stays first" position would drift forward every
+        // time this customer writes again (the exact bug being fixed here).
+        ...(isFirstMessageToday ? { first_message_today_at: sentAt } : {}),
         customer_name: name,
         ...(bsuidHint && !ticket.bsuid ? { bsuid: bsuidHint } : {}),
       },
