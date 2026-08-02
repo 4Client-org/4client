@@ -65,9 +65,9 @@ export default function MainPage() {
   const { data: inboxTickets = [] } = useQuery({
     queryKey: ['inbox'],
     queryFn: () => api.get<{ data: any[] }>('/inbox').then((r) => r.data),
-    // canManage (admin/encargado/dev), not isAdmin - Chats WPP is now open to
-    // encargado too (backend inbox.ts's GET / matches, requireRole('admin','encargado')).
-    enabled: canManage,
+    // isAdmin only - Chats WPP was briefly opened to encargado too, reverted by
+    // explicit decision (backend inbox.ts's GET / matches, requireRole('admin')).
+    enabled: isAdmin,
   });
   const unreadWpp = inboxTickets.reduce((s: number, t: any) => s + (t.unread_count || 0), 0);
 
@@ -197,7 +197,7 @@ export default function MainPage() {
               <button className={`tab${tab === 'swimlane' ? ' on' : ''}`} onClick={() => setTab('swimlane')}>
                 <ClipboardList size={15} /> Tickets & Pedidos
               </button>
-              {canManage && (
+              {isAdmin && (
                 <button className={`tab${tab === 'inbox' ? ' on' : ''}`}
                   onClick={() => setTab('inbox')}>
                   <MessageSquare size={15} /> Chats WPP
@@ -284,7 +284,7 @@ export default function MainPage() {
           </>
         )}
 
-        {tab === 'inbox' && canManage && (
+        {tab === 'inbox' && isAdmin && (
           <>
             <div className="khead" style={{ marginBottom: 0, flexShrink: 0, paddingTop: 'var(--ac-pad)' }}>
               <div>
