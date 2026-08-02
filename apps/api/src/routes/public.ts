@@ -293,6 +293,54 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // GET /api/v1/public/last-order?t=TOKEN&device_token=X - the client's most
+  // recent PAST order (not today's - form-info already covers today's active
+  // ones), used by the opt-in "Repetir mi último pedido" button so a returning
+  // customer doesn't have to retype everything. Only product_name/quantity_label
+  // travel back - price is deliberately NOT carried over (the client-facing
+  // catalog never shows price at all; /submit always reprices every item from
+  // the CURRENT catalog by name, same as any new item - see priceMap below).
+  // Address/payment_method also aren't pre-filled - those can go stale (moved,
+  // changed how they pay) in a way item choices usually don't, so the client
+  // re-confirms them fresh either way.
+  fastify.get('/last-order', async (req, reply) => {
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
+    if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
+    try {
+      const ticket = await loadTicketByFormToken(q.data.t);
+
+      const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+      const lastOrder = await fastify.prisma.order.findFirst({
+        where: {
+          ticket_id: ticket.id, org_id: ticket.org_id,
+          fecha: { lt: todayLocal },
+          client_deleted: false, status: { not: 'papelera' },
+        },
+        orderBy: { created_at: 'desc' },
+        select: { items: { select: { product_name: true, quantity_label: true }, orderBy: { sort_order: 'asc' } } },
+      });
+      if (!lastOrder || lastOrder.items.length === 0) return reply.send({ data: null });
+
+      // Flag items whose product no longer exists in the active catalog, so the
+      // client sees which ones didn't come back instead of silently vanishing.
+      const activeNames = new Set(
+        (await fastify.prisma.product.findMany({ where: { org_id: ticket.org_id, active: true }, select: { name: true } }))
+          .map(p => p.name),
+      );
+      return reply.send({
+        data: {
+          items: lastOrder.items.map(i => ({
+            product_name: i.product_name,
+            quantity_label: i.quantity_label ?? '',
+            available: activeNames.has(i.product_name),
+          })),
+        },
+      });
+    } catch (err) {
+      return sendInvalidToken(err, reply);
+    }
+  });
+
   // POST /api/v1/public/submit - cliente envía su pedido → crea Order directamente
   // Rate limited per FORM LINK (token), not per IP - a per-IP key means every phone
   // behind the same shared connection (mobile carrier CGNAT, mall/office wifi) draws
