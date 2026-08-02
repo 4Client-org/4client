@@ -889,6 +889,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     </div>
   );
 
+  // Old num from the most recent "pasado_manana:DATE:OLDNUM" marker (see
+  // cierre.ts/Swimlane.tsx) - shown next to the current num so staff can still
+  // recognize/find a pedido by the number it had before cierre renumbered it.
+  // Only the LAST hop matters here (this modal always shows the order's real,
+  // current fecha, never a past "ghost" day the way Swimlane's board view can).
+  const deferredMarkersModal = [...(order.notes?.matchAll(/pasado_manana:(\d{4}-\d{2}-\d{2})(?::(\d+))?/g) ?? [])]
+    .map((m: RegExpMatchArray) => m[2] ?? null);
+  const oldNumToShow = deferredMarkersModal.length > 0 ? deferredMarkersModal[deferredMarkersModal.length - 1] : null;
+
   const locked = order.locked;
   // 'dev' bypasses every requireRole check on the backend (middleware/auth.ts) - has
   // to count the same way here, or a dev user would see fields as editable that the
@@ -1147,6 +1156,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div>
               <div className="mtit" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Pedido #{order.num}
+                {oldNumToShow && (
+                  <span style={{ fontSize: '0.7em', fontWeight: 600, color: 'var(--gt)' }}>
+                    (#{oldNumToShow})
+                  </span>
+                )}
                 {order.client_modified && (
                   <span title="El cliente modificó este pedido desde el formulario - revisa los cambios (en rojo). Este aviso queda permanente, no se quita al guardar."
                     style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: '#DC2626' }}>

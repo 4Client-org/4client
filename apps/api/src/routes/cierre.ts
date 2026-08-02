@@ -151,7 +151,14 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
         for (const orderId of mananaOrderIds) {
           const existingOrder = pendientes.find(p => p.id === orderId)!;
           const newNum = String(nextTomorrowNum++).padStart(3, '0');
-          const marker = `pasado_manana:${fechaStr}`;
+          // Old num embedded in the marker itself (":${existingOrder.num}") - the
+          // board shows it as "Pedido #<newNum> (#<oldNum>)" next to the Pospuesto
+          // badge (Swimlane.tsx) so staff can still find/recognize a pedido by the
+          // number it had before cierre renumbered it. The date-only suffix
+          // (`(?::(\d+))?` on the frontend's parsing regex) stays optional so
+          // markers written before this change keep parsing fine, just without
+          // an old-num annotation to show.
+          const marker = `pasado_manana:${fechaStr}:${existingOrder.num}`;
           const newNotes = existingOrder.notes ? `${existingOrder.notes}\n${marker}` : marker;
           await tx.order.update({ where: { id: orderId, org_id: req.user.orgId }, data: { fecha: tomorrow, num: newNum, notes: newNotes } });
           // Move the whole conversation along with the order - otherwise the order
