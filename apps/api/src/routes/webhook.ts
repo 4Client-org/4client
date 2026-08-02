@@ -47,6 +47,23 @@ interface MetaWebhookPayload {
           video?: { id: string; mime_type?: string; caption?: string };
           document?: { id: string; mime_type?: string; caption?: string; filename?: string };
           location?: { latitude: number; longitude: number; name?: string; address?: string };
+          // A sticker is just a webp image with its own Meta media id - same
+          // resolve-then-download path as a photo (image/webp is already a
+          // supported image mime, see lib/media.ts's MIME_EXT), just no caption.
+          sticker?: { id: string; mime_type?: string; animated?: boolean };
+          // Customer reacting with an emoji to one of our (or their own) messages.
+          // Field names per Meta's documented shape - UNVERIFIED against a real
+          // captured payload from this org (none exists yet), so this is handled
+          // defensively below: any shape mismatch falls through to the same
+          // generic "[Tipo de mensaje no soportado]" placeholder already shipped,
+          // never throws.
+          reaction?: { message_id?: string; emoji?: string };
+          // A tap on a button/list option WE sent via an interactive message.
+          interactive?: {
+            type?: string;
+            button_reply?: { id?: string; title?: string };
+            list_reply?: { id?: string; title?: string };
+          };
         }>;
         // Delivery/read receipts for OUTBOUND messages we sent, keyed by the same
         // `id` Meta gave that message when we sent it (stored as wpp_message_id).
@@ -330,6 +347,9 @@ async function ingestImageMessage(
   noWppNumber = false,
   rawPayload?: unknown,
   bsuidHint?: string,
+  // Only affects the failure-fallback text below ('foto' vs 'sticker') - the
+  // successful path stores/renders both identically as type 'image'.
+  kindLabel: 'foto' | 'sticker' = 'foto',
 ) {
   const org = await fastify.prisma.organization.findFirst({
     where: { wpp_meta_phone_id: phoneNumberId, active: true },
@@ -370,7 +390,9 @@ async function ingestImageMessage(
     // same photo still only ever produces one row (ingestMessage's own dedup).
     await ingestMessage(
       fastify, phoneNumberId, phone, name,
-      'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
+      kindLabel === 'sticker'
+        ? 'El cliente envió un sticker, pero no se pudo descargar. Pídele que lo reenvíe.'
+        : 'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
       waMsgId, sentAt, undefined, noWppNumber, rawPayload, bsuidHint,
     ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
   }
@@ -625,7 +647,34 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           // matters (prevents the same person fragmenting across two tickets).
           const bsuidHint = contact?.wa_id && contact?.user_id ? contact.user_id : undefined;
 
-          const SUPPORTED_TYPES = ['text', 'image', 'audio', 'video', 'document', 'location'];
+          // Handled BEFORE the generic unsupported-type fallback below, each
+          // defensively: if the actual payload doesn't have the field shape we
+          // expect (unverified against a real captured example - see the type
+          // comments above), it falls straight through to that same generic
+          // placeholder instead of guessing wrong or throwing.
+          if (msg.type === 'reaction' && msg.reaction?.emoji) {
+            const original = msg.reaction.message_id
+              ? await fastify.prisma.ticketMessage.findUnique({
+                  where: { wpp_message_id: msg.reaction.message_id },
+                  select: { text: true },
+                })
+              : null;
+            const text = original?.text
+              ? `Reaccionó ${msg.reaction.emoji} a: "${original.text.slice(0, 100)}"`
+              : `Reaccionó ${msg.reaction.emoji}`;
+            ingestMessage(fastify, metadata.phone_number_id, phone, name, text, msg.id, sentAt, undefined, noWppNumber, payload, bsuidHint)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo reacción'));
+            continue;
+          }
+
+          if (msg.type === 'interactive' && (msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title)) {
+            const title = msg.interactive.button_reply?.title ?? msg.interactive.list_reply?.title;
+            ingestMessage(fastify, metadata.phone_number_id, phone, name, `Seleccionó: ${title}`, msg.id, sentAt, undefined, noWppNumber, payload, bsuidHint)
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo respuesta interactiva'));
+            continue;
+          }
+
+          const SUPPORTED_TYPES = ['text', 'image', 'audio', 'video', 'document', 'location', 'sticker'];
           if (!SUPPORTED_TYPES.includes(msg.type)) {
             // Previously silently dropped (`continue`, no ticket touched at all) -
             // Meta's `reaction`/`interactive`/`sticker`/etc types are real inbound
@@ -644,6 +693,15 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           if (msg.type === 'image' && msg.image?.id) {
             ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.image, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo imagen'));
+            continue;
+          }
+
+          // A sticker IS just a webp image (no caption) - same download/store/
+          // display pipeline as a regular photo, only the media id's location
+          // in the payload differs.
+          if (msg.type === 'sticker' && msg.sticker?.id) {
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.sticker, msg.id, sentAt, noWppNumber, payload, bsuidHint, 'sticker')
+              .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo sticker'));
             continue;
           }
 
