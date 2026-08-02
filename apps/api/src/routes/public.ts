@@ -294,8 +294,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/public/last-order?t=TOKEN&device_token=X - the client's most
-  // recent PAST order (not today's - form-info already covers today's active
-  // ones), used by the opt-in "Repetir mi último pedido" button so a returning
+  // recent PAST order (not today's ACTIVE ones - form-info already covers
+  // those), used by the opt-in "Repetir mi último pedido" button so a returning
   // customer doesn't have to retype everything. Only product_name/quantity_label
   // travel back - price is deliberately NOT carried over (the client-facing
   // catalog never shows price at all; /submit always reprices every item from
@@ -303,6 +303,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // Address/payment_method also aren't pre-filled - those can go stale (moved,
   // changed how they pay) in a way item choices usually don't, so the client
   // re-confirms them fresh either way.
+  //
+  // Today's OWN order counts too, but only once it's 'cerrado' - a client who
+  // already got their pedido today and comes back for a second one shouldn't
+  // have to wait until tomorrow for "repetir" to find anything; form-info
+  // already excludes cerrado orders from "today's active ones", so there's no
+  // overlap between the two lists. A today's order still in nuevo/preparando/
+  // listo/camino stays OUT of this - that one is what "editar pedido activo"
+  // is for, not "repetir" (repetir copies items into a brand-new order).
   fastify.get('/last-order', async (req, reply) => {
     const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
@@ -313,7 +321,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const lastOrder = await fastify.prisma.order.findFirst({
         where: {
           ticket_id: ticket.id, org_id: ticket.org_id,
-          fecha: { lt: todayLocal },
+          OR: [{ fecha: { lt: todayLocal } }, { fecha: todayLocal, status: 'cerrado' }],
           client_deleted: false, status: { not: 'papelera' },
         },
         orderBy: { created_at: 'desc' },
