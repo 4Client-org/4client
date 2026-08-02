@@ -36,14 +36,20 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
           select: { id: true, num: true, status: true, paid: true },
         },
       },
-      // last_message_at, not created_at - a ticket is one row per phone forever, so
-      // a returning customer's created_at is from whenever they FIRST ever wrote
-      // (possibly weeks ago), which sorted them ahead of every genuinely new
-      // conversation today regardless of when they actually wrote today. ASC keeps
-      // the existing "longest waiting first" intent, just on the field that
-      // actually reflects recent activity (updated on every inbound/outbound
-      // message in webhook.ts/inbox.ts).
-      orderBy: { last_message_at: 'asc' },
+      // first_message_today_at, not created_at (a returning customer's created_at
+      // is from whenever they FIRST ever wrote, possibly weeks ago) and not
+      // last_message_at either (that one keeps moving forward every time this
+      // customer writes AGAIN today, which silently drops a ticket down the
+      // board the more active it is - confirmed as a real prod bug: a ticket's
+      // first message at 8am with a follow-up at 2pm was sorting as if it had
+      // just arrived at 2pm). first_message_today_at is set once, on the first
+      // inbound message of the day, and never touched again until tomorrow -
+      // this is what actually makes "first to arrive stays first" hold for the
+      // whole day. NULLS FIRST: a ticket showing today purely via deferred_to/
+      // an order's own fecha with no new message yet has no value here at all -
+      // it's carried over from before today, so it belongs ahead of every
+      // genuinely new arrival, not sorted after them by a Postgres default.
+      orderBy: { first_message_today_at: { sort: 'asc', nulls: 'first' } },
     });
 
     // Deduplicate by phone: keep only the first per phone (prefer fecha match over deferred_to match)
@@ -72,7 +78,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     // forward to today instead of leaving it (and this route) unable to find it.
     const ticket = await fastify.prisma.ticket.upsert({
       where: { org_id_phone: { org_id: req.user.orgId, phone: body.data.phone } },
-      update: { customer_name: body.data.customer_name ?? body.data.phone, fecha: today, deferred_to: null },
+      update: { customer_name: body.data.customer_name ?? body.data.phone, fecha: today, deferred_to: null, first_message_today_at: new Date() },
       create: {
         org_id: req.user.orgId,
         phone: body.data.phone,
@@ -80,6 +86,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         fecha: today,
         last_message_at: new Date(),
         last_activity_at: new Date(),
+        first_message_today_at: new Date(),
       },
     });
 
