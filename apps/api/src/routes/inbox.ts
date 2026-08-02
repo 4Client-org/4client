@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
@@ -51,6 +52,75 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     });
 
     return reply.send({ data: tickets });
+  });
+
+  // GET /api/v1/inbox/search?q=TEXT&fecha=YYYY-MM-DD - busca en TODO el
+  // historial (no solo los 500 tickets más recientes que GET / carga), como la
+  // búsqueda real de WhatsApp: por nombre, teléfono, o contenido de cualquier
+  // mensaje, opcionalmente acotado a una fecha. Devuelve TICKETS que hacen
+  // match (no una lista plana de mensajes), cada uno con el mensaje que hizo
+  // match como fragmento de contexto - mismo patrón visual que WhatsApp real.
+  //
+  // $queryRaw (primer uso en este código) porque ni un LATERAL JOIN ni
+  // immutable_unaccent() son expresables con el query builder normal de
+  // Prisma - sigue totalmente parametrizado (tagged template), nunca
+  // concatenación de strings, cero riesgo de inyección.
+  fastify.get('/search', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const query = z.object({
+      q: z.string().trim().max(200).optional(),
+      fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'Parámetros inválidos', code: 'VALIDATION_ERROR' });
+
+    const text = query.data.q?.trim() || null;
+    const fecha = query.data.fecha;
+    if (!text && !fecha) return reply.send({ data: [] });
+
+    const likePattern = text ? `%${text}%` : null;
+
+    // Bogota (UTC-5, sin DST) límites de día reales, en instantes UTC - mismo
+    // cálculo que ya usa webhook.ts para "primer mensaje del día".
+    let dayStartUtc: Date | null = null;
+    let dayEndUtc: Date | null = null;
+    if (fecha) {
+      const [y, m, d] = fecha.split('-').map(Number);
+      dayStartUtc = new Date(Date.UTC(y, m - 1, d, 5, 0, 0));
+      dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    }
+
+    const rows = await fastify.prisma.$queryRaw<Array<{
+      id: string; customer_name: string | null; phone: string; last_activity_at: Date | null;
+      unread_count: number; snippet_text: string | null; snippet_at: Date | null;
+    }>>`
+      SELECT t.id, t.customer_name, t.phone, t.last_activity_at, t.unread_count,
+        matched.text AS snippet_text, matched.sent_at AS snippet_at
+      FROM "tickets" t
+      LEFT JOIN LATERAL (
+        SELECT m.text, m.sent_at
+        FROM "ticket_messages" m
+        WHERE m.ticket_id = t.id
+          ${likePattern ? Prisma.sql`AND immutable_unaccent(lower(m.text)) LIKE immutable_unaccent(lower(${likePattern}))` : Prisma.empty}
+          ${dayStartUtc ? Prisma.sql`AND m.sent_at >= ${dayStartUtc} AND m.sent_at < ${dayEndUtc}` : Prisma.empty}
+        ORDER BY m.sent_at DESC
+        LIMIT 1
+      ) matched ON true
+      WHERE t.org_id = ${req.user.orgId}::uuid
+        AND (
+          matched.text IS NOT NULL
+          ${likePattern ? Prisma.sql`OR immutable_unaccent(lower(t.customer_name)) LIKE immutable_unaccent(lower(${likePattern}))` : Prisma.empty}
+          ${likePattern ? Prisma.sql`OR t.phone LIKE ${likePattern}` : Prisma.empty}
+        )
+      ORDER BY COALESCE(matched.sent_at, t.last_activity_at) DESC NULLS LAST
+      LIMIT 50
+    `;
+
+    return reply.send({
+      data: rows.map((r) => ({
+        id: r.id, customer_name: r.customer_name, phone: r.phone,
+        last_activity_at: r.last_activity_at, unread_count: r.unread_count,
+        snippet: r.snippet_text, snippet_at: r.snippet_at,
+      })),
+    });
   });
 
   // GET /api/v1/inbox/:ticketId/messages - historial completo del chat (todos los roles pueden ver)
