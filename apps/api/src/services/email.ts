@@ -4,12 +4,10 @@ import { config } from '../config.js';
 // fetch call is simpler than pulling in a dependency for one endpoint).
 const RESEND_API_BASE = 'https://api.resend.com';
 
-// resend.dev is Resend's own shared sending domain - works immediately with no
-// DNS setup, but only delivers to the email address the Resend ACCOUNT itself
-// is registered under. Fine for this org's current single-recipient use (2FA
-// codes to staff), not for actually emailing customers - swap this for a
-// verified custom domain address before sending to anyone outside the account.
-const FROM_ADDRESS = 'Fruver San Gabriel <onboarding@resend.dev>';
+// 4client.shop is verified in Resend (SPF/DKIM) - the system's own domain,
+// not the business's (fruver.com), which fits this: these are app/system
+// notifications (login codes), not customer-facing messages.
+const FROM_ADDRESS = '4Client <no-reply@4client.shop>';
 
 export async function sendEmail(to: string, subject: string, html: string): Promise<void> {
   if (!config.RESEND_API_KEY) {
