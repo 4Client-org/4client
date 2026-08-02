@@ -156,6 +156,10 @@ input,select,textarea{font-family:var(--f);}
 .sbx svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--gt);}
 .fsel{padding:11px 13px;border:2px solid var(--brd);border-radius:var(--rad);font-size:14px;background:var(--b);outline:none;cursor:pointer;color:var(--n);}
 .fsel:focus{border-color:var(--v);}
+/* Narrower spot (inbox search bar) than .fsel's other uses (board's own date
+   selector) - without this the "Seleccionar fecha"/full-date label wraps to two
+   lines and the button eats way more width than the search box next to it. */
+.fsel-sm{padding:11px 10px;font-size:13px;white-space:nowrap;}
 
 /* MODALS */
 .moverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;align-items:center;justify-content:center;padding:16px;overflow-y:auto;}
@@ -356,7 +360,15 @@ input,select,textarea{font-family:var(--f);}
 
 /* INBOX / WA CHAT PANEL */
 .inbox-wrap{display:flex;flex:1;min-height:0;overflow:hidden;background:var(--b);border:1.5px solid var(--brd);border-radius:var(--rad);margin-top:8px;}
-.inbox-sidebar{width:320px;border-right:2px solid var(--brd);overflow-y:auto;flex-shrink:0;background:var(--b);}
+.inbox-sidebar{width:400px;border-right:2px solid var(--brd);flex-shrink:0;background:var(--b);display:flex;flex-direction:column;overflow:hidden;}
+/* Header (search bar + date filter) stays OUTSIDE the scrollable list on
+   purpose - DatePickerES's popup is an absolutely-positioned descendant, and an
+   ancestor with overflow:auto/hidden clips it to its own box no matter how high
+   its z-index is. When the whole sidebar (header+list together) scrolled as one
+   element, the calendar popup got clipped at the sidebar's own edge instead of
+   floating over the chat panel like it's supposed to. */
+.inbox-sidebar-header{flex-shrink:0;}
+.inbox-sidebar-list{flex:1;overflow-y:auto;}
 .inbox-item{padding:13px 16px;border-bottom:1px solid var(--brd);cursor:pointer;transition:background .12s;position:relative;}
 .inbox-item:hover{background:var(--bg);}
 .inbox-item.sel{background:var(--vc);border-right:3px solid var(--v);}

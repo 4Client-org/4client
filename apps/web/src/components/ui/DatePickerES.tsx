@@ -6,6 +6,11 @@ interface Props {
   value: string; // YYYY-MM-DD
   onChange: (value: string) => void;
   className?: string;
+  // Shown on the trigger button when `value` is empty. Defaults to the original
+  // full label - only the inbox search's optional date filter needs something
+  // shorter ("Fecha" instead of "Seleccionar fecha") to fit its narrower spot
+  // without wrapping to two lines.
+  placeholder?: string;
 }
 
 const WEEKDAYS = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
@@ -30,7 +35,7 @@ function toYMD(y: number, m: number, d: number): string {
 // language, not the page's `lang` attribute or content, so there is no way to make
 // that native picker show Spanish text. This component replaces it with one we fully
 // control instead of another attribute that silently doesn't do anything in Chromium.
-export default function DatePickerES({ value, onChange, className }: Props) {
+export default function DatePickerES({ value, onChange, className, placeholder = 'Seleccionar fecha' }: Props) {
   const [open, setOpen] = useState(false);
   const { y, m } = parseYMD(value || todayStr());
   const [viewY, setViewY] = useState(y);
@@ -73,7 +78,7 @@ export default function DatePickerES({ value, onChange, className }: Props) {
   }
 
   const label = (() => {
-    if (!value) return 'Seleccionar fecha';
+    if (!value) return placeholder;
     const { y: vy, m: vm, d: vd } = parseYMD(value);
     const dt = new Date(vy, vm - 1, vd);
     return `${WEEKDAY_SHORT[dt.getDay()]}, ${vd} ${MONTHS_SHORT[vm - 1]} ${vy}`;
