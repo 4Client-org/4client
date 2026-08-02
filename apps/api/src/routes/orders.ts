@@ -5,6 +5,16 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 
+// Same shape meta-cloud.ts's toOrRecipient checks - a WhatsApp Business-Scoped
+// User ID ("CC.<alphanumeric>", WhatsApp usernames rollout) is not a real phone
+// number and never can be (Meta deliberately never hands the business one for a
+// username-identified contact). Used below to let staff manually add a real
+// number for a ticket that doesn't have one, same carve-out already existed for
+// a ticket-less order.
+function isBsuidLike(phone: string | null | undefined): boolean {
+  return /^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(phone ?? '');
+}
+
 // Computes the next sequential order number for org+fecha and creates the order,
 // retrying on a unique-constraint collision (@@unique([org_id, num, fecha])).
 //
@@ -376,7 +386,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: orderValidationMessage(body.error), code: 'VALIDATION_ERROR', details: body.error.flatten() });
     }
 
-    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
+    const existing = await fastify.prisma.order.findFirst({
+      where: { id, org_id: req.user.orgId },
+      include: { ticket: { select: { phone: true, no_wpp_number: true } } },
+    });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
 
     // A locked/closed order is normally frozen for everyone - one exception: an
@@ -399,13 +412,17 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const { items, ...fields } = body.data;
 
-    // customer_phone only ever settable when this order has no ticket - one with a
-    // ticket must always mirror that ticket's real WhatsApp number (see
-    // updateOrderSchema's comment), so a value sent here is silently dropped rather
-    // than trusted in that case. This is what actually lets a ticket-less (channel
-    // 'call') order that was created with no phone yet get one later - previously
-    // there was no path to set it at all, permanently blocking that order's cobro.
-    if (fields.customer_phone !== undefined && existing.ticket_id) {
+    // customer_phone only ever settable when this order has no ticket (channel
+    // 'call' - see updateOrderSchema's comment) OR its ticket has no REAL phone
+    // at all (BSUID/WhatsApp usernames, or the no-hex "arrived with nothing"
+    // glitch - see Ticket.bsuid/no_wpp_number). A ticket WITH a real number must
+    // always mirror it exactly, so a value sent here is silently dropped in that
+    // case. This is also what lets a ticket-less order get a phone at all
+    // (previously no path existed, permanently blocking that order's cobro).
+    const ticketMissingRealPhone = existing.ticket
+      ? (existing.ticket.no_wpp_number || isBsuidLike(existing.ticket.phone))
+      : false;
+    if (fields.customer_phone !== undefined && existing.ticket_id && !ticketMissingRealPhone) {
       delete fields.customer_phone;
     }
 
@@ -432,6 +449,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // Registrar cambios en historial
     const trackFields: Record<string, string> = {
       customer_name: 'Nombre',
+      // Only ever reaches here (non-undefined) when the gate above actually let
+      // it through - a normal ticket-backed order's customer_phone is always
+      // deleted from `fields` before this runs, so this never fires for one.
+      customer_phone: 'Teléfono',
       address: 'Dirección', payment_method: 'Método de pago',
       employee_id: 'Domiciliario', notes: 'Notas',
     };

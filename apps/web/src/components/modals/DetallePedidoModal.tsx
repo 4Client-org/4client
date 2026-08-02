@@ -10,7 +10,7 @@ import { useProducts } from '../../hooks/useProducts';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
-import { formatPhoneDisplay } from '../../lib/formatPhone';
+import { formatPhoneDisplay, looksFake } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -280,7 +280,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     // discard what they were typing. Every OTHER field still hydrates normally -
     // touching one field must not freeze the rest of the form too.
     if (!touched.has('nombre')) setNombre(order.customer_name ?? '');
-    setTelefono(order.customer_phone ?? ''); // never staff-editable, always safe to sync
+    // Normally never staff-editable (always safe to sync from the server) - EXCEPT
+    // when it's been touched, which only happens at all when phoneEditableHere
+    // (below) allowed the input to be typed into in the first place.
+    if (!touched.has('telefono')) setTelefono(order.customer_phone ?? '');
     if (!touched.has('direccion')) setDireccion(order.address ?? '');
     if (!touched.has('pago')) setPago(order.payment_method ?? 'transfer');
     if (!touched.has('empleado')) setEmpleadoId(order.employee_id ?? '');
@@ -449,6 +452,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
       return api.patch(`/orders/${orderId}`, {
         customer_name: nombre,
+        // Only ever actually applied server-side when this order has no ticket, or
+        // its ticket has no real phone (orders.ts's PATCH /:id) - harmless to always
+        // send, the backend silently drops it otherwise.
+        customer_phone: telefono,
         address: direccion,
         payment_method: pago,
         employee_id: empleadoId || null,
@@ -1195,18 +1202,30 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
+            {/* Same box language as "Pedido cerrado y cobrado" above (header +
+                grid of fields) instead of a cramped single red line - the motivo
+                itself also lives as a normal, editable/eliminable observation
+                further down (Observaciones), this is just the at-a-glance summary. */}
             {order.status === 'papelera' && (
-              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <AlertTriangle size={15} /> Enviado a papelera por {(order as any).papeleraBy?.name ?? 'alguien'}
-                  {(order as any).papelera_reason ? `: ${(order as any).papelera_reason}` : ''}
-                </span>
-                {canManage && (
-                  <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
-                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
-                  </button>
-                )}
+              <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 800, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <AlertTriangle size={15} /> Enviado a papelera
+                  </div>
+                  {canManage && (
+                    <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
+                      style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px 14px' }}>
+                  <div><span style={{ color: 'var(--gt)' }}>Por: </span><strong>{(order as any).papeleraBy?.name ?? 'Desconocido'}</strong></div>
+                  <div><span style={{ color: 'var(--gt)' }}>Hora: </span><strong>{formatDateTime(order.updated_at)}</strong></div>
+                  {(order as any).papelera_reason && (
+                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--gt)' }}>Motivo: </span><strong>{(order as any).papelera_reason}</strong></div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1255,11 +1274,29 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
               <div className="fg2">
                 <label className="fl2">Teléfono</label>
-                {/* Always disabled, even when the rest of the order is editable - this
-                    is the real WhatsApp number the conversation is on, never a value
-                    staff types in, and the backend no longer accepts changes to it
-                    (see orders.ts's updateOrderSchema). */}
-                <input className="fi2" disabled value={formatPhoneDisplay(telefono)} title="El teléfono no se puede modificar - es el número de WhatsApp del ticket" />
+                {/* Disabled by default - this mirrors the ticket's real WhatsApp number
+                    and the backend rejects changes to it in that case (orders.ts's
+                    PATCH /:id). EXCEPTION: a ticket with no real phone at all (BSUID/
+                    WhatsApp usernames, or the no-hex "arrived with nothing" glitch,
+                    per chatData.no_wpp_number/phone) or an order with no ticket at all
+                    (channel 'call') - there IS no real number to protect, so staff can
+                    type one in manually if they get it another way. Stays unlocked
+                    permanently for this order (derived from the ticket's own identity,
+                    not from whatever's currently typed), and every change is logged to
+                    Historial via orders.ts's generic field-diff (customer_phone is now
+                    tracked there). */}
+                {(() => {
+                  const phoneEditableHere = !readOnly && (!order.ticket_id || !!chatData?.no_wpp_number || looksFake(chatData?.phone));
+                  return (
+                    <input className="fi2" disabled={!phoneEditableHere}
+                      value={phoneEditableHere && looksFake(telefono) ? '' : formatPhoneDisplay(telefono)}
+                      placeholder={phoneEditableHere ? 'Sin teléfono - agrégalo aquí' : undefined}
+                      onChange={phoneEditableHere ? (e) => { setTelefono(e.target.value); touchField('telefono'); } : undefined}
+                      title={phoneEditableHere
+                        ? 'Este cliente no tiene un número real registrado - puedes agregarlo manualmente'
+                        : 'El teléfono no se puede modificar - es el número de WhatsApp del ticket'} />
+                  );
+                })()}
               </div>
             </div>
             <div className="fg2">

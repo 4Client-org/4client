@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package, PackageCheck, Clock, Banknote, ArrowLeftRight, Wallet,
   FileText, Trash2, History, ChevronDown, ChevronRight, Lock, Download, Ban,
@@ -38,6 +38,7 @@ interface Props {
 }
 
 export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders, creditoOrders, history, onCierreCaja, onOpenOrder }: Props) {
+  const qc = useQueryClient();
   const [resumenTab, setResumenTab] = useState<'activos' | 'papelera' | 'credito' | 'cambios'>('activos');
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -83,7 +84,20 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
 
   const restoreMut = useMutation({
     mutationFn: (orderId: string) => api.patch(`/orders/${orderId}/restore`, {}),
-    onSuccess: () => toast('Pedido restaurado'),
+    // The socket 'order:updated' MainPage listens for already refreshes the board
+    // and this tab's own ['dashboard', fecha] query - but NOT the detail modal's
+    // ['order', orderId] cache, since that listener only runs while the modal is
+    // actually mounted. Restoring from here (modal closed) left that cache stale
+    // for up to staleTime (30s, main.tsx's QueryClient default) - reopening the
+    // SAME order from the board within that window kept showing "¿restaurar?"
+    // even though it had already been restored. Explicit invalidation here closes
+    // that gap regardless of whether anything was listening at the time.
+    onSuccess: (_data, orderId) => {
+      toast('Pedido restaurado');
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
     onError: (e: any) => toast(e.message ?? 'No se pudo restaurar el pedido', true),
   });
 
