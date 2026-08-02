@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, Banknote, ArrowLeftRight, AlertTriangle, CheckCircle, Download, MessageSquare } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -6,6 +6,7 @@ import { fmtCOP, STATUS_LABEL } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { downloadCierreCSV } from '../../lib/csv';
 import { toast } from '../ui/Toast';
+import TicketModal from './TicketModal';
 
 interface Props {
   fecha: string;
@@ -73,13 +74,47 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
     return hasNoOrders || hasUnread;
   });
 
-  // No defaults - user must explicitly choose for each pending order
-  const [decisions, setDecisions] = useState<Record<string, Decision | ''>>(() =>
-    Object.fromEntries(pendingOrders.map((o) => [o.id, '' as Decision | '']))
-  );
-  const [ticketDecisions, setTicketDecisions] = useState<Record<string, TicketDecision | ''>>(() =>
-    Object.fromEntries(ticketOnlyRows.map((t: any) => [t.id, '' as TicketDecision | '']))
-  );
+  // Draft persistence - closing this modal (MainPage.tsx conditionally mounts
+  // it, `{showCierre && <CierreCajaModal .../>}`) used to wipe every decision
+  // already made the instant it unmounted, with no way back to them short of
+  // redoing all of it. Scoped to this exact day (`fecha` alone, not per-user -
+  // this is a per-browser draft, not a synced one) so a stray click elsewhere
+  // or even a page reload doesn't lose progress - only actually submitting
+  // (cierreMut's onSuccess below) clears it.
+  const draftKey = `4client_cierre_draft_${fecha}`;
+  function loadDraft(): { decisions?: Record<string, string>; ticketDecisions?: Record<string, string> } {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // No defaults - user must explicitly choose for each pending order. A saved
+  // draft only pre-fills entries that are STILL pending today - an order that
+  // got decided, then somehow reappeared pending under a stale id, doesn't
+  // silently inherit an old answer meant for something else.
+  const [decisions, setDecisions] = useState<Record<string, Decision | ''>>(() => {
+    const draft = loadDraft().decisions ?? {};
+    return Object.fromEntries(pendingOrders.map((o) => [o.id, (draft[o.id] as Decision) ?? '']));
+  });
+  const [ticketDecisions, setTicketDecisions] = useState<Record<string, TicketDecision | ''>>(() => {
+    const draft = loadDraft().ticketDecisions ?? {};
+    return Object.fromEntries(ticketOnlyRows.map((t: any) => [t.id, (draft[t.id] as TicketDecision) ?? '']));
+  });
+  // Chat opened on top to review before deciding (TicketModal, same overlay
+  // class/z-index as this modal's own - painting later in the DOM is what
+  // puts it visually on top, no z-index override needed). Closing it just
+  // clears this and returns here, with every decision made so far untouched
+  // (this whole modal never unmounts while it's open).
+  const [viewTicketId, setViewTicketId] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ decisions, ticketDecisions }));
+    } catch { /* localStorage unavailable - draft just won't persist, not fatal */ }
+  }, [draftKey, decisions, ticketDecisions]);
 
   const totalEfectivo = completados
     .filter((o: any) => ['cash', 'cod'].includes(o.payment_method))
@@ -103,6 +138,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['cierre-status'] });
+      try { localStorage.removeItem(draftKey); } catch { /* not fatal */ }
       toast('Caja cerrada correctamente');
       setClosedNow(true);
     },
@@ -159,6 +195,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
   }
 
   return (
+    <>
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="cierre-win">
         <div className="mhead">
@@ -245,7 +282,10 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
                 <div key={ticketId} className="warn-ord" style={{ flexDirection: 'column', alignItems: 'stretch', borderLeft: '3px solid var(--az)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     <MessageSquare size={13} color="var(--az)" />
-                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                    <div
+                      onClick={() => setViewTicketId(ticketId)}
+                      title="Ver la conversación de este chat"
+                      style={{ fontWeight: 700, fontSize: 13, cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3 }}>
                       {ticketInfo?.customer_name ?? tOrders[0].customer_name} - {formatPhoneDisplay(ticketInfo?.phone ?? tOrders[0].customer_phone ?? '')}
                     </div>
                     {ticketInfo?.unread_count > 0 && (
@@ -289,7 +329,12 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
                 return (
                   <div key={t.id} className="warn-ord" style={{ borderLeft: hasDecision ? '3px solid var(--v)' : '3px solid var(--az)' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700 }}>{t.customer_name} - {formatPhoneDisplay(t.phone)}</div>
+                      <div
+                        onClick={() => setViewTicketId(t.id)}
+                        title="Ver la conversación de este chat"
+                        style={{ fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3, width: 'fit-content' }}>
+                        {t.customer_name} - {formatPhoneDisplay(t.phone)}
+                      </div>
                       <div style={{ fontSize: 12, color: 'var(--gt)' }}>
                         {hasNoOrders ? 'Sin pedido' : 'Pedidos completados'}
                         {t.unread_count > 0 && <span style={{ marginLeft: 8, color: 'var(--az)', fontWeight: 700 }}>{t.unread_count} sin leer</span>}
@@ -363,5 +408,9 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
         </div>
       </div>
     </div>
+    {viewTicketId && (
+      <TicketModal ticketId={viewTicketId} fecha={fecha} onClose={() => setViewTicketId(null)} />
+    )}
+    </>
   );
 }

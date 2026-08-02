@@ -303,7 +303,15 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     // again, so that day no longer owned it either, but nothing here said so. Collecting
     // every marker and checking whether ANY of them names the day being viewed is what
     // actually mirrors "this order passed through here at some point".
-    const deferredDates = [...((ord as any).notes?.matchAll(/pasado_manana:(\d{4}-\d{2}-\d{2})/g) ?? [])].map((m) => m[1]);
+    // Old num optionally embedded as a 2nd group ("pasado_manana:2026-08-02:013") -
+    // cierre.ts now RENUMBERS a deferred order into the next day's own consecutive
+    // sequence instead of dragging its old num along, so the num shown here can
+    // genuinely be different from what it was the day this marker was written.
+    // Optional so markers written before that change (date only, no old num) still
+    // parse fine, just without anything to show alongside the badge.
+    const deferredMarkers = [...((ord as any).notes?.matchAll(/pasado_manana:(\d{4}-\d{2}-\d{2})(?::(\d+))?/g) ?? [])]
+      .map((m) => ({ date: m[1], oldNum: m[2] ?? null }));
+    const deferredDates = deferredMarkers.map((m) => m.date);
     const ordFecha: string | null = (ord as any).fecha ? new Date((ord as any).fecha).toISOString().split('T')[0] : null;
     // Ghost: viewing a day it was deferred AWAY FROM - this board no longer owns it (it
     // lives on ordFecha now), show as a dimmed, non-interactive trace.
@@ -311,6 +319,13 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
     // Arrived: viewing the day it's actually on now (its real, current fecha) - fully
     // active/interactive, just flagged with a badge noting it came from a deferral.
     const isDeferred = deferredDates.length > 0 && ordFecha !== null && ordFecha === fecha;
+    // Ghost view shows the old num THAT marker names (what it was on the specific
+    // day being viewed); arrived view shows the LAST hop's old num (what it was
+    // the day immediately before landing on its current, real fecha) - matches
+    // "hoy es el #1 pero ayer era el #13".
+    const oldNumToShow = isGhost
+      ? deferredMarkers.find((m) => m.date === fecha)?.oldNum
+      : (isDeferred ? deferredMarkers[deferredMarkers.length - 1]?.oldNum : null);
     // Once cierre ran for this day, the whole board becomes a read-only snapshot -
     // every card on it freezes (not just the specific order that got deferred away),
     // so a "dejar_activo" order left open at close time doesn't stay silently
@@ -359,7 +374,14 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 3 }}>
-          <div className="dc-num">#{ord.num}</div>
+          <div className="dc-num">
+            #{ord.num}
+            {oldNumToShow && (
+              <span style={{ fontSize: '0.75em', fontWeight: 600, color: 'var(--gt)', marginLeft: 4 }}>
+                (#{oldNumToShow})
+              </span>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: 4 }}>
             {ord.status === 'nuevo' && mins > 0 && (
               <div style={{

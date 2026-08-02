@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip, AlertTriangle } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { toast } from '../ui/Toast';
 import { colombiaDateStr, formatChatTimestamp, formatChatDateDivider } from '../../lib/format';
+import ForwardMessageModal from '../ui/ForwardMessageModal';
+import DatePickerES from '../ui/DatePickerES';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -14,6 +16,12 @@ import ChatVideo from '../ui/ChatVideo';
 import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
+
+// Backend (tickets.ts PATCH /:id) and this UI are both fully built and tested -
+// hidden for now because nobody has actually asked for this yet, not because
+// anything is broken. Flip to true to bring the pencil button back; nothing
+// else needs to change.
+const RENAME_TICKET_UI_ENABLED = false;
 
 // Sidebar preview text for the ticket list - the real content (photo/audio/etc)
 // only renders once the conversation is actually open.
@@ -36,13 +44,71 @@ function renderText(text: string) {
   });
 }
 
+// Bolds the part of a search result's snippet that actually matched, same
+// at-a-glance affordance WhatsApp's own search results give. Case-insensitive
+// only, not accent-insensitive like the backend search itself (searching
+// "cafe" against a snippet containing "café" still returns the right chat,
+// just without the bold highlight) - a purely cosmetic gap, not worth an
+// accent-aware highlighter for.
+function highlightMatch(snippet: string, query: string) {
+  if (!query) return snippet;
+  const idx = snippet.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return snippet;
+  return (
+    <>
+      {snippet.slice(0, idx)}
+      <strong>{snippet.slice(idx, idx + query.length)}</strong>
+      {snippet.slice(idx + query.length)}
+    </>
+  );
+}
+
 // Messages only - viewing and replying. Creating/opening pedidos from a chat happens
 // in "Ver conversación" (TicketModal), not here.
 export default function InboxPanel() {
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  // Matches the backend's own gate (tickets.ts PATCH /:id, requireRole('admin') -
+  // 'dev' bypasses every requireRole check, see middleware/auth.ts).
+  const isAdmin = user?.role === 'admin' || user?.role === 'dev';
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [editingTicket, setEditingTicket] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  // Forward-message - hoveredMsgId only drives which bubble shows its forward
+  // icon (mouse-based, since .chat-bub is a plain CSS class with no built-in
+  // hover-reveal slot to hook a child element into). forwardMsg holds the
+  // actual message being forwarded, null when the picker modal is closed.
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
+
+  // Full-history search - independent of the ['inbox'] list below (which only
+  // ever loads the 500 most-recently-active tickets). Debounced so typing
+  // doesn't fire a request per keystroke; only queries once there's an actual
+  // query length or a chosen date (an empty/short box just shows the normal
+  // list, same as WhatsApp's own search).
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchDate, setSearchDate] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  const searchActive = debouncedQuery.length >= 2 || !!searchDate;
+  // A result clicked from search may be a ticket outside the normal ['inbox']
+  // list's 500-ticket window entirely - kept here so the chat header still has
+  // a name/phone to show even when `tickets.find(...)` below comes up empty.
+  const [searchSelectedTicket, setSearchSelectedTicket] = useState<any | null>(null);
+
+  const { data: searchResults = [] } = useQuery({
+    queryKey: ['inbox-search', debouncedQuery, searchDate],
+    queryFn: () => api.get<{ data: any[] }>(
+      `/inbox/search?${debouncedQuery ? `q=${encodeURIComponent(debouncedQuery)}&` : ''}${searchDate ? `fecha=${searchDate}` : ''}`,
+    ).then((r) => r.data),
+    enabled: searchActive,
+  });
 
   const { data: tickets = [] } = useQuery({
     queryKey: ['inbox'],
@@ -117,6 +183,23 @@ export default function InboxPanel() {
     onError: (e: any) => toast(e.message, true),
   });
 
+  // Renames a ticket and/or corrects its associated phone number - propagates to
+  // every order already linked (tickets.ts's PATCH /:id), so a full refresh of
+  // orders/tickets/dashboard is needed too, not just this sidebar/conversation.
+  const renameMut = useMutation({
+    mutationFn: (body: { customer_name?: string; phone?: string }) => api.patch(`/tickets/${selectedId}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['inbox-convo', selectedId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      setEditingTicket(false);
+      toast('Chat actualizado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pickAndSend, isPending: sendMediaPending } = useSendChatMedia(selectedId ?? undefined, [['inbox-convo', selectedId], ['inbox']]);
 
@@ -153,6 +236,9 @@ export default function InboxPanel() {
     return () => window.removeEventListener('keydown', handler);
   }, [selectedId]);
 
+  // Switching chats must not leave a stale rename form open against the wrong ticket.
+  useEffect(() => { setEditingTicket(false); }, [selectedId]);
+
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -178,59 +264,124 @@ export default function InboxPanel() {
     return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' });
   }
 
-  const selectedTicket = tickets.find((t: any) => t.id === selectedId);
+  const selectedTicket = tickets.find((t: any) => t.id === selectedId)
+    ?? (searchSelectedTicket?.id === selectedId ? searchSelectedTicket : undefined);
 
   return (
     <div className="inbox-wrap">
       {/* LEFT SIDEBAR */}
       <div className="inbox-sidebar">
-        <div style={{ padding: '12px 16px', borderBottom: '2px solid var(--brd)', background: 'var(--vc)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 14, color: 'var(--vd)' }}>
+        <div className="inbox-sidebar-header" style={{ padding: '12px 16px', borderBottom: '2px solid var(--brd)', background: 'var(--vc)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 14, color: 'var(--vd)', marginBottom: 10 }}>
             <MessageSquare size={16} /> Conversaciones WPP
           </div>
-          <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 3 }}>
-            {tickets.length} chat{tickets.length !== 1 ? 's' : ''} · historial completo
+          {/* Same .sbx (input + lupa) pattern as Swimlane/ResumenTab's own search
+              boxes - not a one-off style, matches the rest of the app. Searches
+              ALL history via /inbox/search, not just the 500 tickets loaded
+              below - a customer/word from months ago still turns up. */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div className="sbx" style={{ flex: 1 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gt)' }}>
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input type="text" placeholder="Buscar por nombre, número o mensaje..." value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <DatePickerES value={searchDate} onChange={setSearchDate} placeholder="Fecha"
+                className="fsel fsel-sm" />
+              {/* DatePickerES always displays SOME date (defaults to "hoy" when
+                  `value` is empty - it was built for the board's always-has-a-date
+                  view selector, not an optional filter) - this makes it obvious
+                  the date filter is actually cleared, not just showing today. */}
+              {searchDate && (
+                <button type="button" onClick={() => setSearchDate('')} title="Quitar filtro de fecha"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', fontSize: 18, lineHeight: 1, padding: '0 4px' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 8 }}>
+            {searchActive
+              ? `${searchResults.length} resultado${searchResults.length !== 1 ? 's' : ''}`
+              : `${tickets.length} chat${tickets.length !== 1 ? 's' : ''} · historial completo`}
           </div>
         </div>
 
-        {tickets.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--gt)', fontSize: 13 }}>
-            Sin conversaciones
-          </div>
-        )}
-
-        {(tickets as any[]).map((t) => {
-          const lastMsg = t.messages?.[0];
-          return (
-            <div
-              key={t.id}
-              className={`inbox-item${selectedId === t.id ? ' sel' : ''}`}
-              onClick={() => setSelectedId(t.id)}
-            >
-              <div className="inbox-item-head">
-                <span className="inbox-item-name">{t.customer_name || formatPhoneDisplay(t.phone)}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  {t.unread_count > 0 && (
-                    <span className="inbox-unread">{t.unread_count}</span>
-                  )}
-                  <span className="inbox-item-time">
-                    {/* Last activity in EITHER direction (including a staff reply),
-                        not just the last inbound message - matches the list's own
-                        order (inbox.ts orders by last_activity_at too). */}
-                    {(t.last_activity_at ?? t.last_message_at) ? formatSidebarTime(t.last_activity_at ?? t.last_message_at) : ''}
-                  </span>
-                </div>
+        <div className="inbox-sidebar-list">
+        {searchActive ? (
+          <>
+            {searchResults.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--gt)', fontSize: 13 }}>
+                Sin resultados
               </div>
-              <div className="inbox-item-phone">{formatPhoneDisplay(t.phone)}</div>
-              {lastMsg && (
-                <div className="inbox-item-preview">
-                  {lastMsg.direction === 'out' ? '› ' : ''}
-                  {MEDIA_PREVIEW_LABEL[lastMsg.media_type as string] ?? lastMsg.text}
+            )}
+            {(searchResults as any[]).map((t) => (
+              <div
+                key={t.id}
+                className={`inbox-item${selectedId === t.id ? ' sel' : ''}`}
+                onClick={() => { setSearchSelectedTicket(t); setSelectedId(t.id); }}
+              >
+                <div className="inbox-item-head">
+                  <span className="inbox-item-name">{t.customer_name || formatPhoneDisplay(t.phone)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    {t.unread_count > 0 && <span className="inbox-unread">{t.unread_count}</span>}
+                    <span className="inbox-item-time">
+                      {t.snippet_at ? formatSidebarTime(t.snippet_at) : ''}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
-          );
-        })}
+                <div className="inbox-item-phone">{formatPhoneDisplay(t.phone)}</div>
+                {t.snippet && (
+                  <div className="inbox-item-preview">{highlightMatch(t.snippet, debouncedQuery)}</div>
+                )}
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {tickets.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--gt)', fontSize: 13 }}>
+                Sin conversaciones
+              </div>
+            )}
+
+            {(tickets as any[]).map((t) => {
+              const lastMsg = t.messages?.[0];
+              return (
+                <div
+                  key={t.id}
+                  className={`inbox-item${selectedId === t.id ? ' sel' : ''}`}
+                  onClick={() => setSelectedId(t.id)}
+                >
+                  <div className="inbox-item-head">
+                    <span className="inbox-item-name">{t.customer_name || formatPhoneDisplay(t.phone)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {t.unread_count > 0 && (
+                        <span className="inbox-unread">{t.unread_count}</span>
+                      )}
+                      <span className="inbox-item-time">
+                        {/* Last activity in EITHER direction (including a staff reply),
+                            not just the last inbound message - matches the list's own
+                            order (inbox.ts orders by last_activity_at too). */}
+                        {(t.last_activity_at ?? t.last_message_at) ? formatSidebarTime(t.last_activity_at ?? t.last_message_at) : ''}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="inbox-item-phone">{formatPhoneDisplay(t.phone)}</div>
+                  {lastMsg && (
+                    <div className="inbox-item-preview">
+                      {lastMsg.direction === 'out' ? '› ' : ''}
+                      {MEDIA_PREVIEW_LABEL[lastMsg.media_type as string] ?? lastMsg.text}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+        </div>
       </div>
 
       {/* RIGHT CHAT PANEL */}
@@ -245,12 +396,49 @@ export default function InboxPanel() {
         <div className="inbox-chat">
           {/* Chat header */}
           <div className="inbox-chat-head">
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>
-                {selectedTicket?.customer_name || formatPhoneDisplay(selectedTicket?.phone)}
+            {editingTicket ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                <input className="fi2" value={editName} onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Nombre del cliente" maxLength={200} />
+                <input className="fi2" value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="Teléfono (déjalo igual si no lo vas a cambiar)" maxLength={150} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="bpri" disabled={renameMut.isPending}
+                    onClick={() => {
+                      const body: { customer_name?: string; phone?: string } = {};
+                      if (editName.trim() && editName.trim() !== selectedTicket?.customer_name) body.customer_name = editName.trim();
+                      if (editPhone.trim() && editPhone.trim() !== selectedTicket?.phone) body.phone = editPhone.trim();
+                      if (Object.keys(body).length === 0) { setEditingTicket(false); return; }
+                      renameMut.mutate(body);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <CheckCircle size={13} /> {renameMut.isPending ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button className="bsec" onClick={() => setEditingTicket(false)}>Cancelar</button>
+                </div>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
-            </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16 }}>
+                    {selectedTicket?.customer_name || formatPhoneDisplay(selectedTicket?.phone)}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--gt)' }}>{formatPhoneDisplay(selectedTicket?.phone)}</div>
+                </div>
+                {RENAME_TICKET_UI_ENABLED && isAdmin && (
+                  <button
+                    onClick={() => {
+                      setEditName(selectedTicket?.customer_name ?? '');
+                      setEditPhone(selectedTicket?.phone ?? '');
+                      setEditingTicket(true);
+                    }}
+                    title="Renombrar chat / corregir número"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', display: 'flex', alignItems: 'center', padding: 3 }}>
+                    <Pencil size={14} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {selectedTicket?.no_wpp_number && (
@@ -285,7 +473,10 @@ export default function InboxPanel() {
                       {formatChatDateDivider(msg.created_at ?? msg.sent_at)}
                     </div>
                   )}
-                  <div className={`chat-bub ${isOut ? 'out' : 'in'}`}>
+                  <div className={`chat-bub ${isOut ? 'out' : 'in'}`}
+                    style={{ position: 'relative' }}
+                    onMouseEnter={() => setHoveredMsgId(msg.id)}
+                    onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
                     {isOut && (
                       <div className="chat-bub-who">{msg.sender?.name ?? 'Sistema'}</div>
                     )}
@@ -301,6 +492,19 @@ export default function InboxPanel() {
                         <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                       )}
                     </div>
+                    {hoveredMsgId === msg.id && (
+                      <button
+                        title="Reenviar a otro chat"
+                        onClick={() => setForwardMsg(msg)}
+                        style={{
+                          position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
+                          width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
+                          background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gt)', padding: 0,
+                        }}>
+                        <Forward size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -332,6 +536,10 @@ export default function InboxPanel() {
             </button>
           </div>
         </div>
+      )}
+
+      {forwardMsg && selectedId && (
+        <ForwardMessageModal message={forwardMsg} currentTicketId={selectedId} onClose={() => setForwardMsg(null)} />
       )}
     </div>
   );

@@ -1,13 +1,27 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import crypto from 'crypto';
 import { authenticate } from '../middleware/auth.js';
+import { config } from '../config.js';
+import { sendEmail } from '../services/email.js';
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
+
+// A code stays usable for 5 minutes and up to 5 wrong guesses - past either,
+// the user just logs in again (re-enters password) to get a fresh one, same
+// "resend" story the plan called for, no separate endpoint needed.
+const CODE_TTL_MS = 5 * 60 * 1000;
+const MAX_CODE_ATTEMPTS = 5;
+
+type UserWithOrg = {
+  id: string; org_id: string; email: string; name: string; role: string;
+  active: boolean; last_login: Date | null; created_at: Date;
+  org: { name: string; slug: string };
+};
 
 // Pre-computed dummy hash - prevents timing attack revealing user existence.
 // bcrypt.compare always runs regardless of whether user was found.
@@ -35,6 +49,51 @@ function cookieOpts(req: FastifyRequest) {
   };
 }
 
+// Shared by /login (when 2FA is off) and /login/verify-code (once the code
+// checks out) - both end up doing exactly the same thing: mint the real
+// accessToken/RefreshToken pair and return them + the user.
+async function issueSession(fastify: FastifyInstance, req: FastifyRequest, reply: FastifyReply, user: UserWithOrg) {
+  const payload = { userId: user.id, orgId: user.org_id, role: user.role as import('@4client/shared').UserRole };
+  const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });
+
+  const rawRefresh = crypto.randomBytes(40).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawRefresh).digest('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  await fastify.prisma.refreshToken.create({
+    data: { user_id: user.id, token_hash: tokenHash, expires_at: expiresAt },
+  });
+
+  await fastify.prisma.user.update({
+    where: { id: user.id },
+    data: { last_login: new Date() },
+  });
+
+  fastify.prisma.refreshToken.deleteMany({
+    where: { user_id: user.id, OR: [{ revoked: true }, { expires_at: { lt: new Date() } }] },
+  }).catch((err) => fastify.log.warn({ err }, 'No se pudo limpiar refresh tokens vencidos'));
+
+  reply.setCookie('rf', rawRefresh, cookieOpts(req));
+
+  return reply.send({
+    data: {
+      accessToken,
+      user: {
+        id: user.id,
+        org_id: user.org_id,
+        org_name: user.org.name,
+        org_slug: user.org.slug,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        active: user.active,
+        last_login: user.last_login,
+        created_at: user.created_at,
+      },
+    },
+  });
+}
+
 export default async function authRoutes(fastify: FastifyInstance) {
   // POST /api/v1/auth/login - rate limited to 10 attempts/min per IP
   fastify.post('/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
@@ -58,46 +117,71 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
     }
 
-    const payload = { userId: user.id, orgId: user.org_id, role: user.role as import('@4client/shared').UserRole };
-    const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });
+    // Two gates, both must pass: config.REQUIRE_2FA (per-environment master
+    // switch, Railway env var) AND role === 'dev' (per-user - only the single
+    // 'dev' role account needs this extra step; admin/encargado/domiciliario
+    // keep logging in exactly as before, in every environment). Explicit
+    // instruction: 2FA is for one specific account, not a org-wide rollout -
+    // gating on role instead of e.g. a hardcoded email survives that account's
+    // email changing later without needing a code change.
+    if (!config.REQUIRE_2FA || user.role !== 'dev') {
+      return issueSession(fastify, req, reply, user);
+    }
 
-    const rawRefresh = crypto.randomBytes(40).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawRefresh).digest('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await fastify.prisma.refreshToken.create({
-      data: { user_id: user.id, token_hash: tokenHash, expires_at: expiresAt },
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    await fastify.prisma.loginVerificationCode.create({
+      data: { user_id: user.id, code_hash: codeHash, expires_at: new Date(Date.now() + CODE_TTL_MS) },
     });
 
-    await fastify.prisma.user.update({
-      where: { id: user.id },
-      data: { last_login: new Date() },
+    try {
+      await sendEmail(
+        user.email,
+        'Tu código de verificación',
+        `<p>Tu código de verificación es:</p><h2 style="letter-spacing:4px">${code}</h2><p>Vence en 5 minutos.</p>`,
+      );
+    } catch (err) {
+      fastify.log.error({ err, userId: user.id }, 'No se pudo enviar el código de verificación por correo');
+      return reply.status(500).send({ error: 'No se pudo enviar el código de verificación', code: 'EMAIL_SEND_FAILED' });
+    }
+
+    return reply.send({ data: { pending2fa: true, userId: user.id } });
+  });
+
+  // POST /api/v1/auth/login/verify-code - second step when REQUIRE_2FA is on.
+  // Re-fetches the user fresh (not trusted from the client) before issuing a
+  // real session, same as /login itself does.
+  fastify.post('/login/verify-code', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const body = z.object({ userId: z.string().uuid(), code: z.string().length(6) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    const stored = await fastify.prisma.loginVerificationCode.findFirst({
+      where: { user_id: body.data.userId, consumed: false },
+      orderBy: { created_at: 'desc' },
     });
+    if (!stored || stored.expires_at <= new Date()) {
+      return reply.status(401).send({ error: 'Código inválido o expirado, inicia sesión de nuevo', code: 'CODE_EXPIRED' });
+    }
+    if (stored.attempts >= MAX_CODE_ATTEMPTS) {
+      return reply.status(401).send({ error: 'Demasiados intentos, inicia sesión de nuevo', code: 'CODE_LOCKED' });
+    }
 
-    // Best-effort cleanup of this user's stale tokens - keeps the table from growing forever.
-    fastify.prisma.refreshToken.deleteMany({
-      where: { user_id: user.id, OR: [{ revoked: true }, { expires_at: { lt: new Date() } }] },
-    }).catch((err) => fastify.log.warn({ err }, 'No se pudo limpiar refresh tokens vencidos'));
+    const codeHash = crypto.createHash('sha256').update(body.data.code).digest('hex');
+    if (codeHash !== stored.code_hash) {
+      await fastify.prisma.loginVerificationCode.update({ where: { id: stored.id }, data: { attempts: { increment: 1 } } });
+      return reply.status(401).send({ error: 'Código incorrecto', code: 'INVALID_CODE' });
+    }
 
-    reply.setCookie('rf', rawRefresh, cookieOpts(req));
-
-    return reply.send({
-      data: {
-        accessToken,
-        user: {
-          id: user.id,
-          org_id: user.org_id,
-          org_name: user.org.name,
-          org_slug: user.org.slug,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          active: user.active,
-          last_login: user.last_login,
-          created_at: user.created_at,
-        },
-      },
+    const user = await fastify.prisma.user.findFirst({
+      where: { id: body.data.userId, active: true },
+      include: { org: true },
     });
+    if (!user || !user.org.active) {
+      return reply.status(401).send({ error: 'Usuario inactivo', code: 'USER_INACTIVE' });
+    }
+
+    await fastify.prisma.loginVerificationCode.update({ where: { id: stored.id }, data: { consumed: true } });
+    return issueSession(fastify, req, reply, user);
   });
 
   // POST /api/v1/auth/refresh - reads refresh token from HttpOnly cookie

@@ -8,6 +8,7 @@ const API = resolveApiBase();
 interface Product { id: string; name: string; category: string; unit_type?: string | null; }
 interface SelectedItem { product_name: string; quantity_label: string; productId: string; isManual?: boolean; }
 interface DayOrderItem { id: string; product_name: string; quantity_label: string; price: number; }
+interface LastOrderItem { product_name: string; quantity_label: string; available: boolean; }
 interface DayOrder {
   id: string; num: string; address: string; paymentMethod: string;
   status: string; editable: boolean; items: DayOrderItem[]; createdAt: string;
@@ -61,6 +62,10 @@ export default function ClientFormPage() {
   const [orgName, setOrgName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [dayOrders, setDayOrders] = useState<DayOrder[]>([]);
+  // Opt-in only - fetched eagerly (cheap, same request pattern as form-info/
+  // products) but never auto-applied to `selected`. Null until loaded, then
+  // either an item list or an empty array (nothing to repeat).
+  const [lastOrder, setLastOrder] = useState<LastOrderItem[] | null>(null);
   const [deletingOrder, setDeletingOrder] = useState(false);
   // null = not decided yet; 'new' = a separate order; any other value = the id of
   // the existing order being edited. There's no "choose which order" menu
@@ -124,10 +129,14 @@ export default function ClientFormPage() {
   async function loadFormInfo(): Promise<{ orders: DayOrder[]; products: Product[] } | null> {
     const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
     try {
-      const [info, prods] = await Promise.all([
+      const [info, prods, lastOrderRes] = await Promise.all([
         fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()),
         fetch(`${API}/api/v1/public/products?${qs}`).then(r => r.json()),
+        // Best-effort - a failure here must never block the form itself, this is
+        // a nice-to-have convenience button, not part of the core flow.
+        fetch(`${API}/api/v1/public/last-order?${qs}`).then(r => r.json()).catch(() => ({ data: null })),
       ]);
+      setLastOrder(lastOrderRes?.data?.items ?? null);
       if (!info.data?.clientName) {
         setState('invalid');
         setErrorMsg(info.error ?? 'Link inválido o expirado.');
@@ -178,6 +187,20 @@ export default function ClientFormPage() {
     setSelected([]);
     setAddress('');
     setPaymentMethod('');
+  }
+
+  // Opt-in "Repetir mi último pedido" - only items come back (see last-order's
+  // own comment for why price/address/payment_method deliberately don't). An
+  // item no longer in the active catalog is silently skipped rather than
+  // loaded broken - `available` (from the backend) is exactly this check
+  // already done once server-side, no need to re-derive it against `products`.
+  function applyLastOrder() {
+    if (!lastOrder) return;
+    setSelected(lastOrder.filter(i => i.available).map((i, idx) => ({
+      product_name: i.product_name,
+      quantity_label: i.quantity_label,
+      productId: products.find(p => p.name === i.product_name)?.id ?? `repeat-${idx}`,
+    })));
   }
 
   useEffect(() => {
@@ -643,6 +666,7 @@ export default function ClientFormPage() {
 
   const selectedCount = selected.length;
   const editingOrder = mergeTarget && mergeTarget !== 'new' ? dayOrders.find(o => o.id === mergeTarget) : undefined;
+  const lastOrderAvailableCount = lastOrder?.filter(i => i.available).length ?? 0;
 
   return (
     <div style={page}>
@@ -715,6 +739,21 @@ export default function ClientFormPage() {
             </button>
           ))}
         </div>
+
+        {/* Opt-in "repetir pedido" - only offered on a genuinely empty NEW order
+            (never while editing an existing one, and never auto-applied). */}
+        {selectedCount === 0 && mergeTarget === 'new' && lastOrderAvailableCount > 0 && (
+          <button
+            type="button"
+            onClick={applyLastOrder}
+            style={{
+              width: '100%', marginTop: 12, padding: '12px 14px',
+              background: '#f0fdf4', color: GREEN, border: `2px solid ${GREEN}`,
+              borderRadius: 12, cursor: 'pointer', fontWeight: 700, fontSize: 14,
+            }}>
+            Repetir mi último pedido ({lastOrderAvailableCount} producto{lastOrderAvailableCount > 1 ? 's' : ''})
+          </button>
+        )}
 
         {/* Item summary - only once there's something to show, collapses past 2 */}
         {selectedCount > 0 && (

@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -21,6 +21,7 @@ import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
+import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
@@ -269,6 +270,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // (backend clears papelera_reason on restore, so there's nothing to prefill).
   const [papeleraReasonDlg, setPapeleraReasonDlg] = useState(false);
   const [papeleraReasonText, setPapeleraReasonText] = useState('');
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [forwardMsg, setForwardMsg] = useState<any | null>(null);
 
   useEffect(() => {
     if (!order) return;
@@ -886,6 +889,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     </div>
   );
 
+  // Old num from the most recent "pasado_manana:DATE:OLDNUM" marker (see
+  // cierre.ts/Swimlane.tsx) - shown next to the current num so staff can still
+  // recognize/find a pedido by the number it had before cierre renumbered it.
+  // Only the LAST hop matters here (this modal always shows the order's real,
+  // current fecha, never a past "ghost" day the way Swimlane's board view can).
+  const deferredMarkersModal = [...(order.notes?.matchAll(/pasado_manana:(\d{4}-\d{2}-\d{2})(?::(\d+))?/g) ?? [])]
+    .map((m: RegExpMatchArray) => m[2] ?? null);
+  const oldNumToShow = deferredMarkersModal.length > 0 ? deferredMarkersModal[deferredMarkersModal.length - 1] : null;
+
   const locked = order.locked;
   // 'dev' bypasses every requireRole check on the backend (middleware/auth.ts) - has
   // to count the same way here, or a dev user would see fields as editable that the
@@ -906,17 +918,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // `locked` alone no longer means read-only - admin/dev can still fully edit a
   // locked order (orders.ts's PATCH /:id allows it), just not once the day itself
   // is cerrado (diaCerrado still freezes everyone, admin included).
-  // A crédito order still awaiting payment is exempt from the locked/encargado
-  // block too - cobro sets locked:true immediately for every payment method, but
-  // for crédito specifically the order isn't actually done: the client can still
-  // come back to pay, ask questions, etc, and encargado needs to keep handling it
-  // normally (move it, edit it) same as before it closed. Only the ADMIN-only
-  // "marcar crédito pagado" action (below) settles the debt for real - once that
-  // happens `order.paid` flips true and this exemption stops applying, same as
-  // any other closed order from then on. Confirmed bug: a real crédito order was
-  // reachable by admin only the moment it closed, encargado couldn't touch it.
-  const creditoSinPagar = order.payment_method === 'credito' && !order.paid;
-  const readOnly = (locked && !canEditLocked && !creditoSinPagar) || diaCerrado || order.status === 'papelera' || order.client_deleted;
+  // A crédito order follows the exact same closed-order rule as every other
+  // payment method, by explicit design decision - once cobro sets locked:true,
+  // only admin/dev can modify it, full stop. encargado keeps full control up
+  // through creating/moving/editing/closing (cobro) the order - closing it is
+  // itself an encargado-allowed action (orders.ts's POST /:id/cobro) - but once
+  // closed, the only encargado-facing surface is the read-only view, same as
+  // any other closed order. (An earlier version of this code exempted an unpaid
+  // crédito order from this rule - reverted per explicit instruction: "una vez
+  // cerrado en board solo el admin puede modificar ese y cualquier otro pedido
+  // cerrado", i.e. no special case for crédito.)
+  const readOnly = (locked && !canEditLocked) || diaCerrado || order.status === 'papelera' || order.client_deleted;
   // Same reasoning as TicketModal - the link itself already expires by end of the
   // Colombia day it was sent, so sending/blocking one from a past-day order's chat
   // is always acting on an already-dead link. Also true the moment TODAY's caja
@@ -1047,11 +1059,14 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   )}
                   <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
                     <div style={{
+                      position: 'relative',
                       background: isOut ? '#DCF8C6' : '#fff',
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
-                    }}>
+                    }}
+                      onMouseEnter={() => setHoveredMsgId(msg.id)}
+                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
                       {isOut && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
@@ -1067,6 +1082,19 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                           <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                         )}
                       </div>
+                      {hoveredMsgId === msg.id && (
+                        <button
+                          title="Reenviar a otro chat"
+                          onClick={() => setForwardMsg(msg)}
+                          style={{
+                            position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
+                            width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
+                            background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gt)', padding: 0,
+                          }}>
+                          <Forward size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   </Fragment>
@@ -1128,6 +1156,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             <div>
               <div className="mtit" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Pedido #{order.num}
+                {oldNumToShow && (
+                  <span style={{ fontSize: '0.7em', fontWeight: 600, color: 'var(--gt)' }}>
+                    (#{oldNumToShow})
+                  </span>
+                )}
                 {order.client_modified && (
                   <span title="El cliente modificó este pedido desde el formulario - revisa los cambios (en rojo). Este aviso queda permanente, no se quita al guardar."
                     style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: '#DC2626' }}>
@@ -1235,7 +1268,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               </div>
             )}
 
-            {locked && !canEditLocked && !creditoSinPagar && (
+            {locked && !canEditLocked && (
               <div style={{ background: 'var(--gm)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13, color: 'var(--gt)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Lock size={15} /> Solo el administrador puede modificar este pedido cerrado. Puedes agregar una observación abajo.
               </div>
@@ -1689,6 +1722,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
             </div>
           </div>
         </div>
+      )}
+
+      {forwardMsg && order?.ticket_id && (
+        <ForwardMessageModal message={forwardMsg} currentTicketId={order.ticket_id} onClose={() => setForwardMsg(null)} />
       )}
     </div>
   );

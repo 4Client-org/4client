@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
@@ -17,7 +18,10 @@ const MAX_VIDEO_BYTES = 16 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
 export default async function inboxRoutes(fastify: FastifyInstance) {
-  // GET /api/v1/inbox - lista de todas las conversaciones, solo admin
+  // GET /api/v1/inbox - lista de todas las conversaciones, solo admin/dev por
+  // decisión explícita (se probó abrirlo a encargado también, se revirtió a
+  // propósito - el encargado ya tiene todo lo que necesita vía el tablero de
+  // Tickets & Pedidos).
   fastify.get('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const query = z.object({ page: z.coerce.number().default(1) }).parse(req.query);
 
@@ -47,6 +51,75 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     });
 
     return reply.send({ data: tickets });
+  });
+
+  // GET /api/v1/inbox/search?q=TEXT&fecha=YYYY-MM-DD - busca en TODO el
+  // historial (no solo los 500 tickets más recientes que GET / carga), como la
+  // búsqueda real de WhatsApp: por nombre, teléfono, o contenido de cualquier
+  // mensaje, opcionalmente acotado a una fecha. Devuelve TICKETS que hacen
+  // match (no una lista plana de mensajes), cada uno con el mensaje que hizo
+  // match como fragmento de contexto - mismo patrón visual que WhatsApp real.
+  //
+  // $queryRaw (primer uso en este código) porque ni un LATERAL JOIN ni
+  // immutable_unaccent() son expresables con el query builder normal de
+  // Prisma - sigue totalmente parametrizado (tagged template), nunca
+  // concatenación de strings, cero riesgo de inyección.
+  fastify.get('/search', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    const query = z.object({
+      q: z.string().trim().max(200).optional(),
+      fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'Parámetros inválidos', code: 'VALIDATION_ERROR' });
+
+    const text = query.data.q?.trim() || null;
+    const fecha = query.data.fecha;
+    if (!text && !fecha) return reply.send({ data: [] });
+
+    const likePattern = text ? `%${text}%` : null;
+
+    // Bogota (UTC-5, sin DST) límites de día reales, en instantes UTC - mismo
+    // cálculo que ya usa webhook.ts para "primer mensaje del día".
+    let dayStartUtc: Date | null = null;
+    let dayEndUtc: Date | null = null;
+    if (fecha) {
+      const [y, m, d] = fecha.split('-').map(Number);
+      dayStartUtc = new Date(Date.UTC(y, m - 1, d, 5, 0, 0));
+      dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    }
+
+    const rows = await fastify.prisma.$queryRaw<Array<{
+      id: string; customer_name: string | null; phone: string; last_activity_at: Date | null;
+      unread_count: number; snippet_text: string | null; snippet_at: Date | null;
+    }>>`
+      SELECT t.id, t.customer_name, t.phone, t.last_activity_at, t.unread_count,
+        matched.text AS snippet_text, matched.sent_at AS snippet_at
+      FROM "tickets" t
+      LEFT JOIN LATERAL (
+        SELECT m.text, m.sent_at
+        FROM "ticket_messages" m
+        WHERE m.ticket_id = t.id
+          ${likePattern ? Prisma.sql`AND immutable_unaccent(lower(m.text)) LIKE immutable_unaccent(lower(${likePattern}))` : Prisma.empty}
+          ${dayStartUtc ? Prisma.sql`AND m.sent_at >= ${dayStartUtc} AND m.sent_at < ${dayEndUtc}` : Prisma.empty}
+        ORDER BY m.sent_at DESC
+        LIMIT 1
+      ) matched ON true
+      WHERE t.org_id = ${req.user.orgId}::uuid
+        AND (
+          matched.text IS NOT NULL
+          ${likePattern ? Prisma.sql`OR immutable_unaccent(lower(t.customer_name)) LIKE immutable_unaccent(lower(${likePattern}))` : Prisma.empty}
+          ${likePattern ? Prisma.sql`OR t.phone LIKE ${likePattern}` : Prisma.empty}
+        )
+      ORDER BY COALESCE(matched.sent_at, t.last_activity_at) DESC NULLS LAST
+      LIMIT 50
+    `;
+
+    return reply.send({
+      data: rows.map((r) => ({
+        id: r.id, customer_name: r.customer_name, phone: r.phone,
+        last_activity_at: r.last_activity_at, unread_count: r.unread_count,
+        snippet: r.snippet_text, snippet_at: r.snippet_at,
+      })),
+    });
   });
 
   // GET /api/v1/inbox/:ticketId/messages - historial completo del chat (todos los roles pueden ver)
@@ -166,6 +239,113 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     }
 
     return reply.status(201).send({ data: message, wpp_status });
+  });
+
+  // POST /api/v1/inbox/messages/:messageId/forward - reenvía un mensaje existente
+  // (texto o cualquier media) a uno o varios OTROS chats, sin que el navegador del
+  // staff tenga que volver a descargar/subir el archivo - la media ya vive en
+  // nuestro propio storage bajo un token reutilizable (storeMedia genera un token
+  // random, no por contenido, así que varias filas TicketMessage pueden apuntar
+  // al mismo media_url sin problema; GET /media/:token no exige un dueño único).
+  // Solo se leen los bytes de vuelta (loadMedia) cuando hay que volver a subirlos
+  // A META - la fila nueva en nuestra BD reutiliza el token tal cual.
+  fastify.post('/messages/:messageId/forward', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const { messageId } = req.params as { messageId: string };
+    const body = z.object({ targetTicketIds: z.array(z.string().uuid()).min(1).max(20) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Selecciona al menos un chat', code: 'VALIDATION_ERROR' });
+
+    const source = await fastify.prisma.ticketMessage.findFirst({
+      where: { id: messageId, ticket: { org_id: req.user.orgId } },
+    });
+    if (!source) return reply.status(404).send({ error: 'Mensaje no encontrado', code: 'NOT_FOUND' });
+
+    // Reenviarse a sí mismo no tiene sentido - filtrado también en el frontend,
+    // pero nunca confiado solo a eso.
+    const targetIds = body.data.targetTicketIds.filter((id) => id !== source.ticket_id);
+    if (targetIds.length === 0) {
+      return reply.status(400).send({ error: 'Elige un chat distinto al actual', code: 'VALIDATION_ERROR' });
+    }
+
+    const targets = await fastify.prisma.ticket.findMany({
+      where: { id: { in: targetIds }, org_id: req.user.orgId },
+      include: { org: true },
+    });
+    const foundIds = new Set(targets.map((t) => t.id));
+    const missing = targetIds.filter((id) => !foundIds.has(id));
+
+    // Los bytes solo se necesitan para volver a subirlos a Meta por CADA
+    // destino (un media id no es reutilizable entre envíos) - una sola lectura,
+    // no una por destino.
+    const isLocation = source.media_type === 'location';
+    const hasUploadableMedia = !!source.media_type && !isLocation;
+    const buffer = hasUploadableMedia ? await loadMedia(source.media_url!) : null;
+    const mimeType = source.media_url ? mimeTypeForToken(source.media_url) : null;
+    // "https://maps.google.com/?q=LAT,LNG" - formato fijo que webhook.ts siempre
+    // genera (ingestLocationMessage) - único lugar que ya arma este link.
+    const locationMatch = isLocation ? source.media_url?.match(/\?q=(-?[\d.]+),(-?[\d.]+)/) : null;
+
+    let forwarded = 0;
+    for (const target of targets) {
+      const message = await fastify.prisma.ticketMessage.create({
+        data: {
+          ticket_id: target.id, direction: 'out',
+          text: source.text, media_url: source.media_url, media_type: source.media_type,
+          media_caption: source.media_caption, sent_by: req.user.userId,
+        },
+        include: { sender: { select: { id: true, name: true } } },
+      });
+      forwarded++;
+      fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId: target.id, message: message as any });
+      if (target.unread_count > 0) {
+        await fastify.prisma.ticket.update({ where: { id: target.id }, data: { unread_count: 0 } });
+        fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId: target.id, count: 0 });
+      }
+
+      const provider = MetaCloudProvider.fromOrg(target.org);
+      if (!provider) {
+        fastify.log.warn({ ticketId: target.id }, 'WPP: org sin credenciales Meta, reenvío solo guardado en BD');
+        continue;
+      }
+
+      if (!source.media_type) {
+        // Texto plano - mismo patrón que /reply.
+        provider.sendText(target.phone, source.text ?? '')
+          .then(async ({ messageId: wppMessageId }) => {
+            await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: wppMessageId } });
+            fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', {
+              ticketId: target.id, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
+            });
+          })
+          .catch(async (err: any) => {
+            fastify.log.error({ err, ticketId: target.id }, 'WPP: error reenviando texto via Meta API');
+            const failed = await fastify.prisma.ticketMessage.update({
+              where: { id: message.id },
+              data: { failed_reason: String(err?.message ?? 'Error desconocido Meta API').slice(0, 255) },
+              select: { delivered: true, read_by_client: true, failed_reason: true },
+            });
+            fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message-status', { ticketId: target.id, messageId: message.id, ...failed });
+          });
+      } else if (isLocation && locationMatch) {
+        const [, lat, lng] = locationMatch;
+        trackOutboundMediaSend(fastify, req.user.orgId, target.id, message.id,
+          provider.sendLocation(target.phone, Number(lat), Number(lng)));
+      } else if (hasUploadableMedia && buffer && mimeType) {
+        const kind = source.media_type as 'image' | 'audio' | 'video' | 'document';
+        const caption = source.text ?? undefined;
+        trackOutboundMediaSend(fastify, req.user.orgId, target.id, message.id,
+          provider.uploadMedia(buffer, mimeType).then((mediaId) => {
+            if (kind === 'image') return provider.sendImage(target.phone, mediaId, caption);
+            if (kind === 'video') return provider.sendVideo(target.phone, mediaId, caption);
+            if (kind === 'document') return provider.sendDocument(target.phone, mediaId, source.media_caption ?? 'archivo', caption);
+            return provider.sendAudio(target.phone, mediaId);
+          }));
+      }
+    }
+
+    return reply.status(201).send({ data: { forwarded, failed: missing } });
   });
 
   // POST /api/v1/inbox/:ticketId/send-image - staff sends a photo, todos los roles

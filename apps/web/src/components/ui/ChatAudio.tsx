@@ -11,5 +11,12 @@ export default function ChatAudio({ token }: { token: string }) {
   if (!src) {
     return <div style={{ fontSize: 11, color: '#888', padding: '8px 0' }}>Cargando audio...</div>;
   }
-  return <audio controls src={src} style={{ maxWidth: 240, height: 36 }} />;
+  // `maxWidth` alone doesn't reliably constrain the browser's native audio
+  // widget - some browsers (per the bug report: the player was visibly wider
+  // than its own chat bubble, bleeding past the bubble's edge) render it at an
+  // intrinsic width regardless of a max-width-only style. An explicit `width`
+  // plus `display: block` (the element defaults to inline, which can also let
+  // it ignore sizing in a flex/inline context) forces it to actually respect
+  // this size instead of just capping it.
+  return <audio controls src={src} style={{ width: 240, maxWidth: '100%', height: 36, display: 'block' }} />;
 }

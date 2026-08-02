@@ -1092,3 +1092,109 @@ describe('public /submit - cobro en casa chosen by the client on the form', () =
     expect(patch.json().data.cod_choice).toBe('completo');
   });
 });
+
+describe('GET /public/last-order - "repetir mi último pedido"', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminId: string;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    adminId = (await createTestUser(app.prisma, orgId, 'admin', 'LastOrderAdmin1!')).id;
+    await app.prisma.product.create({ data: { org_id: orgId, name: 'Mango', category: 'Frutas', price_per_unit: 3000 } });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+  function daysAgo(n: number): Date {
+    const d = new Date(todayLocal);
+    d.setDate(d.getDate() - n);
+    return d;
+  }
+
+  it('returns null when the ticket has no past orders at all', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573009990001', customer_name: 'Sin Historial' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/last-order?t=${token}&device_token=dev-1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toBeNull();
+  });
+
+  it('returns a genuinely PAST order (fecha before today)', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573009990002', customer_name: 'Cliente Pasado' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '001', customer_name: ticket.customer_name!, customer_phone: ticket.phone,
+        address: 'Calle Pasado 1', channel: 'whatsapp', payment_method: 'cash', status: 'cerrado', source: 'form',
+        registered_by: adminId,
+        fecha: daysAgo(2),
+        items: { create: [{ product_name: 'Mango', quantity_label: '1 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/last-order?t=${token}&device_token=dev-1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.items).toEqual([{ product_name: 'Mango', quantity_label: '1 kg', available: true }]);
+  });
+
+  it('returns TODAY\'s own order when it is already cerrado - counts as "the previous order"', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573009990003', customer_name: 'Cliente Hoy Cerrado' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '001', customer_name: ticket.customer_name!, customer_phone: ticket.phone,
+        address: 'Calle Hoy 1', channel: 'whatsapp', payment_method: 'cash', status: 'cerrado', source: 'form',
+        registered_by: adminId, fecha: todayLocal,
+        items: { create: [{ product_name: 'Mango', quantity_label: '3 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/last-order?t=${token}&device_token=dev-1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.items).toEqual([{ product_name: 'Mango', quantity_label: '3 kg', available: true }]);
+  });
+
+  it('does NOT return today\'s order while it is still active (nuevo/preparando/listo/camino) - form-info owns that one, not "repetir"', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573009990004', customer_name: 'Cliente Hoy Activo' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '901', customer_name: ticket.customer_name!, customer_phone: ticket.phone,
+        address: 'Calle Hoy Activo 1', channel: 'whatsapp', payment_method: 'cash', status: 'preparando', source: 'form',
+        registered_by: adminId, fecha: todayLocal,
+        items: { create: [{ product_name: 'Mango', quantity_label: '5 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/last-order?t=${token}&device_token=dev-1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toBeNull();
+  });
+
+  it('when today is cerrado AND there is an older past order too, picks whichever is most recently created (today\'s)', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573009990005', customer_name: 'Cliente Ambos' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '001', customer_name: ticket.customer_name!, customer_phone: ticket.phone,
+        address: 'Calle Vieja 1', channel: 'whatsapp', payment_method: 'cash', status: 'cerrado', source: 'form',
+        registered_by: adminId, fecha: daysAgo(5),
+        items: { create: [{ product_name: 'Mango', quantity_label: '1 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '002', customer_name: ticket.customer_name!, customer_phone: ticket.phone,
+        address: 'Calle Nueva 1', channel: 'whatsapp', payment_method: 'cash', status: 'cerrado', source: 'form',
+        registered_by: adminId, fecha: todayLocal,
+        items: { create: [{ product_name: 'Mango', quantity_label: '9 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/last-order?t=${token}&device_token=dev-1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.items).toEqual([{ product_name: 'Mango', quantity_label: '9 kg', available: true }]);
+  });
+});

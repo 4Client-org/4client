@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { Prisma, type PrismaClient } from '@prisma/client';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { sanitizeForWhatsApp } from '../lib/sanitize.js';
 import { sortByCategoryOrder } from '../lib/categoryOrder.js';
 import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
+import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 
 // Max orders a single form link (ticket) may generate - a link can stay valid up to
 // 24h, so this caps spam from a leaked/shared link.
@@ -28,36 +28,6 @@ function formatFechaLong(fecha: Date): string {
   return new Date(`${ymd}T12:00:00Z`).toLocaleDateString('es-CO', {
     day: '2-digit', month: 'long', year: 'numeric', timeZone: 'America/Bogota',
   });
-}
-
-// Computes the next sequential order number for org+fecha and creates the order,
-// retrying on a unique-constraint collision (@@unique([org_id, num, fecha])).
-//
-// Uses MAX(num)+1, not COUNT(*)+1 - a deferred order (cierre.ts, decision "manana")
-// keeps its ORIGINAL num when its fecha moves to the next day, so COUNT(*)+1 can guess
-// a num that's already occupied by one of those, and since count doesn't change
-// between retries with no concurrent insert, every retry recomputed the exact same
-// doomed num and collided identically until attempts ran out (see orders.ts, same fix).
-async function createOrderWithRetryNum<T>(
-  prisma: PrismaClient,
-  orgId: string,
-  fecha: Date,
-  createFn: (num: string) => Promise<T>,
-): Promise<T> {
-  const MAX_ATTEMPTS = 5;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const existing = await prisma.order.findMany({ where: { org_id: orgId, fecha }, select: { num: true } });
-    const maxNum = existing.reduce((max, o) => Math.max(max, parseInt(o.num, 10) || 0), 0);
-    const num = String(maxNum + attempt).padStart(3, '0');
-    try {
-      return await createFn(num);
-    } catch (error) {
-      const isCollision = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-      if (!isCollision || attempt === MAX_ATTEMPTS) throw error;
-    }
-  }
-  // Unreachable, but keeps TS happy about a guaranteed return/throw.
-  throw new Error('No se pudo generar un número de pedido único');
 }
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -288,6 +258,62 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         orderBy: [{ category: 'asc' }, { sort_order: 'asc' }, { name: 'asc' }],
       });
       return reply.send({ data: sortByCategoryOrder(products) });
+    } catch (err) {
+      return sendInvalidToken(err, reply);
+    }
+  });
+
+  // GET /api/v1/public/last-order?t=TOKEN&device_token=X - the client's most
+  // recent PAST order (not today's ACTIVE ones - form-info already covers
+  // those), used by the opt-in "Repetir mi último pedido" button so a returning
+  // customer doesn't have to retype everything. Only product_name/quantity_label
+  // travel back - price is deliberately NOT carried over (the client-facing
+  // catalog never shows price at all; /submit always reprices every item from
+  // the CURRENT catalog by name, same as any new item - see priceMap below).
+  // Address/payment_method also aren't pre-filled - those can go stale (moved,
+  // changed how they pay) in a way item choices usually don't, so the client
+  // re-confirms them fresh either way.
+  //
+  // Today's OWN order counts too, but only once it's 'cerrado' - a client who
+  // already got their pedido today and comes back for a second one shouldn't
+  // have to wait until tomorrow for "repetir" to find anything; form-info
+  // already excludes cerrado orders from "today's active ones", so there's no
+  // overlap between the two lists. A today's order still in nuevo/preparando/
+  // listo/camino stays OUT of this - that one is what "editar pedido activo"
+  // is for, not "repetir" (repetir copies items into a brand-new order).
+  fastify.get('/last-order', async (req, reply) => {
+    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
+    if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
+    try {
+      const ticket = await loadTicketByFormToken(q.data.t);
+
+      const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+      const lastOrder = await fastify.prisma.order.findFirst({
+        where: {
+          ticket_id: ticket.id, org_id: ticket.org_id,
+          OR: [{ fecha: { lt: todayLocal } }, { fecha: todayLocal, status: 'cerrado' }],
+          client_deleted: false, status: { not: 'papelera' },
+        },
+        orderBy: { created_at: 'desc' },
+        select: { items: { select: { product_name: true, quantity_label: true }, orderBy: { sort_order: 'asc' } } },
+      });
+      if (!lastOrder || lastOrder.items.length === 0) return reply.send({ data: null });
+
+      // Flag items whose product no longer exists in the active catalog, so the
+      // client sees which ones didn't come back instead of silently vanishing.
+      const activeNames = new Set(
+        (await fastify.prisma.product.findMany({ where: { org_id: ticket.org_id, active: true }, select: { name: true } }))
+          .map(p => p.name),
+      );
+      return reply.send({
+        data: {
+          items: lastOrder.items.map(i => ({
+            product_name: i.product_name,
+            quantity_label: i.quantity_label ?? '',
+            available: activeNames.has(i.product_name),
+          })),
+        },
+      });
     } catch (err) {
       return sendInvalidToken(err, reply);
     }
@@ -683,8 +709,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
 
     const orderItems = newItemsData.map((item, idx) => ({ ...item, sort_order: idx }));
 
-    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (num) =>
-      fastify.prisma.order.create({
+    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (tx, num) =>
+      tx.order.create({
         data: {
           org_id: ticket.org_id,
           ticket_id: ticket.id,

@@ -65,6 +65,8 @@ export default function MainPage() {
   const { data: inboxTickets = [] } = useQuery({
     queryKey: ['inbox'],
     queryFn: () => api.get<{ data: any[] }>('/inbox').then((r) => r.data),
+    // isAdmin only - Chats WPP was briefly opened to encargado too, reverted by
+    // explicit decision (backend inbox.ts's GET / matches, requireRole('admin')).
     enabled: isAdmin,
   });
   const unreadWpp = inboxTickets.reduce((s: number, t: any) => s + (t.unread_count || 0), 0);

@@ -56,6 +56,7 @@ model User {
 
   org                 Organization       @relation(fields: [org_id], references: [id])
   refresh_tokens      RefreshToken[]
+  login_verification_codes LoginVerificationCode[]
   orders_registered   Order[]            @relation("RegisteredBy")
   orders_paid         Order[]            @relation("PaidBy")
   orders_papelera     Order[]            @relation("PapeleraBy")
@@ -83,6 +84,26 @@ model RefreshToken {
   @@unique([token_hash])
   @@index([user_id])
   @@map("refresh_tokens")
+}
+
+// Second factor at login (currently gated dev-only via config.REQUIRE_2FA) -
+// a short-lived one-time code emailed to the user, verified before issuing the
+// real accessToken/RefreshToken. Deliberately its own table, not a RefreshToken
+// reuse - the semantics differ (one-time + attempt-counted vs long-lived +
+// rotation-based).
+model LoginVerificationCode {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String   @db.Uuid
+  code_hash  String   @db.VarChar(100)
+  expires_at DateTime @db.Timestamptz
+  attempts   Int      @default(0)
+  consumed   Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("login_verification_codes")
 }
 
 model Product {
@@ -160,11 +181,23 @@ model Ticket {
   customer_name      String?   @db.VarChar(200)
   wpp_thread_id      String?   @db.VarChar(200)
   unread_count       Int       @default(0)
-  // Deliberately INBOUND-only (real WhatsApp messages from the customer, never
-  // staff replies or automated sends - see inbox.ts/public.ts's own comments)
-  // - this is what tickets.ts's board ordering uses, and it must stay that way:
-  // "first to arrive stays first" would break if a staff reply bumped it.
+  // Inbound-only (real WhatsApp messages from the customer, never staff replies
+  // or automated sends - see inbox.ts/public.ts's own comments), but NOT what
+  // tickets.ts's board ordering uses anymore - this is the LAST inbound message
+  // ever, so it keeps moving forward every time the customer writes again, which
+  // is exactly wrong for "first to arrive stays first all day" (a ticket that
+  // wrote once at 8am and again at 2pm would sort as if it just arrived at 2pm).
+  // See first_message_today_at below for the field that actually captures that.
   last_message_at    DateTime? @db.Timestamptz
+  // What tickets.ts's board ordering actually uses. Set ONLY on the first
+  // inbound message of a given calendar day for this ticket (webhook.ts's own
+  // isFirstMessageToday gate, already computed there for the welcome-message
+  // send) - stays fixed for the rest of that day no matter how many more times
+  // the customer writes, which is what "first to arrive stays first" requires.
+  // Null for a ticket showing today purely via deferred_to/an order's own fecha
+  // with no new message yet - sorted first (see tickets.ts's nulls:'first'),
+  // ahead of every genuinely new arrival today.
+  first_message_today_at DateTime? @db.Timestamptz
   // Separate from last_message_at above on purpose - the Chats WPP panel
   // (inbox.ts) wants normal WhatsApp-app behavior instead (most recent activity
   // in EITHER direction floats to top, so replying to an old chat brings it back
