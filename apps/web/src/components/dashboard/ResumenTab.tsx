@@ -290,9 +290,39 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           </div>
 
           <div className="drow">
-            <div className="dcard2 v">
-              <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
-              <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
+            <div className="dcard2 v" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
+                <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
+              </div>
+              {/* Cobro en casa YA está sumado dentro del efectivo de arriba - esto
+                  es solo el desglose de cuánto de ese total todavía está en manos
+                  de un domiciliario, no una tercera cifra para sumar aparte. Antes
+                  se mostraba como su propia tarjeta separada, del mismo tamaño que
+                  "Recaudado efectivo", y en un día donde TODO el efectivo era
+                  cobro en casa las dos tarjetas mostraban el mismo número - fácil
+                  de leer como "efectivo" + "domiciliarios" = el doble de lo real
+                  (bug real reportado: $282.400 en el informe vs $564.800 sumando
+                  a mano las dos tarjetas). Anidarlo aquí, como nota al pie de la
+                  MISMA tarjeta, deja claro que es un subconjunto, no una suma. */}
+              {(dashboard.recaudado?.domiciliario ?? 0) > 0 && (
+                <div style={{ borderTop: '1px dashed var(--brd)', paddingTop: 8, fontSize: 12, color: 'var(--gt)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
+                    <Bike size={13} color="var(--vd)" />
+                    De esto, {fmtCOP(dashboard.recaudado.domiciliario)} es cobro en casa - aún en manos del domiciliario, ya incluido arriba
+                  </div>
+                  {dashboard.recaudado.porDomiciliario && Object.keys(dashboard.recaudado.porDomiciliario).length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '3px 14px' }}>
+                      {Object.entries(dashboard.recaudado.porDomiciliario as Record<string, number>).map(([name, amount]) => (
+                        <div key={name} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>{name}</span>
+                          <span style={{ fontWeight: 700, color: 'var(--n)' }}>{fmtCOP(amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="dcard2 az">
               <div className="dico az"><ArrowLeftRight size={22} color="var(--az)" strokeWidth={1.5} /></div>
@@ -303,32 +333,6 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
               <div><div className="dlbl">Total recaudado</div><div className="dval">{fmtCOP(dashboard.recaudado?.total ?? 0)}</div></div>
             </div>
           </div>
-
-          {/* What each domiciliario owes back today (cobro en casa only) - the
-              same figure either way an order was cerrado (completo or con
-              vuelta), since a vuelta's change already nets out to the order's
-              own total. Only shown when there's actually something to collect
-              today - an all-transferencia/cash-en-tienda day has nothing here. */}
-          {(dashboard.recaudado?.domiciliario ?? 0) > 0 && (
-            <div style={{ background: 'var(--b)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <Bike size={16} color="var(--vd)" />
-                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--vd)' }}>
-                  A recibir de domiciliarios (cobro en casa): {fmtCOP(dashboard.recaudado.domiciliario)}
-                </span>
-              </div>
-              {dashboard.recaudado.porDomiciliario && Object.keys(dashboard.recaudado.porDomiciliario).length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '4px 16px' }}>
-                  {Object.entries(dashboard.recaudado.porDomiciliario as Record<string, number>).map(([name, amount]) => (
-                    <div key={name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                      <span style={{ color: 'var(--gt)' }}>{name}</span>
-                      <span style={{ fontWeight: 700 }}>{fmtCOP(amount)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
         </>
       )}
