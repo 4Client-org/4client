@@ -98,19 +98,6 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
 
     let totalEfectivo = 0;
     let totalTransferencia = 0;
-    // Cash collected by a domiciliario on delivery (cod), separate from cash
-    // paid in-store (cash) - both are "efectivo" for the revenue total, but
-    // only the cod portion is money that has to physically come BACK from a
-    // domiciliario at the end of the day. Whether that specific order was
-    // "completo" or "con vuelta" doesn't change this number - a vuelta order's
-    // change already nets out (domiciliario collects amount_received, hands
-    // the client change_amount back, keeps exactly `tot`), so `tot` (the
-    // order's own total) is always the right figure to expect from them
-    // either way.
-    let totalDomiciliario = 0;
-    // Same figure broken down per domiciliario - "who owes how much" is more
-    // directly actionable at the end of the day than just one lump sum.
-    const porDomiciliario: Record<string, number> = {};
     // Explicit status==='cerrado' guard alongside paid, same reasoning as
     // cierre.ts's own totals query - makes it impossible for a real-money
     // total to include an order sitting in some other status.
@@ -126,11 +113,6 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         totalEfectivo += tot;
       } else if (o.payment_method === 'transfer') {
         totalTransferencia += tot;
-      }
-      if (o.payment_method === 'cod') {
-        totalDomiciliario += tot;
-        const name = (o as any).employee?.name ?? 'Sin asignar';
-        porDomiciliario[name] = (porDomiciliario[name] ?? 0) + tot;
       }
     });
 
@@ -152,11 +134,6 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
           efectivo: totalEfectivo,
           transferencia: totalTransferencia,
           total: totalEfectivo + totalTransferencia,
-          // What domiciliarios collectively owe back today (cobro en casa
-          // orders only) - a subset of `efectivo`, broken out separately so
-          // it can be reconciled against what they actually hand over.
-          domiciliario: totalDomiciliario,
-          porDomiciliario,
         },
         orders,
         papeleraOrders,
