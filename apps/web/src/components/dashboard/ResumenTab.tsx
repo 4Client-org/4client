@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package, PackageCheck, Clock, Banknote, ArrowLeftRight, Wallet,
   FileText, Trash2, History, ChevronDown, ChevronRight, Lock, Download, Ban,
-  MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed, Bike,
+  MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { normalizeSearch } from '../../lib/normalize';
@@ -290,39 +290,9 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           </div>
 
           <div className="drow">
-            <div className="dcard2 v" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
-                <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
-              </div>
-              {/* Cobro en casa YA está sumado dentro del efectivo de arriba - esto
-                  es solo el desglose de cuánto de ese total todavía está en manos
-                  de un domiciliario, no una tercera cifra para sumar aparte. Antes
-                  se mostraba como su propia tarjeta separada, del mismo tamaño que
-                  "Recaudado efectivo", y en un día donde TODO el efectivo era
-                  cobro en casa las dos tarjetas mostraban el mismo número - fácil
-                  de leer como "efectivo" + "domiciliarios" = el doble de lo real
-                  (bug real reportado: $282.400 en el informe vs $564.800 sumando
-                  a mano las dos tarjetas). Anidarlo aquí, como nota al pie de la
-                  MISMA tarjeta, deja claro que es un subconjunto, no una suma. */}
-              {(dashboard.recaudado?.domiciliario ?? 0) > 0 && (
-                <div style={{ borderTop: '1px dashed var(--brd)', paddingTop: 8, fontSize: 12, color: 'var(--gt)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
-                    <Bike size={13} color="var(--vd)" />
-                    De esto, {fmtCOP(dashboard.recaudado.domiciliario)} es cobro en casa - aún en manos del domiciliario, ya incluido arriba
-                  </div>
-                  {dashboard.recaudado.porDomiciliario && Object.keys(dashboard.recaudado.porDomiciliario).length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '3px 14px' }}>
-                      {Object.entries(dashboard.recaudado.porDomiciliario as Record<string, number>).map(([name, amount]) => (
-                        <div key={name} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>{name}</span>
-                          <span style={{ fontWeight: 700, color: 'var(--n)' }}>{fmtCOP(amount)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+            <div className="dcard2 v">
+              <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
+              <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
             </div>
             <div className="dcard2 az">
               <div className="dico az"><ArrowLeftRight size={22} color="var(--az)" strokeWidth={1.5} /></div>
@@ -417,6 +387,12 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                           <span className="ebadge" style={{ background: col.bg, color: col.fg }}>
                             {STATUS_LABEL[o.status] ?? o.status}
                           </span>
+                        </div>
+                        {/* Método de pago visible sin tener que expandir cada pedido -
+                            antes solo aparecía adentro del detalle (isExp), y sumar
+                            efectivo/transferencia a mano exigía abrir uno por uno. */}
+                        <div style={{ fontSize: 12, color: 'var(--gt)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {PAYMENT_LABEL[o.payment_method] ?? o.payment_method ?? '-'}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {orderHist.length > 0 && (
