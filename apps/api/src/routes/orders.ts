@@ -983,4 +983,71 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     fastify.io.to(`org:${req.user.orgId}`).emit('order:paid', { orderId: id });
     return reply.send({ data: updated });
   });
+
+  // PATCH /api/v1/orders/:id/cobro-retroactivo - fixes an order that got closed
+  // via cierre's "Cerrar sin cobro" (forzar_cierre) decision by mistake - staff
+  // picked that instead of actually collecting payment, but the money DID come
+  // in later (e.g. confirmed with the domiciliario after the fact). Before this
+  // route existed there was no way to correct it: POST /:id/cobro refuses any
+  // already-`locked` order outright ("Pedido ya cobrado", orders.ts above),
+  // even though "cerrar sin cobro" deliberately leaves `paid:false` - so the
+  // order sat closed AND unpaid forever, invisible to every cash total.
+  // admin/dev only, same tighter trust tier as /:id/credito-pagado above (both
+  // correct a payment record after the fact, without the original password+
+  // amount re-entry that a live cobro requires) - and deliberately narrow: only
+  // fires on the EXACT "cerrado sin cobro" state (locked + unpaid + cerrado),
+  // never on an order that's genuinely still open (use the real /:id/cobro for
+  // that) or already paid (nothing to fix). Crédito orders have their own
+  // dedicated fix (/:id/credito-pagado) - excluded here on purpose so there's
+  // only ever one correction path per payment method, not two competing ones.
+  fastify.patch('/:id/cobro-retroactivo', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId }, include: { items: true } });
+    if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    if (existing.payment_method === 'credito') {
+      return reply.status(400).send({ error: 'Un crédito se marca pagado desde "Marcar crédito pagado", no aquí', code: 'VALIDATION_ERROR' });
+    }
+    if (!existing.locked || existing.status !== 'cerrado') {
+      return reply.status(400).send({ error: 'Este pedido no está cerrado - usa el cobro normal', code: 'VALIDATION_ERROR' });
+    }
+    if (existing.paid) {
+      return reply.status(400).send({ error: 'Este pedido ya está marcado como pagado', code: 'VALIDATION_ERROR' });
+    }
+
+    // A cobro-en-casa order may already have amount_received set (asked as soon
+    // as "cobro en casa" is chosen, well before cierre - see updateOrderSchema's
+    // own comment) - kept as-is if so. Cash/transfer orders never go through
+    // that step at all (no "vuelto" concept applies to them), so there's
+    // nothing to preserve - full payment, no change, is the only sensible
+    // default for money that's already confirmed received.
+    const total = existing.items.reduce((s, i) => s + Number(i.price), 0);
+    const amountReceived = existing.amount_received != null ? Number(existing.amount_received) : total;
+    const change = amountReceived - total;
+
+    const updated = await fastify.prisma.$transaction(async (tx) => {
+      // paid_at/paid_by DO get set here, unlike credito-pagado above - a
+      // "cerrado sin cobro" order never had a real cobro moment to preserve
+      // (paid_at/paid_by are null coming in), so this correction IS the first
+      // and only record of when/who actually confirmed the payment.
+      const order = await tx.order.update({
+        where: { id },
+        data: {
+          paid: true, paid_at: new Date(), paid_by: req.user.userId,
+          amount_received: amountReceived, change_amount: change,
+        },
+        select: buildOrderSelect(false),
+      });
+      await tx.orderHistory.create({
+        data: {
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'cobro',
+          notes: `Corrección: se había cerrado "sin cobro" en el cierre de caja, pero sí se cobró. Marcado como pagado retroactivamente. Recibido: $${amountReceived}.`,
+        },
+      });
+      return order;
+    });
+
+    fastify.io.to(`org:${req.user.orgId}`).emit('order:paid', { orderId: id });
+    return reply.send({ data: updated });
+  });
 }
