@@ -32,9 +32,20 @@ export function downloadCierreCSV(fecha: string, orders: any[], decisions: Recor
   const rows = orders.map((o) => {
     const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
     const productos = o.items.map((i: any) => `${i.quantity_label ? i.quantity_label + ' ' : ''}${i.product_name}`).join(' | ');
-    const accion = o.paid || o.status === 'cerrado'
+    // Solo `paid` significa que de verdad entró dinero - antes este `|| o.status
+    // === 'cerrado'` hacía que un pedido cerrado SIN cobro (decisión
+    // "forzar_cierre" en el cierre de caja) saliera igual como "Completado" que
+    // uno realmente pagado, sin ninguna forma de distinguirlos en el CSV. La
+    // etiqueta correcta (DECISION_LABEL['forzar_cierre'] = 'Cerrar sin cobro')
+    // ya existía pero nunca se alcanzaba por este cortocircuito.
+    const accion = o.paid
       ? 'Completado'
-      : (DECISION_LABEL[decisions[o.id] ?? ''] ?? 'Sin decidir');
+      // Un crédito cerrado normalmente (no vía cierre) llega aquí sin ninguna
+      // decisión de cierre asociada - "Sin decidir" sería engañoso, esto SÍ se
+      // decidió, solo que el cobro real queda pendiente hasta que se salde.
+      : o.payment_method === 'credito'
+        ? 'Pendiente por cobrar (crédito)'
+        : (DECISION_LABEL[decisions[o.id] ?? ''] ?? 'Sin decidir');
     return [
       csvField(o.num),
       csvField(o.customer_name),
