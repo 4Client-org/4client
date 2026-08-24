@@ -116,6 +116,29 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       }
     });
 
+    // A pedido cerrado vía "Cerrar sin cobro" (cierre.ts's forzar_cierre
+    // decision) is locked+cerrado but deliberately left unpaid - it never
+    // enters the totals above, so it used to just vanish with no trace, which
+    // is exactly what caused a real reported mismatch (el informe decía menos
+    // de lo que en realidad se había cobrado a mano). Surfaced here instead so
+    // the report explains its own gap: which pedidos, whose, how much, and
+    // that the exclusion is intentional. Crédito is excluded - an unpaid
+    // crédito order is normal/expected (settled later from the Créditos tab),
+    // not a mistake, so it doesn't belong next to these.
+    const sinCobro = (bucket: 'efectivo' | 'transferencia') =>
+      orders
+        .filter(o => o.status === 'cerrado' && o.locked && !o.paid && o.payment_method !== 'credito')
+        .filter(o => bucket === 'efectivo'
+          ? (o.payment_method === 'cash' || o.payment_method === 'cod')
+          : o.payment_method === 'transfer')
+        .map(o => ({
+          id: o.id,
+          customer_name: o.customer_name || 'Sin nombre',
+          total: o.items.reduce((s, i) => s + Number(i.price), 0),
+        }));
+    const sinCobroEfectivo = sinCobro('efectivo');
+    const sinCobroTransferencia = sinCobro('transferencia');
+
     // Chat stats
     const totalChats = tickets_.length;
     const chatsSinPedido = tickets_.filter(t => t.orders.length === 0).length;
@@ -134,6 +157,8 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
           efectivo: totalEfectivo,
           transferencia: totalTransferencia,
           total: totalEfectivo + totalTransferencia,
+          sinCobroEfectivo,
+          sinCobroTransferencia,
         },
         orders,
         papeleraOrders,
