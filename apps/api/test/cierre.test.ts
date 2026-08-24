@@ -490,3 +490,127 @@ describe('cierre routes', () => {
     });
   });
 });
+
+// PATCH /orders/:id/cobro-retroactivo lives in orders.ts, but the only way to
+// reach the exact state it fixes (locked + unpaid + cerrado) is through
+// cierre's own "forzar_cierre" decision - so this suite lives here, next to
+// the rest of the cierre-decision tests, instead of orders.test.ts.
+describe('PATCH /orders/:id/cobro-retroactivo - fixing a "cerrado sin cobro" mistake', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  // Direct JWT signing (not the real /auth/login round-trip) - same reasoning
+  // as this file's own "deferring to mañana" suite above: /auth/login has a
+  // tight 10/min rate limit, shared across every test in this file, and each
+  // test here needs its own org (cierre only ever closes the real "today",
+  // and a second close of the same org+day 409s).
+  async function orgWithDirectToken(role: 'encargado' | 'admin' = 'admin') {
+    const org = await createTestOrg(app.prisma);
+    const user = await createTestUser(app.prisma, org.id, role, 'unused-not-logged-in-2!');
+    const token = app.jwt.sign({ userId: user.id, orgId: org.id, role }, { expiresIn: '15m' });
+    return { orgId: org.id, userId: user.id, token };
+  }
+
+  async function forzarCierreSinCobro() {
+    const { orgId, token: adminToken } = await orgWithDirectToken('admin');
+    const fecha = todayColombiaStr();
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(adminToken),
+      payload: sampleOrderPayload({ fecha, payment_method: 'cod' }),
+    });
+    const order = create.json().data;
+
+    const cierre = await app.inject({
+      method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
+      payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
+    });
+    expect(cierre.statusCode).toBe(200);
+    return { orgId, adminToken, orderId: order.id as string };
+  }
+
+  it('marks it paid, stamps paid_at/paid_by (both null coming in), and leaves total/change consistent', async () => {
+    const { adminToken, orderId } = await forzarCierreSinCobro();
+
+    const before = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(before.paid).toBe(false);
+    expect(before.locked).toBe(true);
+    expect(before.paid_at).toBeNull();
+    expect(before.paid_by).toBeNull();
+
+    const fix = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    expect(fix.statusCode).toBe(200);
+    expect(fix.json().data.paid).toBe(true);
+
+    const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.paid).toBe(true);
+    expect(after.paid_at).not.toBeNull();
+    expect(after.paid_by).not.toBeNull();
+    expect(Number(after.amount_received)).toBe(6000);
+    expect(Number(after.change_amount)).toBe(0);
+  });
+
+  it('rejects encargado - admin/dev only, same tier as credito-pagado', async () => {
+    const { orgId, orderId } = await forzarCierreSinCobro();
+    const encargado = await createTestUser(app.prisma, orgId, 'encargado', 'unused-not-logged-in-3!');
+    const encargadoToken = app.jwt.sign({ userId: encargado.id, orgId, role: 'encargado' }, { expiresIn: '15m' });
+
+    const fix = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}/cobro-retroactivo`, headers: authHeader(encargadoToken),
+    });
+    expect(fix.statusCode).toBe(403);
+  });
+
+  it('rejects an order that is NOT locked+cerrado - use the real cobro for a still-open order', async () => {
+    const { orgId, token: adminToken } = await orgWithDirectToken('admin');
+    const fecha = todayColombiaStr();
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(adminToken),
+      payload: sampleOrderPayload({ fecha }),
+    });
+    const order = create.json().data;
+
+    const fix = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    expect(fix.statusCode).toBe(400);
+  });
+
+  it('rejects an order that is already paid - nothing to fix', async () => {
+    const { orderId, adminToken } = await forzarCierreSinCobro();
+    await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    const again = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    expect(again.statusCode).toBe(400);
+  });
+
+  it('rejects a crédito order - that one goes through credito-pagado instead', async () => {
+    const { orgId, token: adminToken } = await orgWithDirectToken('admin');
+    const fecha = todayColombiaStr();
+    const create = await app.inject({
+      method: 'POST', url: '/api/v1/orders', headers: authHeader(adminToken),
+      payload: sampleOrderPayload({ fecha, payment_method: 'credito' }),
+    });
+    const order = create.json().data;
+    await app.inject({
+      method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
+      payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
+    });
+
+    const fix = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${order.id}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    expect(fix.statusCode).toBe(400);
+  });
+});

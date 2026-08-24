@@ -582,6 +582,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onError: (e: any) => toast(e.message, true),
   });
 
+  // Fixes a pedido that cierre closed via "Cerrar sin cobro" by mistake - staff
+  // picked that instead of actually confirming payment, but the money DID come
+  // in (e.g. domiciliario confirms after the fact). Same "no password/amount
+  // re-entry" shape as creditoPagadoMut above - unlike a live cobro, the point
+  // here is just correcting the record, not making a new payment decision.
+  const cobroRetroactivoMut = useMutation({
+    mutationFn: () => api.patch(`/orders/${orderId}/cobro-retroactivo`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast('Pedido marcado como cobrado');
+    },
+    onError: (e: any) => toast(e.message, true),
+  });
+
   const invoiceMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
     onSuccess: () => {
@@ -1507,6 +1523,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   disabled={creditoPagadoMut.isPending}
                   style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <CheckCircle size={13} /> {creditoPagadoMut.isPending ? 'Guardando...' : 'Marcar crédito pagado'}
+                </button>
+              )}
+              {/* Corrige un pedido que cierre cerró "sin cobro" por error - la
+                  única forma de arreglarlo, ya que POST /:id/cobro rechaza de
+                  plano cualquier pedido ya bloqueado (locked), sin importar el
+                  motivo. Nunca aparece para crédito (tiene su propio botón
+                  arriba) ni para un pedido que sí se cobró normalmente. */}
+              {canEditLocked && order.locked && !order.paid && order.status === 'cerrado' && order.payment_method !== 'credito' && (
+                <button className="bverde"
+                  onClick={() => setConfirmDlg({
+                    msg: 'Este pedido quedó cerrado "sin cobro" en el cierre de caja. ¿Confirmas que sí se cobró y quieres marcarlo como pagado?',
+                    onOk: () => cobroRetroactivoMut.mutate(),
+                  })}
+                  disabled={cobroRetroactivoMut.isPending}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <CheckCircle size={13} /> {cobroRetroactivoMut.isPending ? 'Guardando...' : 'Marcar como cobrado'}
                 </button>
               )}
               {!readOnly && !locked && canManage && order.status !== 'papelera' && (
