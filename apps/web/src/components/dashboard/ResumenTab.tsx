@@ -4,6 +4,7 @@ import {
   Package, PackageCheck, Clock, Banknote, ArrowLeftRight, Wallet,
   FileText, Trash2, History, ChevronDown, ChevronRight, Lock, Download, Ban,
   MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
+  AlertTriangle,
 } from 'lucide-react';
 import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
 import { normalizeSearch } from '../../lib/normalize';
@@ -24,6 +25,33 @@ const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   cerrado: { bg: '#E8F5EE', fg: '#0F4F30' },
   papelera: { bg: '#FDEDEC', fg: '#C0392B' },
 };
+
+// Pedidos cerrados vía "Cerrar sin cobro" (cierre.ts, decisión forzar_cierre) -
+// cuentan como cerrados pero deliberadamente NO entran a "Recaudado efectivo"/
+// "Recaudado transferencia" de arriba, porque nunca se confirmó que el dinero
+// entró. Antes esto era invisible - el total salía más bajo de lo real sin
+// ninguna pista de por qué (caso real reportado). Mismo bloque reutilizado
+// para efectivo y transferencia, solo cambia qué lista le llega.
+function renderSinCobro(items?: { id: string; customer_name: string; total: number }[]) {
+  if (!items || items.length === 0) return null;
+  const total = items.reduce((s, i) => s + i.total, 0);
+  return (
+    <div style={{ borderTop: '1px dashed #FCA5A5', paddingTop: 8, fontSize: 12, color: '#B91C1C' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, marginBottom: 4 }}>
+        <AlertTriangle size={13} />
+        {fmtCOP(total)} cerrado{items.length > 1 ? 's' : ''} sin cobro ({items.length} pedido{items.length > 1 ? 's' : ''}) - no incluido arriba
+      </div>
+      <div style={{ display: 'grid', gap: 2 }}>
+        {items.map(i => (
+          <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>{i.customer_name}</span>
+            <span style={{ fontWeight: 700 }}>{fmtCOP(i.total)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   fecha: string;
@@ -290,13 +318,19 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           </div>
 
           <div className="drow">
-            <div className="dcard2 v">
-              <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
-              <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
+            <div className="dcard2 v" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div className="dico v"><Banknote size={22} color="var(--v)" strokeWidth={1.5} /></div>
+                <div><div className="dlbl">Recaudado efectivo</div><div className="dval">{fmtCOP(dashboard.recaudado?.efectivo ?? 0)}</div></div>
+              </div>
+              {renderSinCobro(dashboard.recaudado?.sinCobroEfectivo)}
             </div>
-            <div className="dcard2 az">
-              <div className="dico az"><ArrowLeftRight size={22} color="var(--az)" strokeWidth={1.5} /></div>
-              <div><div className="dlbl">Recaudado transferencia</div><div className="dval">{fmtCOP(dashboard.recaudado?.transferencia ?? 0)}</div></div>
+            <div className="dcard2 az" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div className="dico az"><ArrowLeftRight size={22} color="var(--az)" strokeWidth={1.5} /></div>
+                <div><div className="dlbl">Recaudado transferencia</div><div className="dval">{fmtCOP(dashboard.recaudado?.transferencia ?? 0)}</div></div>
+              </div>
+              {renderSinCobro(dashboard.recaudado?.sinCobroTransferencia)}
             </div>
             <div className="dcard2 tot">
               <div className="dico n"><Wallet size={22} color="var(--n)" strokeWidth={1.5} /></div>
