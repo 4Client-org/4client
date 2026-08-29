@@ -23,6 +23,7 @@ import ResumenTab from '../components/dashboard/ResumenTab';
 import ConfigTab from '../components/config/ConfigTab';
 import Toast from '../components/ui/Toast';
 import DatePickerES from '../components/ui/DatePickerES';
+import type { TomarListaItem } from '../hooks/useTomarLista';
 
 interface Ticket {
   id: string; phone: string; customer_name: string;
@@ -46,7 +47,8 @@ export default function MainPage() {
   const [showCierre, setShowCierre] = useState(false);
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
-  const [fromTicket, setFromTicket] = useState<{ ticketId: string; nombre: string; phone: string; messages: any[] } | null>(null);
+  const [openOrderPrefillItems, setOpenOrderPrefillItems] = useState<TomarListaItem[] | undefined>(undefined);
+  const [fromTicket, setFromTicket] = useState<{ ticketId: string; nombre: string; phone: string; messages: any[]; prefillItems?: TomarListaItem[] } | null>(null);
 
   const { data: orders = [], isLoading: loadingOrders } = useOrders(fecha);
   const { data: dashboard } = useDashboard(fecha, isAdmin);
@@ -162,13 +164,22 @@ export default function MainPage() {
   // that's a different actor with a different risk: a client resubmitting the
   // same link shouldn't accidentally create a duplicate. Staff explicitly
   // choosing to create another one is a distinct, intentional action.)
-  function handleCreateFromTicket(ticket: Ticket) {
+  function handleCreateFromTicket(ticket: Ticket, prefillItems?: TomarListaItem[]) {
     setFromTicket({
       ticketId: ticket.id,
       nombre: ticket.customer_name,
       phone: ticket.phone,
       messages: ticket.messages ?? [],
+      prefillItems,
     });
+  }
+
+  // "Tomar lista" from TicketModal, merging into an existing order (see
+  // TicketModal's own onOpenOrder call) - stored separately from openOrderId
+  // itself so a normal "abrir pedido" click elsewhere never carries stale items.
+  function handleOpenOrderWithPrefill(orderId: string, prefillItems?: TomarListaItem[]) {
+    setOpenOrderId(orderId);
+    setOpenOrderPrefillItems(prefillItems);
   }
 
   const totalPedidos = orders.length;
@@ -322,6 +333,7 @@ export default function MainPage() {
           preNombre={fromTicket.nombre}
           prePhone={fromTicket.phone}
           messages={fromTicket.messages}
+          prefillItems={fromTicket.prefillItems}
           onClose={() => setFromTicket(null)}
         />
       )}
@@ -331,11 +343,15 @@ export default function MainPage() {
           fecha={fecha}
           onClose={() => setTicketId(null)}
           onCreateFromTicket={handleCreateFromTicket}
-          onOpenOrder={(orderId) => { setTicketId(null); setOpenOrderId(orderId); }}
+          onOpenOrder={(orderId, prefillItems) => { setTicketId(null); handleOpenOrderWithPrefill(orderId, prefillItems); }}
         />
       )}
       {openOrderId && (
-        <DetallePedidoModal orderId={openOrderId} onClose={() => setOpenOrderId(null)} />
+        <DetallePedidoModal
+          orderId={openOrderId}
+          prefillItems={openOrderPrefillItems}
+          onClose={() => { setOpenOrderId(null); setOpenOrderPrefillItems(undefined); }}
+        />
       )}
       {showCierre && (
         <CierreCajaModal fecha={fecha} orders={orders} tickets={tickets} onClose={() => setShowCierre(false)} />

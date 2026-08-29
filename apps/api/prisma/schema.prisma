@@ -433,6 +433,14 @@ model OrderItem {
   // long as the order exists. Items from the original submission or staff's own
   // entry stay false forever.
   added_by_client Boolean  @default(false)
+  // True when this item came from "Tomar lista" (routes/inbox.ts's
+  // /parse-messages - staff selects chat text, an AI extracts items) and the AI
+  // couldn't confidently match it to any catalog product, so staff must review
+  // the name/price by hand. Independent of added_by_client above (that one
+  // still means "the client added this via the public form") - a Tomar lista
+  // item never sets added_by_client:true, only this flag, so the UI's red
+  // "revisar" tag reads correctly instead of the misleading "cliente" one.
+  ai_unmatched    Boolean  @default(false)
 
   order Order @relation(fields: [order_id], references: [id], onDelete: Cascade)
 

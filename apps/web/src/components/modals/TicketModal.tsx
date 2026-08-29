@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
@@ -18,6 +18,9 @@ import { fmtCOP, STATUS_LABEL, todayStr, formatChatTimestamp, formatChatDateDivi
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { toast } from '../ui/Toast';
 import { ConfirmModal } from '../ui/ConfirmModal';
+import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
+import { TomarListaActionBar } from '../chat/TomarListaActionBar';
+import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
 function renderText(text: string) {
@@ -36,13 +39,15 @@ interface Props {
   ticketId: string;
   fecha: string;
   onClose: () => void;
-  onCreateFromTicket?: (ticket: any) => void;
-  onOpenOrder?: (orderId: string) => void;
+  onCreateFromTicket?: (ticket: any, prefillItems?: TomarListaItem[]) => void;
+  onOpenOrder?: (orderId: string, prefillItems?: TomarListaItem[]) => void;
 }
 
 export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTicket, onOpenOrder }: Props) {
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
   const [reply, setReply] = useState('');
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
@@ -172,6 +177,37 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
   const activeOrders = (ticket?.orders ?? []).filter((o: any) => o.status !== 'papelera');
   const hasOrders = activeOrders.length > 0;
+
+  // "Tomar lista" - see hooks/useTomarLista.ts. TicketModal has no order-item UI
+  // of its own, so a successful extraction either opens NuevoPedidoModal (new
+  // order) or DetallePedidoModal (merge into an existing one) pre-filled.
+  const tomarLista = useTomarLista(ticketId);
+  const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
+  // Same status/locked/client_deleted eligibility rule public.ts's own merge
+  // flow uses (EDITABLE_STATUSES = nuevo/preparando/listo) - source==='form' is
+  // deliberately NOT required here: that check exists there because the client
+  // may only touch their own form-submitted order, but here staff is the actor,
+  // and staff can already edit any of the ticket's own orders via DetallePedidoModal
+  // regardless of how it was created.
+  const EDITABLE_STATUSES = ['nuevo', 'preparando', 'listo'];
+  const eligibleOrders = activeOrders.filter((o: any) => EDITABLE_STATUSES.includes(o.status) && !o.locked && !o.client_deleted);
+
+  function handleProcesarTomarLista() {
+    tomarLista.mutation.mutate(undefined, {
+      onSuccess: (res: any) => {
+        const { items: extracted, unmatchedNames } = res.data;
+        tomarLista.clear();
+        if (unmatchedNames.length === 0 && eligibleOrders.length === 0) {
+          toast('Lista montada exitosamente');
+          onClose();
+          onCreateFromTicket?.(ticket, extracted);
+        } else {
+          setTomarListaResult({ items: extracted, unmatchedNames });
+        }
+      },
+      onError: (e: any) => toast(e.message ?? 'No se pudo procesar el texto con IA - intenta de nuevo', true),
+    });
+  }
   // The link itself already expires (24h from issuance, or 4h if never opened - see
   // formLink.ts) - viewing a past day's chat here means whatever link was ever sent
   // for it is very likely already dead, so sending/blocking one from this stale view
@@ -186,7 +222,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: 860,
+        width: '100%', maxWidth: 940,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
@@ -194,7 +230,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
         {/* ===== LEFT: CHAT ===== */}
         <div style={{
-          width: 310, background: '#ECE5DD', display: 'flex',
+          width: 390, background: '#ECE5DD', display: 'flex',
           flexDirection: 'column', flexShrink: 0, minHeight: 0,
         }}>
           {/* Chat header */}
@@ -227,6 +263,17 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
               </button>
+              {canTomarLista && (
+                <button
+                  className="hdr-ic-btn"
+                  title="Seleccionar mensajes del cliente para armar el pedido"
+                  onClick={() => tomarLista.toggle()}
+                  disabled={isPastDay}
+                >
+                  <ListChecks size={13} />
+                  <span>Tomar<br />lista</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -255,7 +302,15 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                     </span>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  {tomarLista.active && tomarLista.isEligible(msg) && (
+                    <input
+                      type="checkbox"
+                      checked={tomarLista.selectedIds.has(msg.id)}
+                      onChange={() => tomarLista.toggleMsg(msg.id)}
+                      style={{ marginTop: 8, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                    />
+                  )}
                   <div style={{
                     position: 'relative',
                     background: isOut ? '#DCF8C6' : '#fff',
@@ -304,55 +359,65 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
            </div>
           </div>
 
-          {/* Reply bar */}
-          <div style={{
-            background: '#F0F2F0', padding: '8px 10px',
-            display: 'flex', gap: 6, alignItems: 'flex-end',
-            borderTop: '1px solid #D0D8D0', flexShrink: 0,
-          }}>
-            <input ref={fileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handlePickMedia} style={{ display: 'none' }} />
-            <button
-              title="Adjuntar foto, audio, video o documento"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={sendMediaPending}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)',
-                padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0,
-              }}
-            >
-              <Paperclip size={17} />
-            </button>
-            <textarea
-              rows={2}
-              placeholder="Escribe un mensaje... (Enter para enviar)"
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-              onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  if (!sendMut.isPending && reply.trim()) sendMut.mutate();
-                }
-              }}
-              style={{
-                flex: 1, resize: 'none', border: '1.5px solid var(--brd)',
-                borderRadius: 10, padding: '7px 10px', fontSize: 12,
-                fontFamily: 'inherit', background: '#fff', outline: 'none',
-              }}
+          {/* Reply bar - replaced by the Tomar lista action bar while that
+              selection mode is active. */}
+          {tomarLista.active ? (
+            <TomarListaActionBar
+              count={tomarLista.selectedIds.size}
+              pending={tomarLista.mutation.isPending}
+              onCancel={() => tomarLista.clear()}
+              onProcess={handleProcesarTomarLista}
             />
-            <button
-              onClick={() => { if (reply.trim() && !sendMut.isPending) sendMut.mutate(); }}
-              disabled={!reply.trim() || sendMut.isPending}
-              style={{
-                background: reply.trim() ? 'var(--v)' : 'var(--gm)',
-                border: 'none', borderRadius: 10, padding: '8px 10px',
-                cursor: reply.trim() ? 'pointer' : 'default',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background .15s', flexShrink: 0,
-              }}
-            >
-              <SendHorizontal size={15} color={reply.trim() ? '#fff' : 'var(--gt)'} />
-            </button>
-          </div>
+          ) : (
+            <div style={{
+              background: '#F0F2F0', padding: '8px 10px',
+              display: 'flex', gap: 6, alignItems: 'flex-end',
+              borderTop: '1px solid #D0D8D0', flexShrink: 0,
+            }}>
+              <input ref={fileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handlePickMedia} style={{ display: 'none' }} />
+              <button
+                title="Adjuntar foto, audio, video o documento"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sendMediaPending}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)',
+                  padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0,
+                }}
+              >
+                <Paperclip size={17} />
+              </button>
+              <textarea
+                rows={2}
+                placeholder="Escribe un mensaje... (Enter para enviar)"
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!sendMut.isPending && reply.trim()) sendMut.mutate();
+                  }
+                }}
+                style={{
+                  flex: 1, resize: 'none', border: '1.5px solid var(--brd)',
+                  borderRadius: 10, padding: '7px 10px', fontSize: 12,
+                  fontFamily: 'inherit', background: '#fff', outline: 'none',
+                }}
+              />
+              <button
+                onClick={() => { if (reply.trim() && !sendMut.isPending) sendMut.mutate(); }}
+                disabled={!reply.trim() || sendMut.isPending}
+                style={{
+                  background: reply.trim() ? 'var(--v)' : 'var(--gm)',
+                  border: 'none', borderRadius: 10, padding: '8px 10px',
+                  cursor: reply.trim() ? 'pointer' : 'default',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background .15s', flexShrink: 0,
+                }}
+              >
+                <SendHorizontal size={15} color={reply.trim() ? '#fff' : 'var(--gt)'} />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ===== RIGHT: ORDERS ===== */}
@@ -439,6 +504,21 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
       {forwardMsg && (
         <ForwardMessageModal message={forwardMsg} currentTicketId={ticketId} onClose={() => setForwardMsg(null)} />
+      )}
+
+      {tomarListaResult && (
+        <TomarListaResultModal
+          unmatchedNames={tomarListaResult.unmatchedNames}
+          eligibleOrders={eligibleOrders.map((o: any) => ({ id: o.id, num: o.num, status: STATUS_LABEL[o.status] ?? o.status }))}
+          onConfirm={(target) => {
+            const extracted = tomarListaResult.items;
+            setTomarListaResult(null);
+            onClose();
+            if (target === 'new') onCreateFromTicket?.(ticket, extracted);
+            else onOpenOrder?.(target.orderId, extracted);
+          }}
+          onCancel={() => setTomarListaResult(null)}
+        />
       )}
     </div>
   );

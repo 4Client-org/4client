@@ -14,7 +14,7 @@ function isNegativePrice(priceStr: string | undefined): boolean {
 }
 
 interface Product { id: string; name: string; category: string; }
-interface Item { product_name: string; quantity_label: string; price: string; added_by_client?: boolean; }
+interface Item { product_name: string; quantity_label: string; price: string; added_by_client?: boolean; ai_unmatched?: boolean; }
 
 interface Props {
   products: Product[];
@@ -188,6 +188,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       // must never be what actually blocks saving the order.
       price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
+      ai_unmatched: priorItem?.ai_unmatched ?? false,
     };
 
     const exists = items.some(i => i.product_name === productName);
@@ -313,6 +314,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       // saving the order.
       price: local.price.trim() || '0',
       added_by_client: priorItem?.added_by_client ?? false,
+      ai_unmatched: priorItem?.ai_unmatched ?? false,
     };
     onChange(items.map(i => i.product_name === productName ? newItem : i));
     return true;
@@ -552,12 +554,13 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
             )}
             {items.map((i, idx) => (
               <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
-                <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined }}>
+                <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined }}>
                   {i.product_name}
                   {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
+                  {i.ai_unmatched && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· revisar</span>}
                 </td>
-                <td style={{ padding: '9px 12px', textAlign: 'center', color: i.added_by_client ? '#DC2626' : 'var(--vd)', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>{i.quantity_label || '-'}</td>
-                <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined }}>{parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-'}</td>
+                <td style={{ padding: '9px 12px', textAlign: 'center', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : 'var(--vd)', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>{i.quantity_label || '-'}</td>
+                <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined }}>{parseFloat(i.price) ? `$${parseFloat(i.price).toLocaleString('es-CO')}` : '-'}</td>
               </tr>
             ))}
             {items.length > 0 && (
@@ -773,11 +776,12 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               const local = getLocal(i.product_name);
               return (
                 <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: i.added_by_client ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
                     {i.product_name}
                     {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
+                    {i.ai_unmatched && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· revisar</span>}
                   </td>
-                  <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'center', color: i.added_by_client ? '#DC2626' : 'var(--vd)', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>
+                  <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'center', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : 'var(--vd)', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>
                     {isEditing ? (
                       <input
                         ref={editQtyRef}
@@ -800,7 +804,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: !isEditing && i.added_by_client ? '#DC2626' : undefined }}>
+                  <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: !isEditing && (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined }}>
                     {isEditing ? (
                       <input
                         ref={editPriceRef}

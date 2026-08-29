@@ -1,5 +1,5 @@
 import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import ChatImage from '../ui/ChatImage';
@@ -22,6 +22,10 @@ import ProductSearch, { ProductSearchHandle } from '../orders/ProductSearch';
 import CodPaymentField from '../orders/CodPaymentField';
 import { todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
+import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
+import { mergeExtractedItems } from '../../lib/tomarLista';
+import { TomarListaActionBar } from '../chat/TomarListaActionBar';
+import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
 function renderText(text: string) {
@@ -43,11 +47,16 @@ interface Props {
   preNombre?: string;
   prePhone?: string;
   messages?: { text: string; direction: string; created_at?: string }[];
+  // "Tomar lista" from TicketModal (no order-item UI of its own): items already
+  // extracted+matched by AI, dropped straight into this brand-new order's draft.
+  prefillItems?: TomarListaItem[];
 }
 
-export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, prePhone, messages: initialMessages }: Props) {
+export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, prePhone, messages: initialMessages, prefillItems }: Props) {
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
   const { data: products = [] } = useProducts();
   const { data: employees = [] } = useEmployees();
   const createOrder = useCreateOrder();
@@ -63,9 +72,29 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [telefono] = useState(prePhone ?? '');
   const [direccion, setDireccion] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>(() => prefillItems?.length ? mergeExtractedItems([], prefillItems) : []);
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
+
+  // "Tomar lista" - see hooks/useTomarLista.ts.
+  const tomarLista = useTomarLista(ticketId);
+  const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
+
+  function handleProcesarTomarLista() {
+    tomarLista.mutation.mutate(undefined, {
+      onSuccess: (res: any) => {
+        const { items: extracted, unmatchedNames } = res.data;
+        tomarLista.clear();
+        if (unmatchedNames.length === 0) {
+          setItems((prev: any[]) => mergeExtractedItems(prev, extracted));
+          toast('Lista montada exitosamente');
+        } else {
+          setTomarListaResult({ items: extracted, unmatchedNames });
+        }
+      },
+      onError: (e: any) => toast(e.message ?? 'No se pudo procesar el texto con IA - intenta de nuevo', true),
+    });
+  }
 
   // Whole-form keyboard nav, same pattern/graph as DetallePedidoModal: nombre ->
   // dirección -> pago/domiciliario -> catálogo -> Cancelar/Registrar, so the
@@ -246,6 +275,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
           quantity_label: i.quantity_label || '',
           price: parseFloat(i.price) || 0,
           sort_order: idx,
+          ai_unmatched: !!i.ai_unmatched,
         })),
       });
       toast('Pedido registrado');
@@ -267,13 +297,13 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row', width: '100%',
-        maxWidth: hasChat ? 960 : 700,
+        maxWidth: hasChat ? 1040 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
       }}>
         {hasChat && (
-          <div style={{ width: 300, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}>
+          <div style={{ width: 380, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}>
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '10px 12px', fontWeight: 800, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Smartphone size={15} />
               <span style={{ flex: 1 }}>{preNombre || formatPhoneDisplay(telefono)}</span>
@@ -314,6 +344,17 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   <span>Bloquear<br />Link</span>
                 </button>
               )}
+              {ticketId && canTomarLista && (
+                <button
+                  className="hdr-ic-btn"
+                  title="Seleccionar mensajes del cliente para armar el pedido"
+                  onClick={() => tomarLista.toggle()}
+                  disabled={isPastDay}
+                >
+                  <ListChecks size={13} />
+                  <span>Tomar<br />lista</span>
+                </button>
+              )}
             </div>
             {convoData?.no_wpp_number && (
               <div style={{ background: 'var(--rc)', border: '1.5px solid var(--r)', borderRadius: 0, padding: '8px 12px', fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -335,65 +376,103 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                     </span>
                   </div>
                 )}
-                <div className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>
-                  {m.media_type === 'image' && <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
-                  {m.media_type === 'audio' && <div className="chat-bubble"><ChatAudio token={m.media_url} /></div>}
-                  {m.media_type === 'video' && <div className="chat-bubble"><ChatVideo token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
-                  {m.media_type === 'document' && <div className="chat-bubble"><ChatDocument token={m.media_url} filename={m.media_caption} caption={m.media_caption ? m.text : null} /></div>}
-                  {m.media_type === 'location' && <div className="chat-bubble"><ChatLocation url={m.media_url} label={m.text} /></div>}
-                  {!m.media_type && <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
-                  {(m.sent_at || m.created_at) && (
-                    <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
-                      {formatChatTimestamp(m.sent_at ?? m.created_at)}
-                      {m.direction === 'out' && m.wpp_message_id && (
-                        <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
+                {(() => {
+                  const bubbleContent = (
+                    <>
+                      {m.media_type === 'image' && <div className="chat-bubble"><ChatImage token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
+                      {m.media_type === 'audio' && <div className="chat-bubble"><ChatAudio token={m.media_url} /></div>}
+                      {m.media_type === 'video' && <div className="chat-bubble"><ChatVideo token={m.media_url} caption={m.media_caption ?? m.text} /></div>}
+                      {m.media_type === 'document' && <div className="chat-bubble"><ChatDocument token={m.media_url} filename={m.media_caption} caption={m.media_caption ? m.text : null} /></div>}
+                      {m.media_type === 'location' && <div className="chat-bubble"><ChatLocation url={m.media_url} label={m.text} /></div>}
+                      {!m.media_type && <div className="chat-bubble" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(m.text)}</div>}
+                      {(m.sent_at || m.created_at) && (
+                        <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
+                          {formatChatTimestamp(m.sent_at ?? m.created_at)}
+                          {m.direction === 'out' && m.wpp_message_id && (
+                            <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
+                          )}
+                        </div>
                       )}
+                    </>
+                  );
+                  return tomarLista.active && tomarLista.isEligible(m) ? (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, alignSelf: 'flex-start', maxWidth: '80%' }}>
+                      <input
+                        type="checkbox"
+                        checked={tomarLista.selectedIds.has(m.id)}
+                        onChange={() => tomarLista.toggleMsg(m.id)}
+                        style={{ marginTop: 8, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                      />
+                      <div className="chat-msg them" style={{ maxWidth: '100%' }}>{bubbleContent}</div>
                     </div>
-                  )}
-                </div>
+                  ) : (
+                    <div className={`chat-msg ${m.direction === 'out' ? 'us' : 'them'}`}>{bubbleContent}</div>
+                  );
+                })()}
                 </Fragment>
                 );
               })}
              </div>
             </div>
-            {/* Reply input */}
-            <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>
-              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickMedia} style={{ display: 'none' }} />
-              <button
-                title="Adjuntar foto, audio, video o documento"
-                onClick={() => chatFileInputRef.current?.click()}
-                disabled={sendMediaPending}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
-              >
-                <Paperclip size={17} />
-              </button>
-              <textarea
-                rows={2}
-                placeholder="Escribe un mensaje... (Enter para enviar)"
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                onKeyDown={handleKeyDown}
-                style={{
-                  flex: 1, resize: 'none', border: '1.5px solid var(--brd)',
-                  borderRadius: 10, padding: '7px 10px', fontSize: 13,
-                  fontFamily: 'var(--f)', background: '#fff', outline: 'none',
-                }}
+            {/* Reply input - replaced by the Tomar lista action bar while that
+                selection mode is active. */}
+            {tomarLista.active ? (
+              <TomarListaActionBar
+                count={tomarLista.selectedIds.size}
+                pending={tomarLista.mutation.isPending}
+                onCancel={() => tomarLista.clear()}
+                onProcess={handleProcesarTomarLista}
               />
-              <button
-                onClick={handleSend}
-                disabled={!replyText.trim() || replyMut.isPending}
-                style={{
-                  background: replyText.trim() ? 'var(--v)' : 'var(--gm)',
-                  border: 'none', borderRadius: 10, padding: '8px 10px',
-                  cursor: replyText.trim() ? 'pointer' : 'default',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background .15s',
-                }}
-              >
-                <Send size={16} color={replyText.trim() ? '#fff' : 'var(--gt)'} />
-              </button>
-            </div>
+            ) : (
+              <div style={{ background: '#F0F2F0', padding: '8px 10px', display: 'flex', gap: 6, alignItems: 'flex-end', borderTop: '1px solid #D0D8D0' }}>
+                <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickMedia} style={{ display: 'none' }} />
+                <button
+                  title="Adjuntar foto, audio, video o documento"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  disabled={sendMediaPending}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '8px 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                >
+                  <Paperclip size={17} />
+                </button>
+                <textarea
+                  rows={2}
+                  placeholder="Escribe un mensaje... (Enter para enviar)"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  style={{
+                    flex: 1, resize: 'none', border: '1.5px solid var(--brd)',
+                    borderRadius: 10, padding: '7px 10px', fontSize: 13,
+                    fontFamily: 'var(--f)', background: '#fff', outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={!replyText.trim() || replyMut.isPending}
+                  style={{
+                    background: replyText.trim() ? 'var(--v)' : 'var(--gm)',
+                    border: 'none', borderRadius: 10, padding: '8px 10px',
+                    cursor: replyText.trim() ? 'pointer' : 'default',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background .15s',
+                  }}
+                >
+                  <Send size={16} color={replyText.trim() ? '#fff' : 'var(--gt)'} />
+                </button>
+              </div>
+            )}
           </div>
+        )}
+        {tomarListaResult && (
+          <TomarListaResultModal
+            unmatchedNames={tomarListaResult.unmatchedNames}
+            eligibleOrders={[]}
+            onConfirm={() => {
+              setItems((prev: any[]) => mergeExtractedItems(prev, tomarListaResult.items));
+              setTomarListaResult(null);
+            }}
+            onCancel={() => setTomarListaResult(null)}
+          />
         )}
 
         <div className="mwin" style={{
