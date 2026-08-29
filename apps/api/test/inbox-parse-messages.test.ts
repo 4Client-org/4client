@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
 import { config } from '../src/config.js';
+import { clearDiscoveryCache } from '../src/services/ai/modelDiscovery.js';
 
 // Direct JWT signing (same pattern as cierre.test.ts's orgWithDirectToken) -
 // skips the real, rate-limited /auth/login route entirely since this file
@@ -16,6 +17,17 @@ function authHeader(token: string) {
 
 function groqBody(items: unknown) {
   return { choices: [{ message: { content: JSON.stringify({ items }) } }] };
+}
+
+// groq.ts now discovers its model list live before calling chat completions
+// (see modelDiscovery.ts) - every test that mocks a successful extraction
+// must answer the /models call too, not just /chat/completions.
+const groqModelsBody = { data: [{ id: 'openai/gpt-oss-20b', active: true, input_modalities: ['text'], output_modalities: ['text'] }] };
+function mockGroqSuccess(items: unknown) {
+  return vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+    if (String(url).includes('/models')) return { ok: true, status: 200, json: async () => groqModelsBody } as Response;
+    return { ok: true, status: 200, json: async () => groqBody(items) } as Response;
+  });
 }
 
 describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
@@ -82,6 +94,7 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
     delete (config as any).GROQ_API_KEY;
     delete (config as any).CEREBRAS_API_KEY;
     vi.restoreAllMocks();
+    clearDiscoveryCache();
   });
 
   afterEach(() => {
@@ -90,13 +103,10 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
 
   it('happy path: matched item gets the catalog price, unmatched item is flagged for review, never touches the DB', async () => {
     (config as any).GROQ_API_KEY = 'test-key';
-    vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true, status: 200,
-      json: async () => groqBody([
-        { product_name: 'tomate', quantity_label: '1 kg' },
-        { product_name: 'cebolla malla', quantity_label: '' },
-      ]),
-    } as Response);
+    mockGroqSuccess([
+      { product_name: 'tomate', quantity_label: '1 kg' },
+      { product_name: 'cebolla malla', quantity_label: '' },
+    ]);
 
     const beforeOrders = await app.prisma.order.count({ where: { org_id: orgId } });
 
@@ -165,10 +175,7 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
 
   it('role gate: admin and encargado allowed, domiciliario forbidden', async () => {
     (config as any).GROQ_API_KEY = 'test-key';
-    vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true, status: 200,
-      json: async () => groqBody([{ product_name: 'tomate', quantity_label: '' }]),
-    } as Response);
+    mockGroqSuccess([{ product_name: 'tomate', quantity_label: '' }]);
 
     const admin = await app.inject({
       method: 'POST', url: `/api/v1/inbox/${ticketId}/parse-messages`,

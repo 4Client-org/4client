@@ -14,11 +14,11 @@ interface Props {
 export function TomarListaActionBar({ count, pending, onCancel, onClearSelection, onProcess }: Props) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
-      borderTop: '1px solid rgba(0,0,0,.1)', background: '#EEF2FF', flexShrink: 0,
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px',
+      borderTop: '1px solid rgba(0,0,0,.1)', background: '#EEF2FF', flexShrink: 0, minWidth: 0,
     }}>
-      <ListChecks size={15} color="var(--v)" />
-      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1 }}>
+      <ListChecks size={15} color="var(--v)" style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1, minWidth: 'fit-content' }}>
         {count} seleccionado{count === 1 ? '' : 's'}
       </span>
       {count > 0 && (

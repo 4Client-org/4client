@@ -1054,7 +1054,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1140 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1220 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1063,8 +1063,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 380, background: '#ECE5DD', display: 'flex',
-            flexDirection: 'column', flexShrink: 0, minHeight: 0,
+            width: 460, background: '#ECE5DD', display: 'flex',
+            flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
           }}>
             {/* Chat header */}
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '12px 14px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -1074,7 +1074,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.8 }}>{formatPhoneDisplay(order.customer_phone)}</div>
               </div>
-              <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0, justifyContent: 'flex-end' }}>
                 <button
                   className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
