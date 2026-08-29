@@ -53,14 +53,21 @@ export async function generateFormLinkUrl(
 // contained (starts and ends with `*`) so it renders correctly.
 //
 // Sent as its OWN message, separate from the link (see webhook.ts/inbox.ts
-// callers) - a single message combining this notice + bank account + the link
-// made the whole block long enough that WhatsApp/mobile keyboards would sometimes
-// mangle it in transit, and it meant the client couldn't forward/copy just the
-// link on its own without carrying this whole notice along with it.
+// callers) - keeps the client able to forward/copy just the link on its own
+// without carrying this notice along with it.
+//
+// Shortened by explicit request - the account number used to sit right here,
+// directly under "nunca te pediremos datos bancarios", which read as
+// contradictory/scam-adjacent to a first-time customer (a "we'll never ask for
+// banking info" notice immediately followed by a bank account). Removed rather
+// than reworded - it was ALSO the only place in the whole app a client could see
+// that account number automatically, so a transferencia customer now has to ask
+// staff for it directly in chat instead. Flagged, not silently dropped: if that
+// gap turns out to matter, the natural place to reintroduce it is the order
+// confirmation message for payment_method === 'transfer', not back here.
 export function buildFormLinkWarningMessage(): string {
-  return '*Este link es solo para tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
-    + '\n*Válido por 24 horas.*'
-    + '\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
+  return '*Este link es solo para hacer tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
+    + '\n_Válido por 24 horas._';
 }
 
 // Sent as a THIRD message, right after the link itself (see callers) - the

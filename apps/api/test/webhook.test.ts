@@ -182,15 +182,13 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
     const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
 
-    // Welcome, then the notice/bank-account text, then the link ALONE as its own
-    // message, then a short follow-up nudge - split so the client can forward/
-    // copy just the link without dragging the notice along, and so no message
-    // risks getting too long.
+    // Welcome, then the safety notice, then the link ALONE as its own message,
+    // then a short follow-up nudge - split so the client can forward/copy just
+    // the link without dragging the notice along.
     expect(outbound).toHaveLength(4);
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].wpp_message_id).toBeTruthy();
-    expect(outbound[1].text).toContain('solo para tu pedido');
-    expect(outbound[1].text).toContain('Cuenta de ahorros');
+    expect(outbound[1].text).toContain('solo para hacer tu pedido');
     expect(outbound[1].text).not.toContain('http');
     expect(outbound[1].wpp_message_id).toBeTruthy();
     expect(outbound[1].failed_reason).toBeNull();
