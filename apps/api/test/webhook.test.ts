@@ -189,6 +189,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].wpp_message_id).toBeTruthy();
     expect(outbound[1].text).toContain('solo para hacer tu pedido');
+    expect(outbound[1].text).toContain('Ahorros Bancolombia');
     expect(outbound[1].text).not.toContain('http');
     expect(outbound[1].wpp_message_id).toBeTruthy();
     expect(outbound[1].failed_reason).toBeNull();

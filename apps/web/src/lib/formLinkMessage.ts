@@ -9,12 +9,11 @@
 // a second, independent message right after this one) - combining them into one
 // long message made it long enough to risk mangling in transit, and meant the
 // client couldn't forward/copy just the link without dragging this notice along.
-// Shortened by explicit request - ver el comentario en formLink.ts (versión
-// servidor) para el porqué: se quitó el número de cuenta, que quedaba justo
-// debajo de "nunca te pediremos datos bancarios" y leía contradictorio.
+// El número de cuenta se quitó brevemente de acá (ver historial) - vuelve por
+// pedido explícito, sin la línea de "válido por 24 horas".
 export function buildFormLinkWarningMessage(): string {
   return '*Este link es solo para hacer tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
-    + '\n_Válido por 24 horas._';
+    + '\nAhorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
 }
 
 // Sent as a THIRD message, right after the link itself (see callers). Mirrors
