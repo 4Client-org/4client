@@ -1,6 +1,5 @@
 import { config } from '../../config.js';
 import { extractWithGroq } from './groq.js';
-import { extractWithCerebras } from './cerebras.js';
 import { extractWithOpenRouter } from './openrouter.js';
 import type { Extractor, ExtractedItem } from './types.js';
 
@@ -13,14 +12,17 @@ import type { Extractor, ExtractedItem } from './types.js';
 // shared factory - most free-tier LLM APIs are OpenAI-compatible) plus one
 // more entry here.
 //
-// Gemini was in this list originally but got dropped (never shipped with a
-// real key) - Google now requires billing/a card on the account to issue an
-// API key at all, so it doesn't belong in a "free tier only" chain. Groq,
-// Cerebras and OpenRouter (its `:free`-suffixed models specifically) are all
-// confirmed genuinely free, no card required.
-const PROVIDERS: { name: string; envKey: 'GROQ_API_KEY' | 'CEREBRAS_API_KEY' | 'OPENROUTER_API_KEY'; extract: Extractor }[] = [
+// Gemini was dropped entirely (Google now requires billing/a card just to
+// issue a key). Cerebras is NOT currently in this chain either - its module
+// still exists and works (cerebras.ts), but every model on this account's
+// free trial now 402s "payment required" (confirmed live, not assumed) - see
+// cerebras.ts's comment for exactly what to try if that ever changes; adding
+// it back is uncommenting one line below. Groq and OpenRouter (its one
+// `:free` model that's actually still free AND doesn't require a card) are
+// both confirmed genuinely free with a real request as of this fix.
+const PROVIDERS: { name: string; envKey: 'GROQ_API_KEY' | 'OPENROUTER_API_KEY'; extract: Extractor }[] = [
   { name: 'groq', envKey: 'GROQ_API_KEY', extract: extractWithGroq },
-  { name: 'cerebras', envKey: 'CEREBRAS_API_KEY', extract: extractWithCerebras },
+  // { name: 'cerebras', envKey: 'CEREBRAS_API_KEY', extract: extractWithCerebras },
   { name: 'openrouter', envKey: 'OPENROUTER_API_KEY', extract: extractWithOpenRouter },
 ];
 
@@ -36,5 +38,5 @@ export async function extractOrderItems(text: string, catalogNames: string[]): P
     }
   }
   if (lastErr) throw new Error('Todos los proveedores de IA fallaron');
-  throw new Error('Ningún proveedor de IA está configurado (GROQ_API_KEY / CEREBRAS_API_KEY / OPENROUTER_API_KEY)');
+  throw new Error('Ningún proveedor de IA está configurado (GROQ_API_KEY / OPENROUTER_API_KEY)');
 }
