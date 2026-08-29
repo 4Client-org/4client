@@ -17,6 +17,12 @@ interface OpenAiCompatibleConfig {
   // takes effect without restarting anything beyond the normal deploy.
   getApiKey: () => string | undefined;
   extraHeaders?: () => Record<string, string>;
+  // Not every OpenAI-compatible provider's free model actually supports
+  // structured outputs (confirmed the hard way - see openrouter.ts's comment)
+  // - when a model 400s on `response_format`, this is set false and the
+  // extraction relies purely on the prompt's own "responde SOLO con JSON"
+  // instruction, still validated by the same zod schema afterward. Default true.
+  useJsonMode?: boolean;
 }
 
 export function createOpenAiCompatibleExtractor(cfg: OpenAiCompatibleConfig): Extractor {
@@ -36,7 +42,7 @@ export function createOpenAiCompatibleExtractor(cfg: OpenAiCompatibleConfig): Ex
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        response_format: { type: 'json_object' },
+        ...(cfg.useJsonMode !== false ? { response_format: { type: 'json_object' } } : {}),
         temperature: 0,
       }),
     });
