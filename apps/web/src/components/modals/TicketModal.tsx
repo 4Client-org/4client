@@ -222,7 +222,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: 940,
+        width: '100%', maxWidth: 1020,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
@@ -230,8 +230,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
         {/* ===== LEFT: CHAT ===== */}
         <div style={{
-          width: 390, background: '#ECE5DD', display: 'flex',
-          flexDirection: 'column', flexShrink: 0, minHeight: 0,
+          width: 470, background: '#ECE5DD', display: 'flex',
+          flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
           <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -244,7 +244,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 {ticket?.messages?.length != null && ` · ${ticket.messages.length} mensajes`}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0, justifyContent: 'flex-end' }}>
               <button
                 className="hdr-ic-btn"
                 title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}

@@ -1,23 +1,78 @@
 import { config } from '../../config.js';
-import { createOpenAiCompatibleExtractor } from './openaiCompatible.js';
+import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
+import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
 
-// OpenRouter's own free tier (no card): a rotating set of models suffixed
-// `:free` cost nothing to call. That roster changes CONSTANTLY - the original
-// pick here (meta-llama/llama-3.1-8b-instruct:free) was already retired by the
-// time this got tested for real ("This model is unavailable for free... use
-// this slug instead: meta-llama/llama-3.1-8b-instruct" - i.e. the paid one).
-// inclusionai/ling-3.0-flash-fin:free is confirmed working with a real request
-// as of the same test. If THIS one also gets retired, check openrouter.ai/models
-// (filter: price = free) for whatever's currently free before guessing again.
-const OPENROUTER_MODEL = 'inclusionai/ling-3.0-flash-fin:free';
+const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MODELS_URL = 'https://openrouter.ai/api/v1/models';
 
-export const extractWithOpenRouter = createOpenAiCompatibleExtractor({
-  label: 'OpenRouter',
-  url: 'https://openrouter.ai/api/v1/chat/completions',
-  model: OPENROUTER_MODEL,
-  getApiKey: () => config.OPENROUTER_API_KEY,
-  // This specific free model 400s on response_format:json_object ("does not
-  // support feature: structured-outputs") - confirmed live. Falls back to
-  // prompt-only JSON (still zod-validated afterward, same as every provider).
-  useJsonMode: false,
-});
+// OpenRouter's own /models response includes real pricing per model, so
+// "free" is actually detectable here (unlike Groq) - `:free`-suffixed id AND
+// $0 prompt/completion cost. That roster churns constantly (confirmed live:
+// the very first model picked for this, meta-llama/llama-3.1-8b-instruct:free,
+// was already retired from the free tier by the time this got tested for
+// real) - querying it live instead of hardcoding one id is the actual fix.
+// Excludes ids that are clearly narrow-purpose even though they qualify as
+// free (safety classifiers, code-only models) - best-effort by name, not
+// exhaustive; a bad pick here just fails its own request and falls through
+// to the next candidate like any other failure.
+const SKIP_PATTERN = /safety|guard|code|note-preview/i;
+
+async function getCandidates(): Promise<string[]> {
+  return discoverCandidateModels('openrouter', {
+    modelsUrl: MODELS_URL,
+    headers: () => ({ Authorization: `Bearer ${config.OPENROUTER_API_KEY}` }),
+    isEligible: (m) =>
+      typeof m.id === 'string' && m.id.endsWith(':free') &&
+      Number(m.pricing?.prompt) === 0 && Number(m.pricing?.completion) === 0 &&
+      !SKIP_PATTERN.test(m.id),
+    // Confirmed working with a real request (Aug 2026) - tried first if
+    // OpenRouter still lists it free.
+    preferredIds: ['inclusionai/ling-3.0-flash-fin:free'],
+    maxCandidates: 4,
+  });
+}
+
+async function callModel(model: string, text: string, catalogNames: string[]) {
+  const { system, user } = buildExtractionPrompt(text, catalogNames);
+  const res = await fetch(CHAT_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      // Deliberately NOT sending response_format - confirmed live that at
+      // least one free model 400s on it ("does not support feature:
+      // structured-outputs"), and there's no way to know in advance which of
+      // the ever-changing free roster does or doesn't support it. Prompt-only
+      // JSON, same as before, still validated by zod on the way out.
+      temperature: 0,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(`OpenRouter API failed (${res.status}) for model ${model}: ${err}`);
+  }
+  const data = await res.json() as { choices: [{ message: { content: string } }] };
+  const raw = JSON.parse(stripJsonFence(data.choices[0].message.content));
+  return extractedItemsSchema.parse(raw).items;
+}
+
+export const extractWithOpenRouter: Extractor = async (text, catalogNames) => {
+  const candidates = await getCandidates();
+  let lastErr: unknown;
+  for (const model of candidates) {
+    try {
+      return await callModel(model, text, catalogNames);
+    } catch (err) {
+      lastErr = err;
+      dropFromCache('openrouter', model);
+    }
+  }
+  throw lastErr ?? new Error('OpenRouter: ningún modelo gratis candidato funcionó');
+};
