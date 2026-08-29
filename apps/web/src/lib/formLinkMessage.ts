@@ -19,5 +19,5 @@ export function buildFormLinkWarningMessage(): string {
 // Sent as a THIRD message, right after the link itself (see callers). Mirrors
 // apps/api/src/lib/formLink.ts's buildFormLinkFollowUpMessage - keep both in sync.
 export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por medio del link. Recuerda que el monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
+  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
 }

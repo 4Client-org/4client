@@ -231,96 +231,68 @@ async function ingestMessage(
 
   const newUnread = (ticket.unread_count ?? 0) + 1;
 
-  // Auto-reply welcome message on first message of the day, immediately followed by
-  // the form-link message - the two used to be separate actions (welcome automatic,
-  // form link a manual "Formulario" button click) but a customer's very first
-  // contact now gets both without staff having to do anything.
+  // Auto-reply on first message of the day: welcome + safety notice combined into
+  // ONE message, then the link alone, then the follow-up nudge - three messages
+  // total, by explicit request (used to be four: welcome and the notice were two
+  // separate sends). A customer's very first contact gets all of this without
+  // staff having to do anything.
   //
   // Fire-and-forget relative to THIS webhook handler (not awaited below - Meta
-  // expects a fast 200 OK, not one held open behind 4 sequential message sends),
-  // but everything INSIDE this one async IIFE is now strictly sequential: welcome
-  // fully sent+recorded before the form-link sequence even starts. Previously the
-  // welcome send and the form-link sequence were two INDEPENDENT `.then()` chains
-  // started back to back - both real network calls to Meta with unpredictable
-  // latency, so which one actually landed on the client's phone first was a race,
-  // not the intended bienvenida -> aviso -> link -> seguimiento order. A failed
-  // welcome send still lets the form-link sequence run (own try/catch) - the more
-  // useful of the two shouldn't be skipped just because the greeting didn't land.
+  // expects a fast 200 OK, not one held open behind 3 sequential message sends),
+  // but everything INSIDE this one async IIFE runs strictly in order.
   if (isFirstMessageToday && org.welcome_message && !noWppNumber) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
       (async () => {
-        try {
-          const { messageId } = await provider.sendText(phone, org.welcome_message!);
-          const autoReply = await fastify.prisma.ticketMessage.create({
-            data: {
-              ticket_id: ticket.id,
-              direction: 'out',
-              text: org.welcome_message!,
-              wpp_message_id: messageId,
-              sent_at: new Date(),
-            },
+        const sendAndRecord = async (text: string) => {
+          const sent = await provider.sendText(phone, text);
+          const msg = await fastify.prisma.ticketMessage.create({
+            data: { ticket_id: ticket.id, direction: 'out', text, wpp_message_id: sent.messageId, sent_at: new Date() },
           });
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
-            message: { ...autoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: autoReply.sent_at.toISOString(), sent_by_name: null },
+            message: { ...msg, direction: 'out' as const, media_type: null as MediaType | null, sent_at: msg.sent_at.toISOString(), sent_by_name: null },
           });
-        } catch (err) {
-          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando auto-respuesta');
+        };
+        const recordFailed = async (text: string, err: unknown) => {
+          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando bienvenida/formulario automático');
           // Same reasoning as inbox.ts's /reply and public.ts's confirmations - a
-          // failed send (e.g. no active 24h WhatsApp session and no approved template)
-          // must leave a visible red-X message, not just a server log nobody sees.
-          const failedAutoReply = await fastify.prisma.ticketMessage.create({
+          // failed send (e.g. no active 24h WhatsApp session) must leave a visible
+          // red-X message, not just a server log nobody sees.
+          const failed = await fastify.prisma.ticketMessage.create({
             data: {
-              ticket_id: ticket.id, direction: 'out', text: org.welcome_message!,
+              ticket_id: ticket.id, direction: 'out', text,
               sent_at: new Date(), failed_reason: String((err as any)?.message ?? 'Error desconocido Meta API').slice(0, 255),
             },
           });
           fastify.io.to(`org:${org.id}`).emit('ticket:message', {
             ticketId: ticket.id,
-            message: { ...failedAutoReply, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedAutoReply.sent_at.toISOString(), sent_by_name: null },
+            message: { ...failed, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failed.sent_at.toISOString(), sent_by_name: null },
           });
+        };
+
+        const welcomeAndNotice = `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
+        try {
+          await sendAndRecord(welcomeAndNotice);
+        } catch (err) {
+          await recordFailed(welcomeAndNotice, err);
         }
 
         // No sentByUserId - this is an automated send, not a staff click. public.ts's
         // /submit already falls back to the first active admin/encargado when
         // attributing an order to a token with no sentByUserId, so an order placed
         // through this auto-sent link still gets a real name in "registered_by".
+        // Kept as its own try/catch, separate from the message above - a failed
+        // welcome+notice send must not skip the link, the actually useful part.
         try {
           const url = await generateFormLinkUrl(fastify, ticket.id, org.id);
-          // Three separate WhatsApp messages, sent in order, not one combined block -
-          // the notice+bank-account text alone is already long, and appending the
-          // link to it produced a single message long enough to risk mangling on
-          // some phones/keyboards; splitting also lets the client forward/copy just
-          // the link without dragging the notice along.
-          const sendAndRecord = async (text: string) => {
-            const sent = await provider.sendText(phone, text);
-            const msg = await fastify.prisma.ticketMessage.create({
-              data: { ticket_id: ticket.id, direction: 'out', text, wpp_message_id: sent.messageId, sent_at: new Date() },
-            });
-            fastify.io.to(`org:${org.id}`).emit('ticket:message', {
-              ticketId: ticket.id,
-              message: { ...msg, direction: 'out' as const, media_type: null as MediaType | null, sent_at: msg.sent_at.toISOString(), sent_by_name: null },
-            });
-          };
-          await sendAndRecord(buildFormLinkWarningMessage());
           await sendAndRecord(url);
           await sendAndRecord(buildFormLinkFollowUpMessage());
         } catch (err) {
-          fastify.log.error({ err, ticketId: ticket.id }, 'WPP: error enviando formulario automático');
           // url generation itself could theoretically throw (DB write failure) before
           // there's any text to record - still worth a visible failure marker with
           // whatever context is available, same red-X pattern as every other send.
-          const failedFormLink = await fastify.prisma.ticketMessage.create({
-            data: {
-              ticket_id: ticket.id, direction: 'out', text: 'Formulario de pedido',
-              sent_at: new Date(), failed_reason: String((err as any)?.message ?? 'Error desconocido Meta API').slice(0, 255),
-            },
-          });
-          fastify.io.to(`org:${org.id}`).emit('ticket:message', {
-            ticketId: ticket.id,
-            message: { ...failedFormLink, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failedFormLink.sent_at.toISOString(), sent_by_name: null },
-          });
+          await recordFailed('Formulario de pedido', err);
         }
       })();
     }
