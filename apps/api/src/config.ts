@@ -40,6 +40,7 @@ const envSchema = z.object({
   // is a no-op (throws a clear error, doesn't crash the server) with none set.
   GROQ_API_KEY:              z.string().optional(),
   CEREBRAS_API_KEY:          z.string().optional(),
+  OPENROUTER_API_KEY:        z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

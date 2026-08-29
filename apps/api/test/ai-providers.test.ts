@@ -7,11 +7,13 @@ import { extractOrderItems } from '../src/services/ai/index.js';
 const ORIGINAL = {
   groq: config.GROQ_API_KEY,
   cerebras: config.CEREBRAS_API_KEY,
+  openrouter: config.OPENROUTER_API_KEY,
 };
 
 function clearKeys() {
   delete (config as any).GROQ_API_KEY;
   delete (config as any).CEREBRAS_API_KEY;
+  delete (config as any).OPENROUTER_API_KEY;
 }
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
@@ -30,6 +32,7 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
   afterEach(() => {
     (config as any).GROQ_API_KEY = ORIGINAL.groq;
     (config as any).CEREBRAS_API_KEY = ORIGINAL.cerebras;
+    (config as any).OPENROUTER_API_KEY = ORIGINAL.openrouter;
   });
 
   it('no provider configured -> throws immediately without calling fetch', async () => {
@@ -61,9 +64,34 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it('only OpenRouter configured -> only its URL is called', async () => {
+    (config as any).OPENROUTER_API_KEY = 'test-key';
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      jsonResponse(groqStyleBody([{ product_name: 'cebolla', quantity_label: '1' }])),
+    );
+    const items = await extractOrderItems('quiero cebolla', ['Cebolla']);
+    expect(items).toEqual([{ product_name: 'cebolla', quantity_label: '1' }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((fetchSpy.mock.calls[0][0] as string)).toContain('openrouter.ai');
+  });
+
+  it('all three configured, Groq and Cerebras fail -> falls through to OpenRouter', async () => {
+    (config as any).GROQ_API_KEY = 'groq-key';
+    (config as any).CEREBRAS_API_KEY = 'cerebras-key';
+    (config as any).OPENROUTER_API_KEY = 'openrouter-key';
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      if (String(url).includes('openrouter.ai')) return jsonResponse(groqStyleBody([{ product_name: 'papa', quantity_label: '' }]));
+      return jsonResponse({}, false, 500);
+    });
+    const items = await extractOrderItems('quiero papa', ['Papa']);
+    expect(items).toEqual([{ product_name: 'papa', quantity_label: '' }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('all configured providers fail -> throws', async () => {
     (config as any).GROQ_API_KEY = 'groq-key';
     (config as any).CEREBRAS_API_KEY = 'cerebras-key';
+    (config as any).OPENROUTER_API_KEY = 'openrouter-key';
     vi.spyOn(global, 'fetch').mockResolvedValue(jsonResponse({}, false, 500));
     await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
   });
