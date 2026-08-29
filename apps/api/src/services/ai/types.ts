@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Shared by every provider in this directory (groq.ts, gemini.ts, cerebras.ts)
+// Shared by every provider in this directory (groq.ts, cerebras.ts)
 // so "Tomar lista" (routes/inbox.ts's /parse-messages) can swap/reorder/add
 // providers in index.ts without touching the prompt or the validation logic.
 

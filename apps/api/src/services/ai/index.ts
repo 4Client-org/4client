@@ -1,6 +1,5 @@
 import { config } from '../../config.js';
 import { extractWithGroq } from './groq.js';
-import { extractWithGemini } from './gemini.js';
 import { extractWithCerebras } from './cerebras.js';
 import type { Extractor, ExtractedItem } from './types.js';
 
@@ -9,9 +8,13 @@ import type { Extractor, ExtractedItem } from './types.js';
 // A deliberate prototype-phase decision (see the plan this was built from) -
 // switching to a single paid provider later is just trimming this array down
 // to one entry, nothing else in the codebase needs to change.
-const PROVIDERS: { name: string; envKey: 'GROQ_API_KEY' | 'GEMINI_API_KEY' | 'CEREBRAS_API_KEY'; extract: Extractor }[] = [
+//
+// Gemini was in this list originally but got dropped (never shipped with a
+// real key) - Google now requires billing/a card on the account to issue an
+// API key at all, so it doesn't belong in a "free tier only" chain. Groq and
+// Cerebras are both confirmed genuinely free, no card required.
+const PROVIDERS: { name: string; envKey: 'GROQ_API_KEY' | 'CEREBRAS_API_KEY'; extract: Extractor }[] = [
   { name: 'groq', envKey: 'GROQ_API_KEY', extract: extractWithGroq },
-  { name: 'gemini', envKey: 'GEMINI_API_KEY', extract: extractWithGemini },
   { name: 'cerebras', envKey: 'CEREBRAS_API_KEY', extract: extractWithCerebras },
 ];
 
@@ -27,5 +30,5 @@ export async function extractOrderItems(text: string, catalogNames: string[]): P
     }
   }
   if (lastErr) throw new Error('Todos los proveedores de IA fallaron');
-  throw new Error('Ningún proveedor de IA está configurado (GROQ_API_KEY / GEMINI_API_KEY / CEREBRAS_API_KEY)');
+  throw new Error('Ningún proveedor de IA está configurado (GROQ_API_KEY / CEREBRAS_API_KEY)');
 }
