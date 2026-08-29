@@ -1,0 +1,14 @@
+-- "Tomar lista" (routes/inbox.ts's /parse-messages): flags an order item the AI
+-- extracted from chat text but couldn't confidently match to a catalog product,
+-- separate from the pre-existing added_by_client (client-form) flag - see the
+-- comment on OrderItem.ai_unmatched in schema.prisma for the full rationale.
+--
+-- NOTE: `prisma migrate dev`'s auto-generated diff for this change also
+-- proposed `DROP INDEX "tickets_phone_trgm_idx"` - a false-positive drift
+-- detection unrelated to this change (that GIN trigram index, from migration
+-- 20260802050000_chat_search_trgm, isn't declared in schema.prisma via @@index
+-- since Prisma's schema DSL can't represent it, so migrate dev's diff treats
+-- it as "not part of the schema" and wants to drop it). Deliberately NOT
+-- included here - dropping it would silently remove a real search index this
+-- migration has nothing to do with.
+ALTER TABLE "order_items" ADD COLUMN     "ai_unmatched" BOOLEAN NOT NULL DEFAULT false;

@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -25,8 +25,20 @@ import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
+import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
+import { mergeExtractedItems } from '../../lib/tomarLista';
+import { TomarListaActionBar } from '../chat/TomarListaActionBar';
+import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
-interface Props { orderId: string; onClose: () => void; openCobro?: boolean; }
+interface Props {
+  orderId: string;
+  onClose: () => void;
+  openCobro?: boolean;
+  // "Tomar lista" (TicketModal has no order-item UI of its own): items already
+  // extracted+matched by AI, merged into this order's draft once on mount -
+  // see the prefillItems effect below.
+  prefillItems?: TomarListaItem[];
+}
 
 const COD_COLORS: Record<string, string> = {
   nuevo: '#94A3B8', preparando: '#F59E0B', listo: '#3B82F6',
@@ -78,7 +90,7 @@ function renderText(text: string) {
   });
 }
 
-export default function DetallePedidoModal({ orderId, onClose, openCobro }: Props) {
+export default function DetallePedidoModal({ orderId, onClose, openCobro, prefillItems }: Props) {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin';
@@ -296,6 +308,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         quantity_label: i.quantity_label ?? '',
         price: String(i.price ?? ''),
         added_by_client: !!i.added_by_client,
+        ai_unmatched: !!i.ai_unmatched,
       })));
     }
     // Read the choice straight off the order - NOT inferred by comparing
@@ -352,6 +365,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
               quantity_label: i.quantity_label ?? '',
               price: String(i.price ?? ''),
               added_by_client: true,
+              ai_unmatched: !!i.ai_unmatched,
             }));
           return missing.length > 0 ? [...prev, ...missing] : prev;
         });
@@ -472,6 +486,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
           price: parseFloat(i.price) || 0,
           sort_order: idx,
           added_by_client: !!i.added_by_client,
+          ai_unmatched: !!i.ai_unmatched,
         })),
       });
     },
@@ -672,6 +687,44 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   });
 
   function markDirty() { setIsDirty(true); }
+
+  // "Tomar lista" - see hooks/useTomarLista.ts. Chat is embedded right next to
+  // this order's own item list, so a successful extraction merges straight
+  // into `items` (no new-vs-existing-order popup needed here - TicketModal is
+  // the only caller that ever needs that, since it has no order of its own yet).
+  const canTomarLista = canManage;
+  const tomarLista = useTomarLista(order?.ticket_id);
+  const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
+
+  function handleProcesarTomarLista() {
+    tomarLista.mutation.mutate(undefined, {
+      onSuccess: (res: any) => {
+        const { items: extracted, unmatchedNames } = res.data;
+        tomarLista.clear();
+        if (unmatchedNames.length === 0) {
+          setItems((prev: any[]) => mergeExtractedItems(prev, extracted));
+          setCatalogDirty(true);
+          markDirty();
+          toast('Lista montada exitosamente');
+        } else {
+          setTomarListaResult({ items: extracted, unmatchedNames });
+        }
+      },
+      onError: (e: any) => toast(e.message ?? 'No se pudo procesar el texto con IA - intenta de nuevo', true),
+    });
+  }
+
+  // Applied once per modal open (not re-applied on a later order refresh) -
+  // came from TicketModal's "Tomar lista" when no order existed yet to merge
+  // into, so this is the freshly-created order that should receive them.
+  const prefillAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!order || !prefillItems?.length || prefillAppliedRef.current) return;
+    prefillAppliedRef.current = true;
+    setItems((prev: any[]) => mergeExtractedItems(prev, prefillItems));
+    setCatalogDirty(true);
+    markDirty();
+  }, [order, prefillItems]);
 
   // Fixed page WIDTH (thermal-receipt-style, 80mm), but the page HEIGHT below is
   // just the size of the first sheet - newPage() below adds more identically-sized
@@ -1001,7 +1054,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1060 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1140 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1010,7 +1063,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 300, background: '#ECE5DD', display: 'flex',
+            width: 380, background: '#ECE5DD', display: 'flex',
             flexDirection: 'column', flexShrink: 0, minHeight: 0,
           }}>
             {/* Chat header */}
@@ -1044,6 +1097,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
+                {canTomarLista && (
+                  <button
+                    className="hdr-ic-btn"
+                    title="Seleccionar mensajes del cliente para armar el pedido"
+                    onClick={() => tomarLista.toggle()}
+                    disabled={isPastDay}
+                  >
+                    <ListChecks size={13} />
+                    <span>Tomar<br />lista</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1073,7 +1137,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       </span>
                     </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                    {tomarLista.active && tomarLista.isEligible(msg) && (
+                      <input
+                        type="checkbox"
+                        checked={tomarLista.selectedIds.has(msg.id)}
+                        onChange={() => tomarLista.toggleMsg(msg.id)}
+                        style={{ marginTop: 8, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                      />
+                    )}
                     <div style={{
                       position: 'relative',
                       background: isOut ? '#DCF8C6' : '#fff',
@@ -1122,44 +1194,67 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
              </div>
             </div>
 
-            {/* Reply bar - visible to all roles */}
-            <div style={{
-              display: 'flex', gap: 6, padding: '8px 8px',
-              borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
-            }}>
-              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
-              <button
-                title="Adjuntar foto, audio, video o documento"
-                onClick={() => chatFileInputRef.current?.click()}
-                disabled={sendMediaPending}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
-              >
-                <Paperclip size={16} />
-              </button>
-              <textarea
-                placeholder="Responder... (Enter envía)"
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                onKeyDown={handleChatKeyDown}
-                rows={3}
-                style={{
-                  flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
-                  padding: '8px 10px', fontSize: 13, resize: 'none', fontFamily: 'inherit',
-                  background: '#fff', lineHeight: 1.4,
-                }}
+            {/* Reply bar - visible to all roles - replaced by the Tomar lista
+                action bar while that selection mode is active. */}
+            {tomarLista.active ? (
+              <TomarListaActionBar
+                count={tomarLista.selectedIds.size}
+                pending={tomarLista.mutation.isPending}
+                onCancel={() => tomarLista.clear()}
+                onProcess={handleProcesarTomarLista}
               />
-              <button
-                onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
-                disabled={!replyText.trim() || replyMut.isPending}
-                style={{
-                  background: 'var(--v)', color: '#fff', border: 'none',
-                  borderRadius: 8, padding: '0 10px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
-                }}>
-                <Send size={14} />
-              </button>
-            </div>
+            ) : (
+              <div style={{
+                display: 'flex', gap: 6, padding: '8px 8px',
+                borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
+              }}>
+                <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
+                <button
+                  title="Adjuntar foto, audio, video o documento"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  disabled={sendMediaPending}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                >
+                  <Paperclip size={16} />
+                </button>
+                <textarea
+                  placeholder="Responder... (Enter envía)"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={handleChatKeyDown}
+                  rows={3}
+                  style={{
+                    flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
+                    padding: '8px 10px', fontSize: 13, resize: 'none', fontFamily: 'inherit',
+                    background: '#fff', lineHeight: 1.4,
+                  }}
+                />
+                <button
+                  onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
+                  disabled={!replyText.trim() || replyMut.isPending}
+                  style={{
+                    background: 'var(--v)', color: '#fff', border: 'none',
+                    borderRadius: 8, padding: '0 10px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
+                  }}>
+                  <Send size={14} />
+                </button>
+              </div>
+            )}
           </div>
+        )}
+        {tomarListaResult && (
+          <TomarListaResultModal
+            unmatchedNames={tomarListaResult.unmatchedNames}
+            eligibleOrders={[]}
+            onConfirm={() => {
+              setItems((prev: any[]) => mergeExtractedItems(prev, tomarListaResult.items));
+              setCatalogDirty(true);
+              markDirty();
+              setTomarListaResult(null);
+            }}
+            onCancel={() => setTomarListaResult(null)}
+          />
         )}
 
         {/* ===== RIGHT: ORDER DETAIL ===== */}

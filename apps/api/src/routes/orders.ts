@@ -28,6 +28,11 @@ const orderItemSchema = z.object({
   // exposes a way to toggle it) - staff editing/saving an order must not silently
   // clear this provenance flag on items the client themselves added/changed earlier.
   added_by_client: z.boolean().optional().default(false),
+  // Round-tripped from GET /orders/:id, same as added_by_client above - set by
+  // routes/inbox.ts's /parse-messages ("Tomar lista") output when the AI
+  // couldn't confidently match this item to a catalog product, never toggled
+  // directly by staff either.
+  ai_unmatched:    z.boolean().optional().default(false),
 });
 
 const createOrderSchema = z.object({
