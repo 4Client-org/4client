@@ -80,7 +80,6 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
 
   beforeEach(() => {
     delete (config as any).GROQ_API_KEY;
-    delete (config as any).GEMINI_API_KEY;
     delete (config as any).CEREBRAS_API_KEY;
     vi.restoreAllMocks();
   });

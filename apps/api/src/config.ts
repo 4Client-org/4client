@@ -39,7 +39,6 @@ const envSchema = z.object({
   // any one of these is production-grade on its own. All optional so the feature
   // is a no-op (throws a clear error, doesn't crash the server) with none set.
   GROQ_API_KEY:              z.string().optional(),
-  GEMINI_API_KEY:            z.string().optional(),
   CEREBRAS_API_KEY:          z.string().optional(),
 });
 

@@ -6,13 +6,11 @@ import { extractOrderItems } from '../src/services/ai/index.js';
 // directly per case instead of needing separate env-var-injection infra.
 const ORIGINAL = {
   groq: config.GROQ_API_KEY,
-  gemini: config.GEMINI_API_KEY,
   cerebras: config.CEREBRAS_API_KEY,
 };
 
 function clearKeys() {
   delete (config as any).GROQ_API_KEY;
-  delete (config as any).GEMINI_API_KEY;
   delete (config as any).CEREBRAS_API_KEY;
 }
 
@@ -20,8 +18,8 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
   return { ok, status, json: async () => body, text: async () => JSON.stringify(body) } as Response;
 }
 
+// Both providers are OpenAI-compatible chat completions - same response shape.
 const groqStyleBody = (items: unknown) => ({ choices: [{ message: { content: JSON.stringify({ items }) } }] });
-const geminiStyleBody = (items: unknown) => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items }) }] } }] });
 
 describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
   beforeEach(() => {
@@ -31,7 +29,6 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
 
   afterEach(() => {
     (config as any).GROQ_API_KEY = ORIGINAL.groq;
-    (config as any).GEMINI_API_KEY = ORIGINAL.gemini;
     (config as any).CEREBRAS_API_KEY = ORIGINAL.cerebras;
   });
 
@@ -52,12 +49,12 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect((fetchSpy.mock.calls[0][0] as string)).toContain('cerebras.ai');
   });
 
-  it('Groq configured and fails -> falls through to Gemini automatically', async () => {
+  it('Groq configured and fails -> falls through to Cerebras automatically', async () => {
     (config as any).GROQ_API_KEY = 'groq-key';
-    (config as any).GEMINI_API_KEY = 'gemini-key';
+    (config as any).CEREBRAS_API_KEY = 'cerebras-key';
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
       if (String(url).includes('groq.com')) return jsonResponse({}, false, 500);
-      return jsonResponse(geminiStyleBody([{ product_name: 'tomate', quantity_label: '' }]));
+      return jsonResponse(groqStyleBody([{ product_name: 'tomate', quantity_label: '' }]));
     });
     const items = await extractOrderItems('quiero tomate', ['Tomate']);
     expect(items).toEqual([{ product_name: 'tomate', quantity_label: '' }]);
@@ -66,7 +63,6 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
 
   it('all configured providers fail -> throws', async () => {
     (config as any).GROQ_API_KEY = 'groq-key';
-    (config as any).GEMINI_API_KEY = 'gemini-key';
     (config as any).CEREBRAS_API_KEY = 'cerebras-key';
     vi.spyOn(global, 'fetch').mockResolvedValue(jsonResponse({}, false, 500));
     await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
