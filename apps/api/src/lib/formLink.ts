@@ -52,15 +52,16 @@ export async function generateFormLinkUrl(
 // side of the text (not markdown's **) - each bold paragraph below is self-
 // contained (starts and ends with `*`) so it renders correctly.
 //
-// Sent as its OWN message, separate from the link (see webhook.ts/inbox.ts
-// callers) - a single message combining this notice + bank account + the link
-// made the whole block long enough that WhatsApp/mobile keyboards would sometimes
-// mangle it in transit, and it meant the client couldn't forward/copy just the
-// link on its own without carrying this whole notice along with it.
+// Sent as its OWN message, separate from both the welcome message before it and
+// the link after it (see webhook.ts/inbox.ts callers) - keeps the client able to
+// forward/copy just the link on its own without carrying this notice along.
+//
+// The account number briefly got removed from here entirely (it read as
+// contradictory right under "nunca te pediremos datos bancarios") - reverted by
+// explicit request: it stays, just without the "válido por 24 horas" line.
 export function buildFormLinkWarningMessage(): string {
-  return '*Este link es solo para tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
-    + '\n*Válido por 24 horas.*'
-    + '\nCuenta de ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
+  return '*Este link es solo para hacer tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
+    + '\nAhorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
 }
 
 // Sent as a THIRD message, right after the link itself (see callers) - the
@@ -68,5 +69,5 @@ export function buildFormLinkWarningMessage(): string {
 // above), and this is a separate, short nudge rather than something to append to
 // either of them.
 export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por medio del link. Recuerda que el monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
+  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
 }

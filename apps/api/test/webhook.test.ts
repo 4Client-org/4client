@@ -157,7 +157,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     };
   }
 
-  it('first message of the day sends the welcome text AND, right after, TWO form-link messages (notice, then the bare link) - all captured with a real wpp_message_id, not just the welcome alone', async () => {
+  it('first message of the day sends welcome+notice combined into ONE message, then the bare link, then the follow-up nudge - three messages total, all captured with a real wpp_message_id', async () => {
     const org = await createTestOrg(app.prisma);
     const wppPhoneId = `test-phone-${randomUUID()}`;
     await app.prisma.organization.update({
@@ -182,24 +182,22 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
     const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
 
-    // Welcome, then the notice/bank-account text, then the link ALONE as its own
-    // message, then a short follow-up nudge - split so the client can forward/
-    // copy just the link without dragging the notice along, and so no message
-    // risks getting too long.
-    expect(outbound).toHaveLength(4);
+    // Welcome+notice combined into ONE message, then the link ALONE as its own
+    // message (so the client can forward/copy just the link), then a short
+    // follow-up nudge.
+    expect(outbound).toHaveLength(3);
     expect(outbound[0].text).toContain('bienvenido');
+    expect(outbound[0].text).toContain('solo para hacer tu pedido');
+    expect(outbound[0].text).toContain('Ahorros Bancolombia');
+    expect(outbound[0].text).not.toContain('http');
     expect(outbound[0].wpp_message_id).toBeTruthy();
-    expect(outbound[1].text).toContain('solo para tu pedido');
-    expect(outbound[1].text).toContain('Cuenta de ahorros');
-    expect(outbound[1].text).not.toContain('http');
+    expect(outbound[0].failed_reason).toBeNull();
+    expect(outbound[1].text).toMatch(/^https?:\/\//);
     expect(outbound[1].wpp_message_id).toBeTruthy();
     expect(outbound[1].failed_reason).toBeNull();
-    expect(outbound[2].text).toMatch(/^https?:\/\//);
+    expect(outbound[2].text).toContain('Diligencia por favor el pedido');
     expect(outbound[2].wpp_message_id).toBeTruthy();
     expect(outbound[2].failed_reason).toBeNull();
-    expect(outbound[3].text).toContain('Diligencia por favor el pedido');
-    expect(outbound[3].wpp_message_id).toBeTruthy();
-    expect(outbound[3].failed_reason).toBeNull();
 
     // Proves generateFormLinkUrl actually ran (a live, checkable link), not just a
     // static text blob that happens to contain the right words.
