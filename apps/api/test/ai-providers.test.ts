@@ -79,6 +79,16 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
   });
 
+  it('a provider wrapping its JSON in a markdown code fence still parses (confirmed live from a real free model)', async () => {
+    (config as any).OPENROUTER_API_KEY = 'test-key';
+    const fenced = '```json\n' + JSON.stringify({ items: [{ product_name: 'pepino', quantity_label: '' }] }) + '\n```';
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      jsonResponse({ choices: [{ message: { content: fenced } }] }),
+    );
+    const items = await extractOrderItems('quiero pepino', ['Pepino']);
+    expect(items).toEqual([{ product_name: 'pepino', quantity_label: '' }]);
+  });
+
   it('a provider returning JSON that fails the schema is treated as a failure, not a crash', async () => {
     (config as any).GROQ_API_KEY = 'groq-key';
     (config as any).OPENROUTER_API_KEY = 'openrouter-key';

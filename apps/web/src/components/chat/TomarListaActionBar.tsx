@@ -4,13 +4,14 @@ interface Props {
   count: number;
   pending: boolean;
   onCancel: () => void;
+  onClearSelection: () => void;
   onProcess: () => void;
 }
 
 // Replaces the normal reply bar while "Tomar lista" mode is active (see
 // TicketModal/NuevoPedidoModal/DetallePedidoModal) - staff is selecting
 // messages, not typing a reply, so the two controls never need to coexist.
-export function TomarListaActionBar({ count, pending, onCancel, onProcess }: Props) {
+export function TomarListaActionBar({ count, pending, onCancel, onClearSelection, onProcess }: Props) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
@@ -20,6 +21,18 @@ export function TomarListaActionBar({ count, pending, onCancel, onProcess }: Pro
       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1 }}>
         {count} seleccionado{count === 1 ? '' : 's'}
       </span>
+      {count > 0 && (
+        // Clears the selection WITHOUT leaving Tomar lista mode - "me
+        // equivoqué, no necesito todas" shouldn't force re-clicking the header
+        // button to start over (that's what Cancelar, to the right, is for).
+        <button
+          onClick={onClearSelection}
+          disabled={pending}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', fontSize: 12, fontWeight: 600, padding: '4px 8px', textDecoration: 'underline' }}
+        >
+          Deseleccionar todo
+        </button>
+      )}
       <button
         onClick={onCancel}
         disabled={pending}

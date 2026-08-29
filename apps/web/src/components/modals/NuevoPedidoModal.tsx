@@ -396,11 +396,15 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                     </>
                   );
                   return tomarLista.active && tomarLista.isEligible(m) ? (
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, alignSelf: 'flex-start', maxWidth: '80%' }}>
+                    <div
+                      style={{ display: 'flex', alignItems: 'flex-start', gap: 6, alignSelf: 'flex-start', maxWidth: '80%', cursor: 'pointer' }}
+                      onClick={() => tomarLista.toggleMsg(m.id)}
+                    >
                       <input
                         type="checkbox"
                         checked={tomarLista.selectedIds.has(m.id)}
                         onChange={() => tomarLista.toggleMsg(m.id)}
+                        onClick={(e) => e.stopPropagation()}
                         style={{ marginTop: 8, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
                       />
                       <div className="chat-msg them" style={{ maxWidth: '100%' }}>{bubbleContent}</div>
@@ -421,6 +425,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 count={tomarLista.selectedIds.size}
                 pending={tomarLista.mutation.isPending}
                 onCancel={() => tomarLista.clear()}
+                onClearSelection={() => tomarLista.clearSelection()}
                 onProcess={handleProcesarTomarLista}
               />
             ) : (
