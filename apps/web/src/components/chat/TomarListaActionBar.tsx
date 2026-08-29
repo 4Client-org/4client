@@ -21,18 +21,24 @@ export function TomarListaActionBar({ count, pending, onCancel, onClearSelection
       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1, minWidth: 'fit-content' }}>
         {count} seleccionado{count === 1 ? '' : 's'}
       </span>
-      {count > 0 && (
-        // Clears the selection WITHOUT leaving Tomar lista mode - "me
-        // equivoqué, no necesito todas" shouldn't force re-clicking the header
-        // button to start over (that's what Cancelar, to the right, is for).
-        <button
-          onClick={onClearSelection}
-          disabled={pending}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', fontSize: 12, fontWeight: 600, padding: '4px 8px', textDecoration: 'underline' }}
-        >
-          Deseleccionar todo
-        </button>
-      )}
+      {/* Clears the selection WITHOUT leaving Tomar lista mode - "me equivoqué,
+          no necesito todas" shouldn't force re-clicking the header button to
+          start over (that's what Cancelar, to the right, does instead).
+          Always rendered (never conditionally removed) - Cancelar/Procesar con
+          IA must stay in the exact same spot regardless of selection count,
+          not shift sideways every time this button pops in/out. */}
+      <button
+        onClick={onClearSelection}
+        disabled={pending || count === 0}
+        style={{
+          background: 'none', border: 'none', fontSize: 12, fontWeight: 600, padding: '4px 8px',
+          color: 'var(--v)', textDecoration: 'underline',
+          cursor: count === 0 ? 'default' : 'pointer',
+          visibility: count === 0 ? 'hidden' : 'visible',
+        }}
+      >
+        Deseleccionar todo
+      </button>
       <button
         onClick={onCancel}
         disabled={pending}
