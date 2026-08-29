@@ -41,6 +41,12 @@ export function useTomarLista(ticketId: string | undefined | null) {
     setSelectedIds(new Set());
   }, []);
 
+  // Unlike clear() above, stays IN selection mode - for "me equivoqué,
+  // deselecciono todo" without having to re-click "Tomar lista" to start over.
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
   const toggleMsg = useCallback((id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -59,5 +65,5 @@ export function useTomarLista(ticketId: string | undefined | null) {
     }),
   });
 
-  return { active, toggle, clear, selectedIds, toggleMsg, isEligible, mutation };
+  return { active, toggle, clear, clearSelection, selectedIds, toggleMsg, isEligible, mutation };
 }

@@ -20,6 +20,15 @@ export const extractedItemsSchema = z.object({
   })),
 });
 
+// Smaller/free models routinely ignore "no agregues texto fuera del JSON" and
+// wrap their answer in a markdown code fence anyway (confirmed live: OpenRouter's
+// inclusionai/ling-3.0-flash-fin does this often enough to matter) - JSON.parse
+// chokes on the ``` before/after the actual object. Strips a leading ```json /
+// ``` and a trailing ``` if present; a no-op on already-clean JSON.
+export function stripJsonFence(text: string): string {
+  return text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+}
+
 // Spanish system prompt shared by every provider - same wording everywhere so
 // swapping providers never silently changes extraction quality by accident.
 // catalogNames is passed as a hint, not a hard constraint: matchProduct.ts

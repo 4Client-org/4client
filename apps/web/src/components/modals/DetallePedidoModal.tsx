@@ -1152,9 +1152,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
+                      cursor: tomarLista.active && tomarLista.isEligible(msg) ? 'pointer' : undefined,
                     }}
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
-                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
+                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}
+                      onClick={() => { if (tomarLista.active && tomarLista.isEligible(msg)) tomarLista.toggleMsg(msg.id); }}>
                       {isOut && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
@@ -1173,7 +1175,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                       {hoveredMsgId === msg.id && (
                         <button
                           title="Reenviar a otro chat"
-                          onClick={() => setForwardMsg(msg)}
+                          onClick={(e) => { e.stopPropagation(); setForwardMsg(msg); }}
                           style={{
                             position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
                             width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
@@ -1201,6 +1203,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 count={tomarLista.selectedIds.size}
                 pending={tomarLista.mutation.isPending}
                 onCancel={() => tomarLista.clear()}
+                onClearSelection={() => tomarLista.clearSelection()}
                 onProcess={handleProcesarTomarLista}
               />
             ) : (

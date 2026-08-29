@@ -1,4 +1,4 @@
-import { buildExtractionPrompt, extractedItemsSchema, type Extractor } from './types.js';
+import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
 
 // Groq, Cerebras, OpenRouter (and most other free-tier LLM APIs) all speak the
 // same OpenAI-compatible chat completions shape - one request builder + one
@@ -53,7 +53,7 @@ export function createOpenAiCompatibleExtractor(cfg: OpenAiCompatibleConfig): Ex
     }
 
     const data = await res.json() as { choices: [{ message: { content: string } }] };
-    const raw = JSON.parse(data.choices[0].message.content);
+    const raw = JSON.parse(stripJsonFence(data.choices[0].message.content));
     const parsed = extractedItemsSchema.parse(raw);
     return parsed.items;
   };
