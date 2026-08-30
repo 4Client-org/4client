@@ -14,25 +14,31 @@ interface Props {
 export function TomarListaActionBar({ count, pending, onCancel, onClearSelection, onProcess }: Props) {
   return (
     <div style={{
-      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px',
+      display: 'flex', flexWrap: 'nowrap', alignItems: 'center', gap: 8, padding: '8px 10px',
       borderTop: '1px solid rgba(0,0,0,.1)', background: '#EEF2FF', flexShrink: 0, minWidth: 0,
     }}>
       <ListChecks size={15} color="var(--v)" style={{ flexShrink: 0 }} />
-      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1, minWidth: 'fit-content' }}>
+      {/* flex:1 + minWidth:0 so THIS is what shrinks/truncates if the panel is
+          ever too narrow for everything - the buttons to its right (all
+          flexShrink:0) must never wrap to a second line or get squeezed. */}
+      <span style={{
+        fontSize: 12, fontWeight: 700, color: 'var(--n)', flex: 1, minWidth: 0,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
         {count} seleccionado{count === 1 ? '' : 's'}
       </span>
       {/* Clears the selection WITHOUT leaving Tomar lista mode - "me equivoqué,
           no necesito todas" shouldn't force re-clicking the header button to
-          start over (that's what Cancelar, to the right, does instead).
-          Always rendered (never conditionally removed) - Cancelar/Procesar con
-          IA must stay in the exact same spot regardless of selection count,
-          not shift sideways every time this button pops in/out. */}
+          start over (that's what Cancelar, to its right, does instead).
+          Always rendered (never conditionally removed) - Cancelar/Montar lista
+          must stay in the exact same spot regardless of selection count, not
+          shift sideways every time this button pops in/out. */}
       <button
         onClick={onClearSelection}
         disabled={pending || count === 0}
         style={{
           background: 'none', border: 'none', fontSize: 12, fontWeight: 600, padding: '4px 8px',
-          color: 'var(--v)', textDecoration: 'underline',
+          color: 'var(--v)', textDecoration: 'underline', flexShrink: 0, whiteSpace: 'nowrap',
           cursor: count === 0 ? 'default' : 'pointer',
           visibility: count === 0 ? 'hidden' : 'visible',
         }}
@@ -42,7 +48,7 @@ export function TomarListaActionBar({ count, pending, onCancel, onClearSelection
       <button
         onClick={onCancel}
         disabled={pending}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, padding: '4px 8px' }}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, padding: '4px 8px', flexShrink: 0, whiteSpace: 'nowrap' }}
       >
         <X size={13} /> Cancelar
       </button>
@@ -52,10 +58,10 @@ export function TomarListaActionBar({ count, pending, onCancel, onClearSelection
         style={{
           background: 'var(--v)', color: '#fff', border: 'none', borderRadius: 8,
           padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-          opacity: count === 0 || pending ? 0.6 : 1,
+          opacity: count === 0 || pending ? 0.6 : 1, flexShrink: 0, whiteSpace: 'nowrap',
         }}
       >
-        {pending ? 'Procesando...' : 'Procesar con IA'}
+        {pending ? 'Montando...' : 'Montar lista'}
       </button>
     </div>
   );
