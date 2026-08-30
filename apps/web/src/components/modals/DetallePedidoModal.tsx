@@ -720,6 +720,24 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   const tomarLista = useTomarLista(order?.ticket_id);
   const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
 
+  // The header button that TOGGLES Tomar lista is already disabled once
+  // isPastDay (computed inline here, not read from the `const isPastDay`
+  // further down - THIS hook must run unconditionally on every render, same
+  // as every other hook in this component, and that one is declared AFTER
+  // the `if (isLoading || !order) return (...)` guard below. A hook placed
+  // after a conditional return fires on some renders and not others (order
+  // still loading vs loaded) - React's Rules of Hooks violation, and exactly
+  // what caused a real "página en blanco" crash (React error #310, "Rendered
+  // more hooks than during the previous render") on every single order open
+  // once this effect was added there instead of here) - covers cierre
+  // happening WHILE staff is already mid-selection, kicking them out the
+  // same way every other control on the day freezes instead of leaving
+  // "Montar lista" clickable.
+  useEffect(() => {
+    const pastDayNow = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
+    if (pastDayNow && tomarLista.active) tomarLista.clear();
+  }, [orderFecha, diaCerrado, tomarLista.active]);
+
   function handleProcesarTomarLista() {
     tomarLista.mutation.mutate(undefined, {
       onSuccess: (res: any) => {
@@ -1034,14 +1052,6 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // gets closed early (cierre.ts only allows closing today, so a closed diaCerrado
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
-
-  // The header button that TOGGLES Tomar lista is already disabled once
-  // isPastDay - this covers cierre happening WHILE staff is already
-  // mid-selection, kicking them out the same way every other control on the
-  // day freezes instead of leaving "Montar lista" clickable.
-  useEffect(() => {
-    if (isPastDay && tomarLista.active) tomarLista.clear();
-  }, [isPastDay, tomarLista.active]);
 
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
   // Same signal items already give per-row via added_by_client - the
