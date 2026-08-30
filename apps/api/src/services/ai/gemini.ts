@@ -1,6 +1,6 @@
 import { config } from '../../config.js';
 import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
-import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
+import { discoverCandidateModels, dropFromCache, isPermanentModelError } from './modelDiscovery.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -78,8 +78,10 @@ async function callModel(modelName: string, text: string, catalogNames: string[]
     }),
   });
   if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`Gemini API failed (${res.status}) for model ${modelName}: ${err}`);
+    const body = await res.text().catch(() => '');
+    const err = new Error(`Gemini API failed (${res.status}) for model ${modelName}: ${body}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
   }
   const data = await res.json() as { candidates: [{ content: { parts: [{ text: string }] } }] };
   const raw = JSON.parse(stripJsonFence(data.candidates[0].content.parts[0].text));
@@ -94,7 +96,8 @@ export const extractWithGemini: Extractor = async (text, catalogNames) => {
       return await callModel(model, text, catalogNames);
     } catch (err) {
       lastErr = err;
-      dropFromCache('gemini', model);
+      console.error(`[tomar-lista] gemini: candidato ${model} falló:`, err);
+      if (isPermanentModelError(err)) dropFromCache('gemini', model);
     }
   }
   throw lastErr ?? new Error('Gemini: ningún modelo candidato funcionó');
