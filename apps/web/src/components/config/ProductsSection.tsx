@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Check, X, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, Check, X, ChevronDown, ChevronRight, Search, Download, Upload } from 'lucide-react';
 import { sortCategoryEntries } from '../../lib/categoryOrder';
+import { downloadProductsExcel, parseProductsExcelFile } from '../../lib/productExcel';
 import { api } from '../../lib/api';
 import { toast } from '../ui/Toast';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -85,6 +86,48 @@ export default function ProductsSection() {
     },
     onError: (e: any) => { setConfirmDelete(null); toast(e.message, true); },
   });
+
+  // Excel round-trip (func. 2) - descargar usa los `products` ya en caché, sin
+  // fetch nuevo; subir parsea el archivo en el navegador (lib/productExcel.ts,
+  // sin librería nueva en el backend) y solo envía {id, price_per_unit} al
+  // endpoint nuevo - ver PATCH /products/bulk-price.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingExcel, setUploadingExcel] = useState(false);
+
+  const bulkPrice = useMutation({
+    mutationFn: (updates: { id: string; price_per_unit: number }[]) =>
+      api.patch<{ data: { updated: number; notFound: string[] } }>('/products/bulk-price', { updates }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['products'] });
+      const { updated, notFound } = res.data;
+      toast(
+        notFound.length > 0
+          ? `${updated} precio${updated === 1 ? '' : 's'} actualizado${updated === 1 ? '' : 's'} - ${notFound.length} ID no encontrado${notFound.length === 1 ? '' : 's'}`
+          : `${updated} precio${updated === 1 ? '' : 's'} actualizado${updated === 1 ? '' : 's'}`
+      );
+    },
+    onError: (e: any) => toast(e.message, true),
+    onSettled: () => setUploadingExcel(false),
+  });
+
+  async function handleExcelUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same filename later
+    if (!file) return;
+    setUploadingExcel(true);
+    try {
+      const { updates, skipped } = await parseProductsExcelFile(file);
+      if (updates.length === 0) {
+        setUploadingExcel(false);
+        return toast('Ningún precio válido para actualizar en ese archivo', true);
+      }
+      if (skipped > 0) toast(`${skipped} fila${skipped === 1 ? '' : 's'} del Excel se ignoraron (ID o precio inválido)`, true);
+      bulkPrice.mutate(updates);
+    } catch {
+      setUploadingExcel(false);
+      toast('No se pudo leer ese archivo - ¿es un .xlsx válido?', true);
+    }
+  }
 
   function openCreate() {
     setEditingId('__new__');
@@ -313,6 +356,15 @@ export default function ProductsSection() {
               style={{ paddingLeft: 32, width: 220 }}
             />
           </div>
+          <input ref={fileInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleExcelUpload} />
+          <button className="bsec" title="Descargar el catálogo completo como Excel para editar precios fuera de línea"
+            onClick={() => downloadProductsExcel(products as any[])} disabled={(products as any[]).length === 0}>
+            <Download size={14} /> Excel
+          </button>
+          <button className="bsec" title="Subir un Excel descargado de aquí con precios actualizados"
+            onClick={() => fileInputRef.current?.click()} disabled={uploadingExcel || bulkPrice.isPending}>
+            <Upload size={14} /> {uploadingExcel || bulkPrice.isPending ? 'Subiendo...' : 'Subir precios'}
+          </button>
           <button className="bnew" onClick={openCreate} disabled={editingId === '__new__'}>
             <Plus size={14} /> Nuevo producto
           </button>
