@@ -133,8 +133,8 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
   });
 
   it('dedupes duplicate mentions of the same product WITHIN one extraction (case-insensitive), keeping the first quantity_label', async () => {
-    (config as any).GROQ_API_KEY = 'test-key';
-    mockGroqSuccess([
+    (config as any).GEMINI_API_KEY = 'test-key';
+    mockGeminiSuccess([
       { product_name: 'tomate', quantity_label: '1 kg' },
       { product_name: 'Tomate', quantity_label: '2 kg' }, // same product, different casing, mentioned twice
       { product_name: 'cebolla malla', quantity_label: '' },
