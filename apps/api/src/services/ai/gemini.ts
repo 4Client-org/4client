@@ -62,7 +62,19 @@ async function callModel(modelName: string, text: string, catalogNames: string[]
       // schema route needs its own OBJECT/ARRAY-typed definition that hasn't
       // been tested against a real key yet; add it once this path is
       // confirmed working, not before).
-      generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+      //
+      // thinkingConfig.thinkingBudget: 1 - Gemini's "thinking" models spend a
+      // large chunk of their output budget on internal reasoning before ever
+      // writing the actual answer (confirmed live: a small 4-item extraction
+      // used 566 "thought" tokens vs ~60 real ones, ~11s total; a 24-item one
+      // used 1339 thought tokens, ~7.7s). Pure JSON extraction against a
+      // known catalog doesn't need multi-step reasoning - budget 1 (not 0,
+      // which this model rejects with a 400) eliminates virtually all of it:
+      // same 24-item test dropped to ~6.3s and roughly half the total tokens,
+      // with identical output. Some fallback candidates may not support this
+      // field at all and 400 on it - that's fine, same as any other
+      // candidate failure, falls through to the next one.
+      generationConfig: { responseMimeType: 'application/json', temperature: 0, thinkingConfig: { thinkingBudget: 1 } },
     }),
   });
   if (!res.ok) {
