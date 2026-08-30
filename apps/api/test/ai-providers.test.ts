@@ -90,6 +90,36 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3); // 1 models + 2 chat attempts
   });
 
+  it('a TRANSIENT failure (503) falls through for this request but does NOT blacklist the model - the next request tries it again first', async () => {
+    // Found live: evicting a model from the cache on every kind of failure
+    // meant one transient 503 on the preferred model blacklisted it for up
+    // to an hour, even though it had already recovered - every request in
+    // that window fell straight to a since-retired fallback that 404s every
+    // time. Only a permanent failure (400/404) should evict; a 503 should not.
+    (config as any).GEMINI_API_KEY = 'test-key';
+    let flashCalls = 0;
+    vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/models?')) return jsonResponse(geminiModelsBody);
+      if (u.includes('gemini-2.5-flash:')) {
+        flashCalls++;
+        if (flashCalls === 1) return jsonResponse({}, false, 503); // transient, first call only
+        return jsonResponse(geminiChatBody([{ product_name: 'segunda vez', quantity_label: '' }]));
+      }
+      return jsonResponse(geminiChatBody([{ product_name: 'primera vez (fallback)', quantity_label: '' }]));
+    });
+
+    const first = await extractOrderItems('quiero algo', ['Algo']);
+    expect(first).toEqual([{ product_name: 'primera vez (fallback)', quantity_label: '' }]);
+    expect(flashCalls).toBe(1); // tried once, failed with 503, fell through
+
+    // Second request (models list still cached, no clearDiscoveryCache() in
+    // between) - gemini-2.5-flash must be tried FIRST again, not skipped.
+    const second = await extractOrderItems('quiero otra cosa', ['Algo']);
+    expect(second).toEqual([{ product_name: 'segunda vez', quantity_label: '' }]);
+    expect(flashCalls).toBe(2);
+  });
+
   it('all configured providers fail -> throws', async () => {
     (config as any).GEMINI_API_KEY = 'test-key';
     vi.spyOn(global, 'fetch').mockImplementation(async (url) => {

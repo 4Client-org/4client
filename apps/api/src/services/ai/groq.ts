@@ -1,6 +1,6 @@
 import { config } from '../../config.js';
 import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
-import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
+import { discoverCandidateModels, dropFromCache, isPermanentModelError } from './modelDiscovery.js';
 
 const CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODELS_URL = 'https://api.groq.com/openai/v1/models';
@@ -56,8 +56,10 @@ async function callModel(model: string, text: string, catalogNames: string[]) {
     }),
   });
   if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`Groq API failed (${res.status}) for model ${model}: ${err}`);
+    const body = await res.text().catch(() => '');
+    const err = new Error(`Groq API failed (${res.status}) for model ${model}: ${body}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
   }
   const data = await res.json() as { choices: [{ message: { content: string } }] };
   const raw = JSON.parse(stripJsonFence(data.choices[0].message.content));
@@ -72,7 +74,8 @@ export const extractWithGroq: Extractor = async (text, catalogNames) => {
       return await callModel(model, text, catalogNames);
     } catch (err) {
       lastErr = err;
-      dropFromCache('groq', model);
+      console.error(`[tomar-lista] groq: candidato ${model} falló:`, err);
+      if (isPermanentModelError(err)) dropFromCache('groq', model);
     }
   }
   throw lastErr ?? new Error('Groq: ningún modelo candidato funcionó');

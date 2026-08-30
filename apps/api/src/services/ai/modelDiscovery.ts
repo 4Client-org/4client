@@ -58,9 +58,28 @@ export async function discoverCandidateModels(cacheKey: string, cfg: DiscoveryCo
 // the same TTL window) doesn't waste a request retrying something already
 // known dead this run. Cache still resets fully on the next natural refresh
 // (TTL expiry, or a redeploy - this is in-memory, not persisted).
+//
+// Found live: this must ONLY be called for a PERMANENT failure (see
+// isPermanentModelError below) - a transient one (503, timeout) evicting the
+// PREFERRED model meant every request for up to an hour afterward skipped
+// straight to whatever broken fallback was left (a since-retired model that
+// 404s every time), even though the preferred one had already recovered and
+// would have worked fine on the very next try.
 export function dropFromCache(cacheKey: string, modelId: string): void {
   const hit = cache.get(cacheKey);
   if (hit) hit.ids = hit.ids.filter((id) => id !== modelId);
+}
+
+// A 400/404 means the model itself is gone or the request is fundamentally
+// malformed for it - genuinely won't work again until the model list changes,
+// safe to evict from the cache. Anything else (5xx, a network error, our own
+// AbortSignal.timeout firing) is transient - the SAME model very plausibly
+// works again on the next request, so it stays in the candidate list; this
+// one request still falls through to the next candidate (see each provider's
+// retry loop), it just isn't blacklisted for everyone else for the next hour.
+export function isPermanentModelError(err: unknown): boolean {
+  const status = (err as { status?: number } | undefined)?.status;
+  return status === 400 || status === 404;
 }
 
 // Test-only: forces the next discoverCandidateModels call for every key to

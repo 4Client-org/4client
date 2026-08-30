@@ -1,6 +1,6 @@
 import { config } from '../../config.js';
 import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
-import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
+import { discoverCandidateModels, dropFromCache, isPermanentModelError } from './modelDiscovery.js';
 
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODELS_URL = 'https://openrouter.ai/api/v1/models';
@@ -60,8 +60,10 @@ async function callModel(model: string, text: string, catalogNames: string[]) {
     }),
   });
   if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`OpenRouter API failed (${res.status}) for model ${model}: ${err}`);
+    const body = await res.text().catch(() => '');
+    const err = new Error(`OpenRouter API failed (${res.status}) for model ${model}: ${body}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
   }
   const data = await res.json() as { choices: [{ message: { content: string } }] };
   const raw = JSON.parse(stripJsonFence(data.choices[0].message.content));
@@ -76,7 +78,8 @@ export const extractWithOpenRouter: Extractor = async (text, catalogNames) => {
       return await callModel(model, text, catalogNames);
     } catch (err) {
       lastErr = err;
-      dropFromCache('openrouter', model);
+      console.error(`[tomar-lista] openrouter: candidato ${model} falló:`, err);
+      if (isPermanentModelError(err)) dropFromCache('openrouter', model);
     }
   }
   throw lastErr ?? new Error('OpenRouter: ningún modelo gratis candidato funcionó');
