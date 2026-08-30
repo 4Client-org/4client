@@ -7,6 +7,7 @@ import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../..
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
+import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
@@ -1146,6 +1147,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
+                <EnviarCatalogoMenu ticketId={order.ticket_id!} products={products} disabled={isPastDay} />
                 {canTomarLista && (
                   <button
                     className="hdr-ic-btn"

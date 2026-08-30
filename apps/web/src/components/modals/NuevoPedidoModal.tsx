@@ -2,6 +2,7 @@ import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } fro
 import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
+import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
 import ChatVideo from '../ui/ChatVideo';
@@ -353,6 +354,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   <span>Bloquear<br />Link</span>
                 </button>
               )}
+              {ticketId && <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />}
               {ticketId && canTomarLista && (
                 <button
                   className="hdr-ic-btn"
