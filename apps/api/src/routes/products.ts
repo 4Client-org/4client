@@ -10,6 +10,7 @@ const productSchema = z.object({
   sort_order:     z.number().default(0),
   price_per_unit: z.number().optional(),
   unit_type:      z.string().optional(),
+  in_stock:       z.boolean().default(true),
 });
 
 export default async function productRoutes(fastify: FastifyInstance) {

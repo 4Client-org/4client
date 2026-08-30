@@ -11,7 +11,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 
 // Column widths shared by the header row and every product row (view AND edit
 // mode) so cells line up regardless of which rows are currently mid-edit.
-const GRID_COLS = '1fr 170px 120px 110px 100px';
+const GRID_COLS = '1fr 170px 120px 110px 70px 100px';
 
 interface ProductForm {
   name: string;
@@ -20,6 +20,7 @@ interface ProductForm {
   useNewCategory: boolean;
   price_per_unit: string;
   unit_type: string;
+  in_stock: boolean;
 }
 
 const EMPTY_FORM = (existingCategories: string[]): ProductForm => ({
@@ -29,7 +30,34 @@ const EMPTY_FORM = (existingCategories: string[]): ProductForm => ({
   useNewCategory: existingCategories.length === 0,
   price_per_unit: '',
   unit_type: 'kg',
+  in_stock: true,
 });
+
+// Interruptor de Stock - a diferencia de Nombre/Categoría/Precio/Unidad, este
+// NO se acumula en el borrador de la fila para esperar a un Guardar; se manda
+// solo cuando el producto ya existe (ver toggleStock más abajo), consistente
+// con lo que es un interruptor: se voltea y queda, no se "prepara" para
+// guardar después. Para la fila nueva (sin id todavía) sí viaja en el
+// borrador normal, porque ahí no hay nada que instantáneamente actualizar.
+function StockToggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      title={value ? 'Hay stock - clic para marcar agotado' : 'Sin stock - clic para reactivar'}
+      onClick={() => onChange(!value)}
+      disabled={disabled}
+      style={{
+        position: 'relative', width: 38, height: 21, borderRadius: 11, border: 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
+        background: value ? 'var(--v)' : 'var(--brd)', transition: 'background .15s', padding: 0, flexShrink: 0,
+      }}>
+      <span style={{
+        position: 'absolute', top: 2, left: value ? 19 : 2, width: 17, height: 17, borderRadius: '50%',
+        background: '#fff', transition: 'left .15s', boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+      }} />
+    </button>
+  );
+}
 
 export default function ProductsSection() {
   const qc = useQueryClient();
@@ -74,6 +102,12 @@ export default function ProductsSection() {
       setDraft(null);
       toast(editingId && editingId !== '__new__' ? 'Producto actualizado' : 'Producto creado');
     },
+    onError: (e: any) => toast(e.message, true),
+  });
+
+  const toggleStock = useMutation({
+    mutationFn: ({ id, in_stock }: { id: string; in_stock: boolean }) => api.patch(`/products/${id}`, { in_stock }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['products'] }),
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -144,6 +178,7 @@ export default function ProductsSection() {
       useNewCategory: !catExists && !!p.category,
       price_per_unit: p.price_per_unit != null ? String(p.price_per_unit) : '',
       unit_type: p.unit_type ?? 'kg',
+      in_stock: p.in_stock ?? true,
     });
   }
 
@@ -170,6 +205,12 @@ export default function ProductsSection() {
       category: category || undefined,
       price_per_unit: priceRaw === '' ? undefined : (!isNaN(price) && price >= 0 ? price : undefined),
       unit_type: draft.unit_type.trim() || undefined,
+      // Solo se manda al CREAR - en edición el interruptor de Stock ya se
+      // guardó al instante (toggleStock, arriba) apenas se tocó. El borrador
+      // de esta fila puede llevar un `in_stock` desactualizado si el admin le
+      // dio clic al interruptor y LUEGO cambió otro campo antes de Guardar -
+      // reenviarlo acá revertiría ese cambio ya guardado por accidente.
+      ...(editingId === '__new__' ? { in_stock: draft.in_stock } : {}),
     });
   }
 
@@ -255,12 +296,14 @@ export default function ProductsSection() {
             <option value="canasta">Canasta</option>
             <option value="manojo">Manojo</option>
           </select>
+          <StockToggle value={p.in_stock ?? true} onChange={v => toggleStock.mutate({ id: p.id, in_stock: v })} disabled={toggleStock.isPending} />
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="dc-btn" title="Guardar cambios" onClick={handleSubmit} disabled={save.isPending}
-              style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
+              style={{ background: 'var(--v)', borderColor: 'var(--v)', color: '#000' }}>
               <Check size={13} />
             </button>
-            <button className="dc-btn" title="Cancelar" onClick={cancelEdit}>
+            <button className="dc-btn" title="Cancelar" onClick={cancelEdit}
+              style={{ background: 'var(--r)', borderColor: 'var(--r)', color: '#000' }}>
               <X size={13} />
             </button>
           </div>
@@ -285,6 +328,7 @@ export default function ProductsSection() {
         <span onClick={() => openEdit(p)} style={{ fontSize: 12, color: 'var(--gt)', cursor: 'pointer' }} title="Clic para editar">
           {p.unit_type ?? 'kg'}
         </span>
+        <StockToggle value={p.in_stock ?? true} onChange={v => toggleStock.mutate({ id: p.id, in_stock: v })} disabled={toggleStock.isPending} />
         <div style={{ display: 'flex', gap: 6 }}>
           <button className="dc-btn" title="Editar" onClick={() => openEdit(p)}>
             <Pencil size={13} />
@@ -319,12 +363,14 @@ export default function ProductsSection() {
             <option value="canasta">Canasta</option>
             <option value="manojo">Manojo</option>
           </select>
+          <StockToggle value={draft.in_stock} onChange={v => setDraft(d => d && ({ ...d, in_stock: v }))} />
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="dc-btn" title="Crear producto" onClick={handleSubmit} disabled={save.isPending}
-              style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
+              style={{ background: 'var(--v)', borderColor: 'var(--v)', color: '#000' }}>
               <Check size={13} />
             </button>
-            <button className="dc-btn" title="Cancelar" onClick={cancelEdit}>
+            <button className="dc-btn" title="Cancelar" onClick={cancelEdit}
+              style={{ background: 'var(--r)', borderColor: 'var(--r)', color: '#000' }}>
               <X size={13} />
             </button>
           </div>
@@ -385,7 +431,7 @@ export default function ProductsSection() {
         ) : (
           <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
             <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
-              <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span />
+              <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
             </div>
             {filteredFlat.map(renderProductRow)}
           </div>
@@ -406,7 +452,7 @@ export default function ProductsSection() {
               {!collapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '6px 14px', gap: 10, borderTop: '1px solid var(--brd)', fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
-                    <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span />
+                    <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
                   </div>
                   {(prods as any[]).map(renderProductRow)}
                 </div>

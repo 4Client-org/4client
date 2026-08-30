@@ -1104,7 +1104,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1220 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1310 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1113,7 +1113,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 460, background: '#ECE5DD', display: 'flex',
+            width: 550, background: '#ECE5DD', display: 'flex',
             flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
           }}>
             {/* Chat header */}
