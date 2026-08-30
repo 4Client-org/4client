@@ -26,7 +26,7 @@ import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
 import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
-import { mergeExtractedItems } from '../../lib/tomarLista';
+import { mergeExtractedItems, mergeResultToast } from '../../lib/tomarLista';
 import { TomarListaActionBar } from '../chat/TomarListaActionBar';
 import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
@@ -702,10 +702,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         const { items: extracted, unmatchedNames } = res.data;
         tomarLista.clear();
         if (unmatchedNames.length === 0) {
-          setItems((prev: any[]) => mergeExtractedItems(prev, extracted));
+          const merged = mergeExtractedItems(items, extracted);
+          setItems(merged.items);
           setCatalogDirty(true);
           markDirty();
-          toast('Lista montada exitosamente');
+          toast(mergeResultToast(merged));
         } else {
           setTomarListaResult({ items: extracted, unmatchedNames });
         }
@@ -721,7 +722,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   useEffect(() => {
     if (!order || !prefillItems?.length || prefillAppliedRef.current) return;
     prefillAppliedRef.current = true;
-    setItems((prev: any[]) => mergeExtractedItems(prev, prefillItems));
+    // Functional updater, not a direct read of `items` - this effect can run
+    // in the same commit as the order-hydration effect above (both fire off
+    // `order` first loading), and must merge onto whatever THAT one just set,
+    // not a stale pre-hydration closure value.
+    setItems((prev: any[]) => mergeExtractedItems(prev, prefillItems).items);
     setCatalogDirty(true);
     markDirty();
   }, [order, prefillItems]);
@@ -1251,7 +1256,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             unmatchedNames={tomarListaResult.unmatchedNames}
             eligibleOrders={[]}
             onConfirm={() => {
-              setItems((prev: any[]) => mergeExtractedItems(prev, tomarListaResult.items));
+              const merged = mergeExtractedItems(items, tomarListaResult.items);
+              setItems(merged.items);
+              toast(mergeResultToast(merged));
               setCatalogDirty(true);
               markDirty();
               setTomarListaResult(null);
