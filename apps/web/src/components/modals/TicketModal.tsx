@@ -235,7 +235,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: 1020,
+        width: '100%', maxWidth: 1110,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
@@ -243,7 +243,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
         {/* ===== LEFT: CHAT ===== */}
         <div style={{
-          width: 470, background: '#ECE5DD', display: 'flex',
+          width: 560, background: '#ECE5DD', display: 'flex',
           flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
