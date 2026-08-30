@@ -10,6 +10,7 @@ import {
 } from '../lib/media.js';
 import { extractOrderItems } from '../services/ai/index.js';
 import { matchProductName } from '../lib/matchProduct.js';
+import { normalizeSearch } from '../lib/normalize.js';
 
 // Meta's own outbound size limits per media type - enforced here too so an
 // oversized upload fails fast with a clear message instead of getting rejected
@@ -771,7 +772,11 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       return reply.status(502).send({ error: 'No se pudo procesar el texto con IA - intenta de nuevo', code: 'AI_EXTRACTION_FAILED' });
     }
 
-    const items = extracted.map(item => {
+    // Guards against a whitespace-only product_name (passes zod's min(1) on
+    // character count, but there's nothing there) - matchProductName would
+    // otherwise treat '' as a substring of every catalog entry and could
+    // still land a blank-ish line in the draft for staff to puzzle over.
+    const matched = extracted.filter(item => item.product_name.trim().length > 0).map(item => {
       const m = matchProductName(item.product_name, catalog);
       return {
         product_name: m.name,
@@ -780,6 +785,22 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         added_by_client: false,
         ai_unmatched: !m.matched,
       };
+    });
+    // Dedupe WITHIN this same extraction (case/accent-insensitive) - the AI
+    // can return the same product more than once if the customer mentioned it
+    // in more than one selected message (e.g. "quiero papa" ... later "y otra
+    // papa"), and two matched mentions of the same catalog product normalize
+    // to the identical name. Keeps the first occurrence's quantity_label, no
+    // summing - staff bumps the quantity by hand if the customer really meant
+    // more. This is independent of (and doesn't know about) whatever the
+    // frontend's own draft already has - see lib/tomarLista.ts's
+    // mergeExtractedItems on the frontend for that second, separate check.
+    const seenNames = new Set<string>();
+    const items = matched.filter(i => {
+      const key = normalizeSearch(i.product_name);
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
     });
     const unmatchedNames = items.filter(i => i.ai_unmatched).map(i => i.product_name);
 

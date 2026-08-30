@@ -132,6 +132,30 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
     expect(afterOrders).toBe(beforeOrders);
   });
 
+  it('dedupes duplicate mentions of the same product WITHIN one extraction (case-insensitive), keeping the first quantity_label', async () => {
+    (config as any).GROQ_API_KEY = 'test-key';
+    mockGroqSuccess([
+      { product_name: 'tomate', quantity_label: '1 kg' },
+      { product_name: 'Tomate', quantity_label: '2 kg' }, // same product, different casing, mentioned twice
+      { product_name: 'cebolla malla', quantity_label: '' },
+      { product_name: 'CEBOLLA MALLA', quantity_label: 'otra' }, // unmatched item repeated too
+    ]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/inbox/${ticketId}/parse-messages`,
+      headers: authHeader(encargadoToken),
+      payload: { messageIds: [inMsgId, inMsgId2] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { items, unmatchedNames } = res.json().data;
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ product_name: 'Tomate', quantity_label: '1 kg' });
+    expect(items[1]).toMatchObject({ product_name: 'cebolla malla', quantity_label: '' });
+    expect(unmatchedNames).toEqual(['cebolla malla']);
+  });
+
   it('rejects if any selected message is media', async () => {
     const res = await app.inject({
       method: 'POST',

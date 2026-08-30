@@ -23,7 +23,7 @@ import CodPaymentField from '../orders/CodPaymentField';
 import { todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
-import { mergeExtractedItems } from '../../lib/tomarLista';
+import { mergeExtractedItems, mergeResultToast } from '../../lib/tomarLista';
 import { TomarListaActionBar } from '../chat/TomarListaActionBar';
 import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
@@ -72,7 +72,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const [telefono] = useState(prePhone ?? '');
   const [direccion, setDireccion] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
-  const [items, setItems] = useState<any[]>(() => prefillItems?.length ? mergeExtractedItems([], prefillItems) : []);
+  const [items, setItems] = useState<any[]>(() => prefillItems?.length ? mergeExtractedItems([], prefillItems).items : []);
   const productSearchRef = useRef<ProductSearchHandle>(null);
   const [replyText, setReplyText] = useState('');
 
@@ -86,8 +86,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
         const { items: extracted, unmatchedNames } = res.data;
         tomarLista.clear();
         if (unmatchedNames.length === 0) {
-          setItems((prev: any[]) => mergeExtractedItems(prev, extracted));
-          toast('Lista montada exitosamente');
+          const merged = mergeExtractedItems(items, extracted);
+          setItems(merged.items);
+          toast(mergeResultToast(merged));
         } else {
           setTomarListaResult({ items: extracted, unmatchedNames });
         }
@@ -481,7 +482,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             unmatchedNames={tomarListaResult.unmatchedNames}
             eligibleOrders={[]}
             onConfirm={() => {
-              setItems((prev: any[]) => mergeExtractedItems(prev, tomarListaResult.items));
+              const merged = mergeExtractedItems(items, tomarListaResult.items);
+              setItems(merged.items);
+              toast(mergeResultToast(merged));
               setTomarListaResult(null);
             }}
             onCancel={() => setTomarListaResult(null)}
