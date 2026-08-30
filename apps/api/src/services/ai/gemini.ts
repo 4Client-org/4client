@@ -4,20 +4,34 @@ import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+// Every network call here has an explicit timeout (AbortSignal.timeout) -
+// found the hard way that without one, a single slow/hanging candidate model
+// could stretch one "Tomar lista" request past Railway's own upstream
+// timeout, which returns a 502 to the browser while the server keeps working
+// in the background on a connection nobody's listening on anymore (looked to
+// staff like the "Montar lista" button just froze forever). Bounding each
+// attempt keeps the worst case (all candidates slow/dead) a fixed, known
+// multiple of these numbers instead of open-ended.
+const MODELS_TIMEOUT_MS = 10_000;
+const GENERATE_TIMEOUT_MS = 20_000;
+
 // Google's /models response is NOT OpenAI-shaped like Groq/OpenRouter -
 // `{ models: [{ name: "models/gemini-x", supportedGenerationMethods: [...] }] }`,
 // id lives under `name` (which already includes the "models/" prefix needed
 // to build the generateContent URL below, so it's used as-is, not stripped).
 //
-// No hardcoded "known good" model here (unlike groq.ts/openrouter.ts) - this
-// was set up without a working Gemini key to test against live, so there's
-// nothing proven yet to prefer. Filters to models that actually support
-// generateContent and aren't obviously the wrong kind (embeddings, image/
-// video/audio generation, etc.) and tries a few candidates in order. If the
-// very first real request reveals a better model to prefer, add it to
-// PREFERRED_IDS below rather than re-deriving this from scratch.
-const PREFERRED_IDS: string[] = [];
-const SKIP_PATTERN = /embedding|aqa|vision|imagen|veo|tts|audio/i;
+// gemini-2.5-flash (this account's first candidate before this fix) turned
+// out to 404 outright ("no longer available to new users... use
+// models/gemini-3.6-flash instead" - Google's own error message named the
+// replacement). gemini-3.6-flash confirmed working with a real request
+// (Aug 2026) - both facts found live, not assumed, same discipline as
+// groq.ts/openrouter.ts. Excludes model families that are never a fit for a
+// plain text-in/JSON-out extraction prompt (image/video/audio generation,
+// embeddings, agentic/tool-use previews, research assistants) - a bad pick
+// here just fails and falls through to the next candidate like any other
+// failure, this just avoids wasting an attempt on an obvious mismatch.
+const PREFERRED_IDS = ['models/gemini-3.6-flash'];
+const SKIP_PATTERN = /embedding|aqa|vision|imagen|veo|tts|audio|transcribe|image|robotics|computer-use|deep-research|lyria|customtools|antigravity|nano-banana/i;
 
 async function getCandidates(): Promise<string[]> {
   return discoverCandidateModels('gemini', {
@@ -30,7 +44,7 @@ async function getCandidates(): Promise<string[]> {
       Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent') &&
       !SKIP_PATTERN.test(m.name),
     preferredIds: PREFERRED_IDS,
-    maxCandidates: 4,
+    maxCandidates: 3,
   });
 }
 
@@ -39,6 +53,7 @@ async function callModel(modelName: string, text: string, catalogNames: string[]
   const res = await fetch(`${API_BASE}/${modelName}:generateContent?key=${config.GEMINI_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ parts: [{ text: user }] }],

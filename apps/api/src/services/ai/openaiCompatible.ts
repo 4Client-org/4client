@@ -1,5 +1,10 @@
 import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
 
+// Bounds each attempt so a slow/hanging candidate can't stretch the whole
+// request past Railway's own upstream timeout (see gemini.ts's comment -
+// found live, applies to every provider that tries multiple candidates).
+const GENERATE_TIMEOUT_MS = 20_000;
+
 // Groq, Cerebras, OpenRouter (and most other free-tier LLM APIs) all speak the
 // same OpenAI-compatible chat completions shape - one request builder + one
 // response parser, each provider file just supplies its own URL/model/key/
@@ -36,6 +41,7 @@ export function createOpenAiCompatibleExtractor(cfg: OpenAiCompatibleConfig): Ex
         'Content-Type': 'application/json',
         ...(cfg.extraHeaders?.() ?? {}),
       },
+      signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
       body: JSON.stringify({
         model: cfg.model,
         messages: [
