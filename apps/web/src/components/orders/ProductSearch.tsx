@@ -13,8 +13,20 @@ function isNegativePrice(priceStr: string | undefined): boolean {
   return !isNaN(n) && n < 0;
 }
 
-interface Product { id: string; name: string; category: string; }
-interface Item { product_name: string; quantity_label: string; price: string; added_by_client?: boolean; ai_unmatched?: boolean; }
+interface Product { id: string; name: string; category: string; price_per_unit?: number | string | null; }
+interface Item {
+  // Client-only row identity (see tomarLista.ts's DraftItem for the full
+  // rationale) - optional in the type only as a safety net for any caller
+  // that hasn't been updated to set it; rowKey() below falls back to
+  // product_name so a missing one degrades to the old behavior instead of
+  // colliding as `undefined` with every other row missing it too.
+  _uid?: string;
+  product_name: string;
+  quantity_label: string;
+  price: string;
+  added_by_client?: boolean;
+  ai_unmatched?: boolean;
+}
 
 interface Props {
   products: Product[];
@@ -70,6 +82,12 @@ function groupByCategory(products: Product[]) {
   return order.map(cat => ({ category: cat, products: groups[cat] }));
 }
 
+// Every FACTBOX row (already-added items, as opposed to the catalog list above
+// it) is identified by this, never by product_name - see the Item._uid comment.
+function rowKey(i: Item): string {
+  return i._uid ?? i.product_name;
+}
+
 const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSearch(
   { products, items, locked, onChange, onLocalDirty, clearKey, onArrowUpFromSearch, onArrowDownFromManual }, ref,
 ) {
@@ -83,11 +101,17 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // needs a ref per product id, not one shared pair.
   const catalogQtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const catalogPriceRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string }>>({});
-  // Which committed item (by product_name) is being edited inline in the Factbox
+  // Keyed by product NAME for a catalog row (not yet added - identified by the
+  // catalog product itself, always unique), or by a Factbox row's `_uid` (see
+  // getLocalForRow/setRowLocal below) - two disjoint key spaces sharing one
+  // dict is safe since a `_uid` (crypto.randomUUID()/a real OrderItem id) never
+  // collides with a real product name string.
+  const [localInputs, setLocalInputs] = useState<Record<string, { qty: string; price: string; name?: string }>>({});
+  // Which committed item (by _uid) is being edited inline in the Factbox
   // table below - editing never touches the catalog's collapsed state anymore, so
   // it stays collapsed by default the way the person left it.
   const [editingRow, setEditingRow] = useState<string | null>(null);
+  const editNameRef = useRef<HTMLInputElement | null>(null);
   const editQtyRef = useRef<HTMLInputElement | null>(null);
   const editPriceRef = useRef<HTMLInputElement | null>(null);
   // Manual/off-catalog line - for when the product genuinely isn't in the DB list
@@ -142,7 +166,8 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // to tweak it meant retyping its quantity AND price from scratch instead of
   // just editing what's already there. Only used for DISPLAY - commitProduct's
   // own no-op guard still reads localInputs directly, so a truly-untouched new
-  // catalog row is unaffected.
+  // catalog row is unaffected. CATALOG rows only - Factbox rows use
+  // getLocalForRow below (different key space, see localInputs' own comment).
   function getLocal(name: string) {
     if (localInputs[name]) return localInputs[name];
     const committed = items.find(i => i.product_name === name);
@@ -154,6 +179,94 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     setLocalInputs(prev => ({ ...prev, [name]: { ...getLocal(name), [field]: val } }));
   }
 
+  // Factbox-row equivalent of getLocal/setLocal above, keyed by _uid instead of
+  // product_name - reads straight off the passed item (no need to re-search
+  // `items`, unlike getLocal, since every call site already has it in hand).
+  function getLocalForRow(item: Item) {
+    const key = rowKey(item);
+    if (localInputs[key]) return localInputs[key];
+    return {
+      qty: item.quantity_label,
+      price: parseFloat(item.price) > 0 ? item.price : '',
+      name: item.product_name,
+    };
+  }
+
+  function setRowLocal(item: Item, field: 'name' | 'qty' | 'price', val: string) {
+    const key = rowKey(item);
+    setLocalInputs(prev => ({ ...prev, [key]: { ...getLocalForRow(item), [field]: val } }));
+  }
+
+  // Only ai_unmatched/added_by_client rows ever get an editable name field -
+  // a normal catalog-linked line's name stays fixed to what it's already
+  // correctly linked to. added_by_client's own flag is NEVER cleared by
+  // editing here (see buildUpdatedItem below) - that flag is a permanent
+  // provenance record by design (see its own comment in schema.prisma),
+  // unlike ai_unmatched, which exists specifically so it CAN be resolved.
+  function canEditName(item: Item): boolean {
+    return !!(item.ai_unmatched || item.added_by_client);
+  }
+
+  // Shared by commitEditField (Factbox row edits) - handles the one thing that's
+  // genuinely new here: if the name actually changed on a flagged row, try to
+  // link it to a real catalog product (exact match, case/accent-insensitive -
+  // a human just made a deliberate correction, this isn't the AI guessing, so
+  // no fuzzy/substring tiers here, just a real match or not). A confident match
+  // clears ai_unmatched and adopts the catalog's own price IF nothing's been
+  // typed for price yet (never overwrites a price staff already set on
+  // purpose) - added_by_client is left exactly as it was either way, matching
+  // its permanent-provenance contract.
+  function buildUpdatedItem(prior: Item, local: { qty: string; price: string; name?: string }): Item {
+    const typedName = (local.name ?? prior.product_name).trim();
+    let product_name = prior.product_name;
+    let ai_unmatched = prior.ai_unmatched ?? false;
+    let price = local.price.trim() || '0';
+
+    if (canEditName(prior) && typedName && typedName !== prior.product_name) {
+      const match = products.find(p => normalizeSearch(p.name) === normalizeSearch(typedName));
+      if (match) {
+        product_name = match.name;
+        ai_unmatched = false;
+        if (!(parseFloat(price) > 0) && match.price_per_unit != null) {
+          price = String(match.price_per_unit);
+        }
+      } else {
+        // No catalog match - keep the corrected text as-is, still flagged:
+        // the typo may be fixed, but it's still not a real catalog product.
+        product_name = typedName;
+      }
+    }
+
+    return {
+      _uid: rowKey(prior),
+      product_name,
+      quantity_label: local.qty.trim(),
+      price,
+      added_by_client: prior.added_by_client ?? false,
+      ai_unmatched,
+    };
+  }
+
+  // Returns the resulting items array (for saveEdit/commitPendingEdit's
+  // synchronous needs, same contract commitProduct always had), or null when
+  // blocked (negative price) - callers that advance focus instead of closing
+  // the row (advanceToPrice/advanceToNextRow/moveToRow) must NOT move away in
+  // that case, so the person stays right on the bad value.
+  function commitEditField(uid: string): Item[] | null {
+    const local = localInputs[uid];
+    if (local === undefined) return items;
+    if (isNegativePrice(local.price)) {
+      toast('El precio no puede ser negativo', true);
+      return null;
+    }
+    const prior = items.find(i => rowKey(i) === uid);
+    if (!prior) return items;
+    const newItem = buildUpdatedItem(prior, local);
+    const next = items.map(i => rowKey(i) === uid ? newItem : i);
+    onChange(next);
+    return next;
+  }
+
   // Returns the resulting items array (not just void) - commitPendingEdit below
   // needs the ACTUAL merged list synchronously, not the state update this also
   // triggers via onChange, which only lands on the next render and would still be
@@ -162,6 +275,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // legitimate "nothing typed" no-op (which returns `items` unchanged) - callers
   // that close the edit row on commit (saveEdit) need to tell those apart, so a
   // blocked attempt doesn't get silently discarded by closing the row anyway.
+  //
+  // This is the CATALOG-search add/update path only (by product name, always
+  // unique) - Factbox row edits go through commitEditField/_uid instead, see
+  // that function's own comment.
   function commitProduct(productName: string): Item[] | null {
     const local = localInputs[productName];
     if (isNegativePrice(local?.price)) {
@@ -182,6 +299,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     // silently clear the flag that marks it as a client-originated change.
     const priorItem = items.find(i => i.product_name === productName);
     const newItem: Item = {
+      _uid: priorItem ? rowKey(priorItem) : crypto.randomUUID(),
       product_name: productName,
       quantity_label: local.qty.trim(),
       // Left blank -> 0, same reasoning as commitEditField below: a blank price
@@ -271,73 +389,50 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     }
   }
 
-  function removeItem(productName: string) {
-    onChange(items.filter(i => i.product_name !== productName));
+  function removeItem(uid: string) {
+    onChange(items.filter(i => rowKey(i) !== uid));
   }
 
   // Which field to focus once editingRow actually changes (the effect below can't
   // take a parameter, since it just reacts to state) - defaults to qty (pencil
-  // click, or clicking the quantity value itself), set to 'price' right before
-  // switching rows via an arrow key so landing on the new row lands in the same
+  // click, or clicking the quantity value itself), set to 'name'/'price' right
+  // before switching rows/fields so landing on the new row lands in the same
   // column the person was already in.
-  const editFocusField = useRef<'qty' | 'price'>('qty');
+  const editFocusField = useRef<'name' | 'qty' | 'price'>('qty');
 
-  function editItem(item: Item, field: 'qty' | 'price' = 'qty') {
-    // A price of "0" (unset) showed literally as "0" in the input, forcing whoever's
-    // typing to delete it first - show it empty instead, same as a genuinely unset one.
-    const priceVal = parseFloat(item.price) > 0 ? item.price : '';
-    setLocalInputs(prev => ({ ...prev, [item.product_name]: { qty: item.quantity_label, price: priceVal } }));
+  function editItem(item: Item, field: 'name' | 'qty' | 'price' = 'qty') {
+    const key = rowKey(item);
+    setLocalInputs(prev => ({ ...prev, [key]: getLocalForRow(item) }));
     onLocalDirty?.(true);
     editFocusField.current = field;
-    setEditingRow(item.product_name);
+    setEditingRow(key);
   }
 
-  // Commits the currently-typed qty/price for a row WITHOUT closing its edit mode -
-  // used when Enter just advances focus to the next field, not when the person is
-  // done with the whole row (that's saveEdit, which also calls this then closes).
-  // Returns false when blocked (negative price) - callers (advanceToPrice/
-  // advanceToNextRow) must NOT move focus away in that case, so the person stays
-  // right on the bad value instead of it silently vanishing to the next field.
-  function commitEditField(productName: string): boolean {
-    const local = localInputs[productName];
-    if (local === undefined) return true;
-    if (isNegativePrice(local.price)) {
-      toast('El precio no puede ser negativo', true);
-      return false;
-    }
-    const priorItem = items.find(i => i.product_name === productName);
-    const newItem: Item = {
-      product_name: productName,
-      quantity_label: local.qty.trim(),
-      // Left blank -> 0 immediately, not just at save time - staff shouldn't have
-      // to type a price to move on, and a blank value must never be what blocks
-      // saving the order.
-      price: local.price.trim() || '0',
-      added_by_client: priorItem?.added_by_client ?? false,
-      ai_unmatched: priorItem?.ai_unmatched ?? false,
-    };
-    onChange(items.map(i => i.product_name === productName ? newItem : i));
-    return true;
+  // Enter in the name field of a row being edited: save name (attempts the
+  // catalog re-link, see buildUpdatedItem), jump to qty - same row.
+  function advanceToQty(uid: string) {
+    if (commitEditField(uid) === null) return;
+    requestAnimationFrame(() => { editQtyRef.current?.focus(); editQtyRef.current?.select(); });
   }
 
   // Enter in the qty field of a row being edited: save qty, jump to price - same row.
-  function advanceToPrice(productName: string) {
-    if (!commitEditField(productName)) return;
+  function advanceToPrice(uid: string) {
+    if (commitEditField(uid) === null) return;
     requestAnimationFrame(() => { editPriceRef.current?.focus(); editPriceRef.current?.select(); });
   }
 
-  // Enter in the price field: save, then open the NEXT row's qty field straight into
-  // edit mode - the editingRow effect below already focuses editQtyRef whenever
-  // editingRow changes, so opening the next row is all this needs to do.
-  function advanceToNextRow(productName: string) {
-    if (!commitEditField(productName)) return;
+  // Enter in the price field: save, then open the NEXT row's first editable field
+  // straight into edit mode - the editingRow effect below already focuses the
+  // right ref whenever editingRow changes, so opening the next row is all this needs to do.
+  function advanceToNextRow(uid: string) {
+    if (commitEditField(uid) === null) return;
     // visibleItems (the factbox-search-filtered list), not the full unfiltered
     // items - matches moveToRow's own arrow-key navigation below, which already
     // gets this right; Enter didn't, and disagreeing about which row is "next"
     // depending on whether Enter or an arrow key was pressed made no sense.
-    const idx = visibleItems.findIndex(i => i.product_name === productName);
+    const idx = visibleItems.findIndex(i => rowKey(i) === uid);
     const next = idx >= 0 ? visibleItems[idx + 1] : undefined;
-    if (next) { editItem(next); return; }
+    if (next) { editItem(next, canEditName(next) ? 'name' : 'qty'); return; }
     // Last row - nothing to advance to, but editingRow is left exactly as it
     // was (still this row) instead of closing to null. Closing it used to kill
     // keyboard nav dead: the input unmounts, focus falls to nowhere, and arrow
@@ -351,14 +446,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // Navigates the FILTERED (visibleItems) list, not the full unfiltered one - the
   // point of the factbox search box is to narrow down which rows arrow-nav even
   // reaches.
-  function moveToRow(fromProductName: string, direction: 'up' | 'down', field: 'qty' | 'price') {
-    if (!commitEditField(fromProductName)) return;
-    const idx = visibleItems.findIndex(i => i.product_name === fromProductName);
+  function moveToRow(fromUid: string, direction: 'up' | 'down', field: 'name' | 'qty' | 'price') {
+    if (commitEditField(fromUid) === null) return;
+    const idx = visibleItems.findIndex(i => rowKey(i) === fromUid);
     if (idx < 0) return;
     if (direction === 'up' && idx === 0) {
       // Clear editingRow (not just move focus) - if this row was already the one
       // in edit mode, calling editItem on it again from the search box's ArrowDown
-      // (same product_name) would be a no-op setState, and the effect that focuses
+      // (same _uid) would be a no-op setState, and the effect that focuses
       // the field only fires when editingRow actually CHANGES. Without this, arrowing
       // up to the search box then back down landed nowhere.
       setEditingRow(null);
@@ -366,7 +461,13 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       return;
     }
     const next = visibleItems[direction === 'up' ? idx - 1 : idx + 1];
-    if (next) { editItem(next, field); return; }
+    if (next) {
+      // Landing on a row without an editable name field while `field` was
+      // 'name' (moving up/down in the name column past where it stops
+      // existing) falls back to qty - the nearest equivalent column.
+      editItem(next, field === 'name' && !canEditName(next) ? 'qty' : field);
+      return;
+    }
     // Down past the LAST row - hands off to the manual/off-catalog row right
     // below the Factbox, instead of silently doing nothing (the previous dead
     // end here - "el último producto... si le doy abajo me debe llevar a nombre
@@ -374,28 +475,47 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     if (direction === 'down') { setEditingRow(null); manualNameRef.current?.focus(); }
   }
 
-  // Shared by both the qty and price inputs of a row being edited. Enter/Escape
+  // Shared by the name/qty/price inputs of a row being edited. Enter/Escape
   // behavior is unchanged (still per-field, see advanceToPrice/advanceToNextRow/
   // cancelEdit); this adds arrow-key movement between editable fields:
-  // Left/Right toggle qty<->price on the SAME row, Up/Down move to the row
-  // above/below in the SAME column.
-  function handleEditArrowKeys(e: KeyboardEvent<HTMLInputElement>, productName: string, field: 'qty' | 'price') {
+  // Left/Right toggle name<->qty<->price on the SAME row, Up/Down move to the
+  // row above/below in the SAME column.
+  function handleEditArrowKeys(e: KeyboardEvent<HTMLInputElement>, uid: string, field: 'name' | 'qty' | 'price', rowHasName: boolean) {
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
-      moveToRow(productName, e.key === 'ArrowUp' ? 'up' : 'down', field);
+      moveToRow(uid, e.key === 'ArrowUp' ? 'up' : 'down', field);
       return;
     }
-    if (e.key === 'ArrowRight' && field === 'qty') {
+    if (e.key === 'ArrowRight' && (field === 'name' || field === 'qty')) {
       // Boundary-aware: a plain ArrowRight while there's still text ahead of the
       // cursor must move the cursor through the text like normal, same as any
       // other input - only jump fields once there's nowhere left to move within
-      // this one. (Qty is a text input, so selectionStart is reliable here.)
+      // this one. (Name/qty are text inputs, so selectionStart is reliable here.)
       const input = e.currentTarget;
       if (input.selectionStart !== input.value.length) return;
       e.preventDefault();
-      editFocusField.current = 'price';
-      editPriceRef.current?.focus();
-      editPriceRef.current?.select();
+      if (field === 'name') {
+        editFocusField.current = 'qty';
+        editQtyRef.current?.focus();
+        editQtyRef.current?.select();
+      } else {
+        editFocusField.current = 'price';
+        editPriceRef.current?.focus();
+        editPriceRef.current?.select();
+      }
+      return;
+    }
+    if (e.key === 'ArrowLeft' && field === 'qty') {
+      // Boundary-aware for qty (text input, selectionStart reliable) - only
+      // jump back to name once the cursor is at the very start, and only if
+      // this row even has a name field.
+      const input = e.currentTarget;
+      if (input.selectionStart !== 0) return;
+      if (!rowHasName) return;
+      e.preventDefault();
+      editFocusField.current = 'name';
+      editNameRef.current?.focus();
+      editNameRef.current?.select();
       return;
     }
     if (e.key === 'ArrowLeft' && field === 'price') {
@@ -411,10 +531,10 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     }
   }
 
-  function cancelEdit(productName: string) {
+  function cancelEdit(uid: string) {
     setLocalInputs(prev => {
       const copy = { ...prev };
-      delete copy[productName];
+      delete copy[uid];
       return copy;
     });
     setEditingRow(null);
@@ -423,9 +543,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // Returns null when blocked (negative price) too, same as commitProduct - the ✓
   // button must leave the row open on a rejected value instead of closing over it
   // and silently reverting to whatever the item was before.
-  function saveEdit(productName: string): Item[] | null {
-    const next = commitProduct(productName);
+  function saveEdit(uid: string): Item[] | null {
+    const next = commitEditField(uid);
     if (next === null) return null;
+    setLocalInputs(prev => {
+      const copy = { ...prev };
+      delete copy[uid];
+      return copy;
+    });
     setEditingRow(null);
     return next;
   }
@@ -473,15 +598,15 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
       setManualError('El precio no puede ser negativo.');
       return;
     }
-    // Items are keyed by product_name throughout this file (React key, edit/remove
-    // lookups) - a manual entry colliding with an existing line would silently merge
-    // into/overwrite it instead of adding a new one.
+    // Same-name guard is a UX nicety (catches an obvious accidental double-add),
+    // not an identity mechanism anymore - _uid is what actually keeps rows
+    // distinguishable even if this ever lets two through.
     if (items.some(i => i.product_name.toLowerCase() === name.toLowerCase())) {
       setManualError('Ya hay un producto con ese nombre en el pedido - edítalo en la tabla de arriba.');
       return;
     }
     setManualError('');
-    onChange([...items, { product_name: name, quantity_label: manualQty.trim(), price: manualPrice.trim() }]);
+    onChange([...items, { _uid: crypto.randomUUID(), product_name: name, quantity_label: manualQty.trim(), price: manualPrice.trim() }]);
     setManualName(''); setManualQty(''); setManualPrice('');
   }
 
@@ -493,7 +618,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   function handleManualKeyDown(e: KeyboardEvent<HTMLInputElement>, field: 'name' | 'qty' | 'price') {
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (items.length > 0) { editItem(visibleItems[visibleItems.length - 1], 'qty'); return; }
+      if (items.length > 0) {
+        const last = visibleItems[visibleItems.length - 1];
+        editItem(last, canEditName(last) ? 'name' : 'qty');
+        return;
+      }
       toggleRef.current?.focus();
       return;
     }
@@ -524,7 +653,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
 
   useEffect(() => {
     if (!editingRow) return;
-    const ref = editFocusField.current === 'price' ? editPriceRef : editQtyRef;
+    const ref = editFocusField.current === 'name' ? editNameRef : editFocusField.current === 'price' ? editPriceRef : editQtyRef;
     ref.current?.focus();
     ref.current?.select();
   }, [editingRow]);
@@ -553,7 +682,7 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               <tr><td colSpan={3} style={{ padding: '12px', color: 'var(--gt)', textAlign: 'center' }}>Sin productos</td></tr>
             )}
             {items.map((i, idx) => (
-              <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
+              <tr key={rowKey(i)} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
                 <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined }}>
                   {i.product_name}
                   {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
@@ -727,7 +856,8 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
             onKeyDown={e => {
               if (e.key === 'ArrowDown' && visibleItems.length > 0) {
                 e.preventDefault();
-                editItem(visibleItems[0], 'qty');
+                const first = visibleItems[0];
+                editItem(first, canEditName(first) ? 'name' : 'qty');
                 return;
               }
               if (e.key === 'ArrowUp') {
@@ -772,14 +902,40 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
               </td></tr>
             )}
             {visibleItems.map((i, idx) => {
-              const isEditing = editingRow === i.product_name;
-              const local = getLocal(i.product_name);
+              const uid = rowKey(i);
+              const isEditing = editingRow === uid;
+              const local = getLocalForRow(i);
+              const hasNameField = canEditName(i);
               return (
-                <tr key={i.product_name} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
-                    {i.product_name}
-                    {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
-                    {i.ai_unmatched && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· revisar</span>}
+                <tr key={uid} style={{ background: idx % 2 === 0 ? 'var(--b)' : 'var(--bg)' }}>
+                  <td style={{ padding: isEditing && hasNameField ? '5px 8px' : '9px 12px', fontWeight: 600, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : undefined, wordBreak: 'break-word' }}>
+                    {isEditing && hasNameField ? (
+                      <input
+                        ref={editNameRef}
+                        className="iinput"
+                        placeholder="Nombre del producto"
+                        value={local.name ?? i.product_name}
+                        onChange={e => setRowLocal(i, 'name', e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToQty(uid); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(uid); return; }
+                          handleEditArrowKeys(e, uid, 'name', hasNameField);
+                        }}
+                        style={{ fontSize: 13, width: '100%' }}
+                      />
+                    ) : (
+                      <span
+                        // Only flagged rows are clickable to rename - a normal
+                        // catalog-linked line's name stays fixed.
+                        onClick={hasNameField ? () => editItem(i, 'name') : undefined}
+                        style={{ cursor: hasNameField ? 'pointer' : 'default', display: 'block', wordBreak: 'break-word' }}
+                        title={hasNameField ? 'Clic para corregir el nombre y enlazarlo con el catálogo' : undefined}
+                      >
+                        {i.product_name}
+                        {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
+                        {i.ai_unmatched && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· revisar</span>}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: isEditing ? '5px 8px' : '9px 12px', textAlign: 'center', color: (i.added_by_client || i.ai_unmatched) ? '#DC2626' : 'var(--vd)', fontWeight: 700, borderBottom: '1px solid var(--brd)', borderRight: '1px solid var(--brd)' }}>
                     {isEditing ? (
@@ -788,11 +944,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         className="iinput"
                         placeholder="Ej: 2 kg"
                         value={local.qty}
-                        onChange={e => setLocal(i.product_name, 'qty', e.target.value)}
+                        onChange={e => setRowLocal(i, 'qty', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(i.product_name); return; }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
-                          handleEditArrowKeys(e, i.product_name, 'qty');
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToPrice(uid); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(uid); return; }
+                          handleEditArrowKeys(e, uid, 'qty', hasNameField);
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'center' }}
                       />
@@ -813,11 +969,11 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                         type="number"
                         min="0"
                         value={local.price}
-                        onChange={e => setLocal(i.product_name, 'price', e.target.value)}
+                        onChange={e => setRowLocal(i, 'price', e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(i.product_name); return; }
-                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(i.product_name); return; }
-                          handleEditArrowKeys(e, i.product_name, 'price');
+                          if (e.key === 'Enter') { e.preventDefault(); advanceToNextRow(uid); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(uid); return; }
+                          handleEditArrowKeys(e, uid, 'price', hasNameField);
                         }}
                         style={{ fontSize: 13, width: '100%', textAlign: 'right' }}
                       />
@@ -831,22 +987,22 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                     <span style={{ display: 'inline-flex', gap: 4 }}>
                       {isEditing ? (
                         <>
-                          <button onClick={() => saveEdit(i.product_name)} title="Guardar (o Enter)"
+                          <button onClick={() => saveEdit(uid)} title="Guardar (o Enter)"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--v)', display: 'flex', alignItems: 'center', padding: 2 }}>
                             <Check size={13} />
                           </button>
-                          <button onClick={() => cancelEdit(i.product_name)} title="Cancelar (o Esc)"
+                          <button onClick={() => cancelEdit(uid)} title="Cancelar (o Esc)"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', display: 'flex', alignItems: 'center', padding: 2 }}>
                             <X size={13} />
                           </button>
                         </>
                       ) : (
                         <>
-                          <button onClick={() => editItem(i)} title="Editar"
+                          <button onClick={() => editItem(i, hasNameField ? 'name' : 'qty')} title="Editar"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--az)', display: 'flex', alignItems: 'center', padding: 2 }}>
                             <Pencil size={12} />
                           </button>
-                          <button onClick={() => removeItem(i.product_name)} title="Quitar"
+                          <button onClick={() => removeItem(uid)} title="Quitar"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#DC2626', display: 'flex', alignItems: 'center', padding: 2, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>
                             ×
                           </button>

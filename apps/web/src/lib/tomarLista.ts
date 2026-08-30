@@ -5,6 +5,17 @@ import { normalizeSearch } from './normalize';
 // state (price as a string, same as ProductSearch's own Item type) - kept
 // loose/untyped like the rest of that state (see those files' own `useState<any[]>`).
 interface DraftItem {
+  // Client-only row identity (never sent to the backend - orders.ts's item
+  // schema doesn't have this field, and every save payload explicitly lists
+  // only product_name/quantity_label/price/etc., so it's dropped by
+  // construction). ProductSearch.tsx keys/targets rows by this, NOT
+  // product_name - two rows CAN legitimately share the same product_name
+  // (this is exactly what the dedup above is trying to prevent, but a
+  // manual add or a since-fixed typo can still produce one), and product_name
+  // is also about to become directly editable for a flagged row, which would
+  // make using it as an identity outright break (renaming a row would change
+  // its own "key" mid-edit).
+  _uid: string;
   product_name: string;
   quantity_label: string;
   price: string;
@@ -49,6 +60,7 @@ export function mergeExtractedItems(existing: DraftItem[], extracted: TomarLista
     if (seen.has(key)) { skippedCount++; continue; }
     seen.add(key);
     toAdd.push({
+      _uid: crypto.randomUUID(),
       product_name: i.product_name,
       quantity_label: i.quantity_label,
       price: String(i.price),

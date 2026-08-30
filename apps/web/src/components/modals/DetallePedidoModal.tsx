@@ -304,6 +304,13 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     if (!touched.has('empleado')) setEmpleadoId(order.employee_id ?? '');
     if (!catalogDirty) {
       setItems((order.items ?? []).map((i: any) => ({
+        // The real OrderItem.id, not a fresh client-generated one - this effect
+        // re-runs on every order refetch (order:updated socket, a save, etc.),
+        // and a NEW id each time would break editingRow/localInputs mid-edit
+        // (see ProductSearch.tsx's own _uid comment) even though nothing about
+        // this specific row actually changed. The server id is already stable
+        // and unique per row, so reuse it directly.
+        _uid: i.id ?? crypto.randomUUID(),
         product_name: i.product_name ?? '',
         quantity_label: i.quantity_label ?? '',
         price: String(i.price ?? ''),
@@ -352,15 +359,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       // save a moment later (full delete+recreate of OrderItem, orders.ts PATCH
       // /:id) would silently wipe it out along with its added_by_client red
       // highlight. Merge in any item from the fresh server data that isn't
-      // already present locally (matched by product_name, the same key used
-      // everywhere else items don't carry a stable id) instead of just warning
-      // and hoping staff manually re-adds it after reading the toast.
+      // already present locally (matched by product_name - a content check,
+      // separate from each row's own _uid identity used for editing/removal)
+      // instead of just warning and hoping staff manually re-adds it after
+      // reading the toast.
       if (catalogDirty && data?.id && Array.isArray(data.items)) {
         setItems((prev: any[]) => {
           const known = new Set(prev.map((i) => i.product_name));
           const missing = data.items
             .filter((i: any) => !known.has(i.product_name))
             .map((i: any) => ({
+              _uid: i.id ?? crypto.randomUUID(),
               product_name: i.product_name ?? '',
               quantity_label: i.quantity_label ?? '',
               price: String(i.price ?? ''),
