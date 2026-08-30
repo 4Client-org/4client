@@ -1004,6 +1004,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // gets closed early (cierre.ts only allows closing today, so a closed diaCerrado
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
+
+  // The header button that TOGGLES Tomar lista is already disabled once
+  // isPastDay - this covers cierre happening WHILE staff is already
+  // mid-selection, kicking them out the same way every other control on the
+  // day freezes instead of leaving "Montar lista" clickable.
+  useEffect(() => {
+    if (isPastDay && tomarLista.active) tomarLista.clear();
+  }, [isPastDay, tomarLista.active]);
+
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
   // Same signal items already give per-row via added_by_client - the
   // client_modified bell says "something changed" but not WHERE. Comes straight
