@@ -15,18 +15,19 @@ function authHeader(token: string) {
   return { authorization: `Bearer ${token}` };
 }
 
-function groqBody(items: unknown) {
-  return { choices: [{ message: { content: JSON.stringify({ items }) } }] };
+function geminiBody(items: unknown) {
+  return { candidates: [{ content: { parts: [{ text: JSON.stringify({ items }) }] } }] };
 }
 
-// groq.ts now discovers its model list live before calling chat completions
-// (see modelDiscovery.ts) - every test that mocks a successful extraction
-// must answer the /models call too, not just /chat/completions.
-const groqModelsBody = { data: [{ id: 'openai/gpt-oss-20b', active: true, input_modalities: ['text'], output_modalities: ['text'] }] };
-function mockGroqSuccess(items: unknown) {
+// Gemini (services/ai/index.ts's active provider) discovers its model list
+// live before calling generateContent (see modelDiscovery.ts / gemini.ts) -
+// every test that mocks a successful extraction must answer the /models call
+// too, not just the actual generation call.
+const geminiModelsBody = { models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] }] };
+function mockGeminiSuccess(items: unknown) {
   return vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
-    if (String(url).includes('/models')) return { ok: true, status: 200, json: async () => groqModelsBody } as Response;
-    return { ok: true, status: 200, json: async () => groqBody(items) } as Response;
+    if (String(url).includes('/models?')) return { ok: true, status: 200, json: async () => geminiModelsBody } as Response;
+    return { ok: true, status: 200, json: async () => geminiBody(items) } as Response;
   });
 }
 
@@ -91,19 +92,21 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
   });
 
   beforeEach(() => {
+    delete (config as any).GEMINI_API_KEY;
     delete (config as any).GROQ_API_KEY;
     delete (config as any).CEREBRAS_API_KEY;
+    delete (config as any).OPENROUTER_API_KEY;
     vi.restoreAllMocks();
     clearDiscoveryCache();
   });
 
   afterEach(() => {
-    delete (config as any).GROQ_API_KEY;
+    delete (config as any).GEMINI_API_KEY;
   });
 
   it('happy path: matched item gets the catalog price, unmatched item is flagged for review, never touches the DB', async () => {
-    (config as any).GROQ_API_KEY = 'test-key';
-    mockGroqSuccess([
+    (config as any).GEMINI_API_KEY = 'test-key';
+    mockGeminiSuccess([
       { product_name: 'tomate', quantity_label: '1 kg' },
       { product_name: 'cebolla malla', quantity_label: '' },
     ]);
@@ -160,7 +163,7 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
   });
 
   it('all configured providers failing -> 502 AI_EXTRACTION_FAILED', async () => {
-    (config as any).GROQ_API_KEY = 'test-key';
+    (config as any).GEMINI_API_KEY = 'test-key';
     vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' } as Response);
 
     const res = await app.inject({
@@ -174,8 +177,8 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
   });
 
   it('role gate: admin and encargado allowed, domiciliario forbidden', async () => {
-    (config as any).GROQ_API_KEY = 'test-key';
-    mockGroqSuccess([{ product_name: 'tomate', quantity_label: '' }]);
+    (config as any).GEMINI_API_KEY = 'test-key';
+    mockGeminiSuccess([{ product_name: 'tomate', quantity_label: '' }]);
 
     const admin = await app.inject({
       method: 'POST', url: `/api/v1/inbox/${ticketId}/parse-messages`,
