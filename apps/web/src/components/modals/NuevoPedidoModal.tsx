@@ -293,6 +293,14 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
 
+  // The header button that TOGGLES Tomar lista is already disabled once
+  // isPastDay - this covers cierre happening WHILE staff is already
+  // mid-selection, kicking them out the same way every other control on the
+  // day freezes instead of leaving "Montar lista" clickable.
+  useEffect(() => {
+    if (isPastDay && tomarLista.active) tomarLista.clear();
+  }, [isPastDay, tomarLista.active]);
+
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
       <div style={{

@@ -218,6 +218,16 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const { data: cierreStatus } = useDiaCerrado(fecha);
   const isPastDay = fecha < todayStr() || (cierreStatus?.cerrado ?? false);
 
+  // The header button that TOGGLES Tomar lista is already disabled once
+  // isPastDay - this covers the case where cierre happens WHILE staff is
+  // already mid-selection (the button they used to get in isn't checked
+  // again once they're already active) - kicks them out the same way every
+  // other control on the day freezes, instead of leaving "Montar lista"
+  // clickable on a day that's no longer editable.
+  useEffect(() => {
+    if (isPastDay && tomarLista.active) tomarLista.clear();
+  }, [isPastDay, tomarLista.active]);
+
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{
