@@ -498,6 +498,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      // TicketModal caches this order's own ticket separately (['ticket',
+      // ticketId, fecha]) - global staleTime is 30s (main.tsx), so reopening
+      // the ticket shortly after saving (very easy right after "Tomar lista"
+      // merges items into an existing order) showed the pre-save item list
+      // without this.
+      qc.invalidateQueries({ queryKey: ['ticket'] });
       touchedFieldsRef.current.clear();
       setIsDirty(false);
       setCatalogDirty(false);
@@ -556,6 +562,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -565,7 +572,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // plain confirm() prompt, so it can be validated (non-empty) before submitting.
   const papeleraMut = useMutation({
     mutationFn: (reason: string) => api.patch(`/orders/${orderId}/status`, { status: 'papelera', reason }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); toast('Pedido enviado a papelera'); onClose(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
+      toast('Pedido enviado a papelera');
+      onClose();
+    },
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -577,6 +589,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pedido restaurado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -592,6 +605,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Crédito marcado como pagado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -608,6 +622,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pedido marcado como cobrado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -893,6 +908,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pago confirmado');
       setShowCobro(false);
       onClose();
