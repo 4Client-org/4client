@@ -5,13 +5,14 @@ import { clearDiscoveryCache } from '../src/services/ai/modelDiscovery.js';
 
 // config is a plain mutable object (see config.ts) - tests set/delete keys
 // directly per case instead of needing separate env-var-injection infra.
-// Gemini is the only active provider right now (services/ai/index.ts has
-// Groq/Cerebras/OpenRouter commented out for this dev trial) - tests for
-// those three now only need to confirm setting their key ALONE has no
-// effect, not full fallback-chain behavior (that's exercised for Gemini
-// below instead, same shape of coverage, just against whichever provider is
-// actually wired in).
-const ORIGINAL = { gemini: config.GEMINI_API_KEY };
+// Gemini -> Groq -> OpenRouter is the active chain (index.ts) - Cerebras stays
+// out (every model on the free trial 402s on this account), so no tests for
+// it beyond confirming its key alone has no effect.
+const ORIGINAL = {
+  gemini: config.GEMINI_API_KEY,
+  groq: config.GROQ_API_KEY,
+  openrouter: config.OPENROUTER_API_KEY,
+};
 
 function clearKeys() {
   delete (config as any).GEMINI_API_KEY;
@@ -25,7 +26,7 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
 }
 
 // Gemini's /models and generateContent response shapes (see gemini.ts) -
-// different from the OpenAI-style {choices:[...]} used elsewhere.
+// different from the OpenAI-style {choices:[...]} Groq/OpenRouter use.
 const geminiModelsBody = {
   models: [
     { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
@@ -34,6 +35,12 @@ const geminiModelsBody = {
   ],
 };
 const geminiChatBody = (items: unknown) => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ items }) }] } }] });
+
+// Groq and OpenRouter are both OpenAI-compatible - same {data:[...]} /models
+// shape and {choices:[{message:{content}}]} chat shape.
+const groqModelsBody = { data: [{ id: 'openai/gpt-oss-20b', active: true, input_modalities: ['text'], output_modalities: ['text'] }] };
+const openrouterModelsBody = { data: [{ id: 'inclusionai/ling-3.0-flash-fin:free', pricing: { prompt: '0', completion: '0' } }] };
+const chatBody = (items: unknown) => ({ choices: [{ message: { content: JSON.stringify({ items }) } }] });
 
 describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
   beforeEach(() => {
@@ -44,6 +51,8 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
 
   afterEach(() => {
     (config as any).GEMINI_API_KEY = ORIGINAL.gemini;
+    (config as any).GROQ_API_KEY = ORIGINAL.groq;
+    (config as any).OPENROUTER_API_KEY = ORIGINAL.openrouter;
   });
 
   it('no provider configured -> throws immediately without calling fetch', async () => {
@@ -52,16 +61,14 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('setting GROQ_API_KEY/CEREBRAS_API_KEY/OPENROUTER_API_KEY alone has no effect (not in the active chain)', async () => {
-    (config as any).GROQ_API_KEY = 'test-key';
+  it('setting CEREBRAS_API_KEY alone has no effect (not in the active chain)', async () => {
     (config as any).CEREBRAS_API_KEY = 'test-key';
-    (config as any).OPENROUTER_API_KEY = 'test-key';
     const fetchSpy = vi.spyOn(global, 'fetch');
     await expect(extractOrderItems('quiero papa', ['Papa'])).rejects.toThrow();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('Gemini configured -> discovers its model list, calls a generateContent-capable candidate', async () => {
+  it('Gemini configured alone -> discovers its model list, calls a generateContent-capable candidate', async () => {
     (config as any).GEMINI_API_KEY = 'test-key';
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
       const u = String(url);
@@ -73,7 +80,6 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const chatCall = fetchSpy.mock.calls.find(c => !String(c[0]).includes('/models?'))!;
     expect(String(chatCall[0])).toContain('generativelanguage.googleapis.com');
-    // The embedding-only model must never be picked - it doesn't support generateContent.
     expect(String(chatCall[0])).not.toContain('embedding');
   });
 
@@ -88,6 +94,52 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     const items = await extractOrderItems('quiero tomate', ['Tomate']);
     expect(items).toEqual([{ product_name: 'tomate', quantity_label: '' }]);
     expect(fetchSpy).toHaveBeenCalledTimes(3); // 1 models + 2 chat attempts
+  });
+
+  it('Gemini fails entirely (e.g. daily quota, confirmed live as a real failure mode) -> falls through to Groq', async () => {
+    (config as any).GEMINI_API_KEY = 'gemini-key';
+    (config as any).GROQ_API_KEY = 'groq-key';
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('generativelanguage.googleapis.com/v1beta/models?')) return jsonResponse(geminiModelsBody);
+      if (u.includes('generativelanguage.googleapis.com')) return jsonResponse({}, false, 429); // quota exhausted
+      if (u.includes('groq.com/openai/v1/models')) return jsonResponse(groqModelsBody);
+      return jsonResponse(chatBody([{ product_name: 'cebolla', quantity_label: '' }]));
+    });
+    const items = await extractOrderItems('quiero cebolla', ['Cebolla']);
+    expect(items).toEqual([{ product_name: 'cebolla', quantity_label: '' }]);
+    // Gemini tries its (only) candidate, fails - Groq then succeeds on its first.
+    const groqCalls = fetchSpy.mock.calls.filter(c => String(c[0]).includes('groq.com'));
+    expect(groqCalls.length).toBe(2); // 1 models + 1 chat
+  });
+
+  it('Gemini and Groq both fail -> falls through to OpenRouter', async () => {
+    (config as any).GEMINI_API_KEY = 'gemini-key';
+    (config as any).GROQ_API_KEY = 'groq-key';
+    (config as any).OPENROUTER_API_KEY = 'openrouter-key';
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('generativelanguage.googleapis.com/v1beta/models?')) return jsonResponse(geminiModelsBody);
+      if (u.includes('generativelanguage.googleapis.com')) return jsonResponse({}, false, 429);
+      if (u.includes('groq.com/openai/v1/models')) return jsonResponse(groqModelsBody);
+      if (u.includes('groq.com')) return jsonResponse({}, false, 500);
+      if (u.includes('openrouter.ai/api/v1/models')) return jsonResponse(openrouterModelsBody);
+      return jsonResponse(chatBody([{ product_name: 'zanahoria', quantity_label: '' }]));
+    });
+    const items = await extractOrderItems('quiero zanahoria', ['Zanahoria']);
+    expect(items).toEqual([{ product_name: 'zanahoria', quantity_label: '' }]);
+    const openrouterCalls = fetchSpy.mock.calls.filter(c => String(c[0]).includes('openrouter.ai'));
+    expect(openrouterCalls.length).toBe(2); // 1 models + 1 chat
+  });
+
+  it('all configured providers fail -> throws', async () => {
+    (config as any).GEMINI_API_KEY = 'test-key';
+    vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/models?')) return jsonResponse(geminiModelsBody);
+      return jsonResponse({}, false, 500);
+    });
+    await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
   });
 
   it('a TRANSIENT failure (503) falls through for this request but does NOT blacklist the model - the next request tries it again first', async () => {
@@ -118,16 +170,6 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     const second = await extractOrderItems('quiero otra cosa', ['Algo']);
     expect(second).toEqual([{ product_name: 'segunda vez', quantity_label: '' }]);
     expect(flashCalls).toBe(2);
-  });
-
-  it('all configured providers fail -> throws', async () => {
-    (config as any).GEMINI_API_KEY = 'test-key';
-    vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
-      const u = String(url);
-      if (u.includes('/models?')) return jsonResponse(geminiModelsBody);
-      return jsonResponse({}, false, 500);
-    });
-    await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
   });
 
   it('a provider returning JSON that fails the schema is treated as a failure, not a crash', async () => {
