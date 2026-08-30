@@ -1,6 +1,7 @@
 import { config } from '../../config.js';
-import { extractWithGroq } from './groq.js';
-import { extractWithOpenRouter } from './openrouter.js';
+import { extractWithGemini } from './gemini.js';
+// import { extractWithGroq } from './groq.js';
+// import { extractWithOpenRouter } from './openrouter.js';
 import type { Extractor, ExtractedItem } from './types.js';
 
 // "Tomar lista" (routes/inbox.ts's /parse-messages): chained free-tier AI
@@ -12,18 +13,19 @@ import type { Extractor, ExtractedItem } from './types.js';
 // shared factory - most free-tier LLM APIs are OpenAI-compatible) plus one
 // more entry here.
 //
-// Gemini was dropped entirely (Google now requires billing/a card just to
-// issue a key). Cerebras is NOT currently in this chain either - its module
-// still exists and works (cerebras.ts), but every model on this account's
-// free trial now 402s "payment required" (confirmed live, not assumed) - see
-// cerebras.ts's comment for exactly what to try if that ever changes; adding
-// it back is uncommenting one line below. Groq and OpenRouter (its one
-// `:free` model that's actually still free AND doesn't require a card) are
-// both confirmed genuinely free with a real request as of this fix.
-const PROVIDERS: { name: string; envKey: 'GROQ_API_KEY' | 'OPENROUTER_API_KEY'; extract: Extractor }[] = [
-  { name: 'groq', envKey: 'GROQ_API_KEY', extract: extractWithGroq },
+// Gemini is PRIMARY as of this round, by explicit request, for a dev-only
+// trial (its API key needs billing enabled on the Google account to be
+// issued at all - Google's own free tier's usage limits still apply once you
+// have one, so this can stay $0 in practice, just not card-free to set up).
+// Groq and OpenRouter are disabled (commented, not deleted) for this same
+// trial - re-enable by uncommenting their lines below. Cerebras stays
+// disabled too (see cerebras.ts's own comment - 402 payment-required on
+// every model this account can reach).
+const PROVIDERS: { name: string; envKey: 'GEMINI_API_KEY'; extract: Extractor }[] = [
+  { name: 'gemini', envKey: 'GEMINI_API_KEY', extract: extractWithGemini },
+  // { name: 'groq', envKey: 'GROQ_API_KEY', extract: extractWithGroq },
   // { name: 'cerebras', envKey: 'CEREBRAS_API_KEY', extract: extractWithCerebras },
-  { name: 'openrouter', envKey: 'OPENROUTER_API_KEY', extract: extractWithOpenRouter },
+  // { name: 'openrouter', envKey: 'OPENROUTER_API_KEY', extract: extractWithOpenRouter },
 ];
 
 export async function extractOrderItems(text: string, catalogNames: string[]): Promise<ExtractedItem[]> {
@@ -38,5 +40,5 @@ export async function extractOrderItems(text: string, catalogNames: string[]): P
     }
   }
   if (lastErr) throw new Error('Todos los proveedores de IA fallaron');
-  throw new Error('Ningún proveedor de IA está configurado (GROQ_API_KEY / OPENROUTER_API_KEY)');
+  throw new Error('Ningún proveedor de IA está configurado (GEMINI_API_KEY)');
 }

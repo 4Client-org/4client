@@ -16,6 +16,13 @@ interface DiscoveryConfig {
   // lists it, since a proven model beats a random pick from a large list.
   preferredIds?: string[];
   maxCandidates?: number;
+  // Groq/OpenRouter both return `{ data: [...] }` (OpenAI-style) - the
+  // default. Gemini's own /models response is shaped differently
+  // (`{ models: [...] }`, id under `name`) - these two let a provider
+  // override just the shape-reading, not duplicate the whole cache/ordering
+  // logic below for one different JSON key.
+  extractList?: (data: any) => any[];
+  getId?: (model: any) => string;
 }
 
 const TTL_MS = 60 * 60 * 1000; // re-check each provider's model list at most once an hour
@@ -31,9 +38,11 @@ export async function discoverCandidateModels(cacheKey: string, cfg: DiscoveryCo
 
   const res = await fetch(cfg.modelsUrl, { headers: cfg.headers() });
   if (!res.ok) throw new Error(`${cacheKey}: models list failed (${res.status})`);
-  const data = await res.json() as { data: any[] };
+  const data = await res.json();
 
-  const eligible = (data.data ?? []).filter(cfg.isEligible).map((m) => m.id as string);
+  const list = (cfg.extractList ?? ((d: any) => d.data ?? []))(data);
+  const getId = cfg.getId ?? ((m: any) => m.id as string);
+  const eligible = list.filter(cfg.isEligible).map(getId);
   const preferred = (cfg.preferredIds ?? []).filter((id) => eligible.includes(id));
   const rest = eligible.filter((id) => !preferred.includes(id));
   const ordered = [...preferred, ...rest].slice(0, cfg.maxCandidates ?? 4);
