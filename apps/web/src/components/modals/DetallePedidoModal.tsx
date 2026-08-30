@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -25,8 +25,20 @@ import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import HistoryTable from '../ui/HistoryTable';
 import PasswordInput from '../ui/PasswordInput';
+import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
+import { mergeExtractedItems, mergeResultToast } from '../../lib/tomarLista';
+import { TomarListaActionBar } from '../chat/TomarListaActionBar';
+import { TomarListaResultModal } from '../chat/TomarListaResultModal';
 
-interface Props { orderId: string; onClose: () => void; openCobro?: boolean; }
+interface Props {
+  orderId: string;
+  onClose: () => void;
+  openCobro?: boolean;
+  // "Tomar lista" (TicketModal has no order-item UI of its own): items already
+  // extracted+matched by AI, merged into this order's draft once on mount -
+  // see the prefillItems effect below.
+  prefillItems?: TomarListaItem[];
+}
 
 const COD_COLORS: Record<string, string> = {
   nuevo: '#94A3B8', preparando: '#F59E0B', listo: '#3B82F6',
@@ -78,7 +90,7 @@ function renderText(text: string) {
   });
 }
 
-export default function DetallePedidoModal({ orderId, onClose, openCobro }: Props) {
+export default function DetallePedidoModal({ orderId, onClose, openCobro, prefillItems }: Props) {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin';
@@ -292,10 +304,18 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     if (!touched.has('empleado')) setEmpleadoId(order.employee_id ?? '');
     if (!catalogDirty) {
       setItems((order.items ?? []).map((i: any) => ({
+        // The real OrderItem.id, not a fresh client-generated one - this effect
+        // re-runs on every order refetch (order:updated socket, a save, etc.),
+        // and a NEW id each time would break editingRow/localInputs mid-edit
+        // (see ProductSearch.tsx's own _uid comment) even though nothing about
+        // this specific row actually changed. The server id is already stable
+        // and unique per row, so reuse it directly.
+        _uid: i.id ?? crypto.randomUUID(),
         product_name: i.product_name ?? '',
         quantity_label: i.quantity_label ?? '',
         price: String(i.price ?? ''),
         added_by_client: !!i.added_by_client,
+        ai_unmatched: !!i.ai_unmatched,
       })));
     }
     // Read the choice straight off the order - NOT inferred by comparing
@@ -339,19 +359,22 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       // save a moment later (full delete+recreate of OrderItem, orders.ts PATCH
       // /:id) would silently wipe it out along with its added_by_client red
       // highlight. Merge in any item from the fresh server data that isn't
-      // already present locally (matched by product_name, the same key used
-      // everywhere else items don't carry a stable id) instead of just warning
-      // and hoping staff manually re-adds it after reading the toast.
+      // already present locally (matched by product_name - a content check,
+      // separate from each row's own _uid identity used for editing/removal)
+      // instead of just warning and hoping staff manually re-adds it after
+      // reading the toast.
       if (catalogDirty && data?.id && Array.isArray(data.items)) {
         setItems((prev: any[]) => {
           const known = new Set(prev.map((i) => i.product_name));
           const missing = data.items
             .filter((i: any) => !known.has(i.product_name))
             .map((i: any) => ({
+              _uid: i.id ?? crypto.randomUUID(),
               product_name: i.product_name ?? '',
               quantity_label: i.quantity_label ?? '',
               price: String(i.price ?? ''),
               added_by_client: true,
+              ai_unmatched: !!i.ai_unmatched,
             }));
           return missing.length > 0 ? [...prev, ...missing] : prev;
         });
@@ -472,6 +495,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
           price: parseFloat(i.price) || 0,
           sort_order: idx,
           added_by_client: !!i.added_by_client,
+          ai_unmatched: !!i.ai_unmatched,
         })),
       });
     },
@@ -483,6 +507,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      // TicketModal caches this order's own ticket separately (['ticket',
+      // ticketId, fecha]) - global staleTime is 30s (main.tsx), so reopening
+      // the ticket shortly after saving (very easy right after "Tomar lista"
+      // merges items into an existing order) showed the pre-save item list
+      // without this.
+      qc.invalidateQueries({ queryKey: ['ticket'] });
       touchedFieldsRef.current.clear();
       setIsDirty(false);
       setCatalogDirty(false);
@@ -541,6 +571,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
     },
     onError: (e: any) => toast(e.message, true),
   });
@@ -550,7 +581,12 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // plain confirm() prompt, so it can be validated (non-empty) before submitting.
   const papeleraMut = useMutation({
     mutationFn: (reason: string) => api.patch(`/orders/${orderId}/status`, { status: 'papelera', reason }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); toast('Pedido enviado a papelera'); onClose(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
+      toast('Pedido enviado a papelera');
+      onClose();
+    },
     onError: (e: any) => toast(e.message, true),
   });
 
@@ -562,6 +598,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pedido restaurado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -577,6 +614,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Crédito marcado como pagado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -593,6 +631,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pedido marcado como cobrado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -672,6 +711,67 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   });
 
   function markDirty() { setIsDirty(true); }
+
+  // "Tomar lista" - see hooks/useTomarLista.ts. Chat is embedded right next to
+  // this order's own item list, so a successful extraction merges straight
+  // into `items` (no new-vs-existing-order popup needed here - TicketModal is
+  // the only caller that ever needs that, since it has no order of its own yet).
+  const canTomarLista = canManage;
+  const tomarLista = useTomarLista(order?.ticket_id);
+  const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
+
+  // The header button that TOGGLES Tomar lista is already disabled once
+  // isPastDay (computed inline here, not read from the `const isPastDay`
+  // further down - THIS hook must run unconditionally on every render, same
+  // as every other hook in this component, and that one is declared AFTER
+  // the `if (isLoading || !order) return (...)` guard below. A hook placed
+  // after a conditional return fires on some renders and not others (order
+  // still loading vs loaded) - React's Rules of Hooks violation, and exactly
+  // what caused a real "página en blanco" crash (React error #310, "Rendered
+  // more hooks than during the previous render") on every single order open
+  // once this effect was added there instead of here) - covers cierre
+  // happening WHILE staff is already mid-selection, kicking them out the
+  // same way every other control on the day freezes instead of leaving
+  // "Montar lista" clickable.
+  useEffect(() => {
+    const pastDayNow = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
+    if (pastDayNow && tomarLista.active) tomarLista.clear();
+  }, [orderFecha, diaCerrado, tomarLista.active]);
+
+  function handleProcesarTomarLista() {
+    tomarLista.mutation.mutate(undefined, {
+      onSuccess: (res: any) => {
+        const { items: extracted, unmatchedNames } = res.data;
+        tomarLista.clear();
+        if (unmatchedNames.length === 0) {
+          const merged = mergeExtractedItems(items, extracted);
+          setItems(merged.items);
+          setCatalogDirty(true);
+          markDirty();
+          toast(mergeResultToast(merged));
+        } else {
+          setTomarListaResult({ items: extracted, unmatchedNames });
+        }
+      },
+      onError: (e: any) => toast(e.message ?? 'No se pudo procesar el texto con IA - intenta de nuevo', true),
+    });
+  }
+
+  // Applied once per modal open (not re-applied on a later order refresh) -
+  // came from TicketModal's "Tomar lista" when no order existed yet to merge
+  // into, so this is the freshly-created order that should receive them.
+  const prefillAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!order || !prefillItems?.length || prefillAppliedRef.current) return;
+    prefillAppliedRef.current = true;
+    // Functional updater, not a direct read of `items` - this effect can run
+    // in the same commit as the order-hydration effect above (both fire off
+    // `order` first loading), and must merge onto whatever THAT one just set,
+    // not a stale pre-hydration closure value.
+    setItems((prev: any[]) => mergeExtractedItems(prev, prefillItems).items);
+    setCatalogDirty(true);
+    markDirty();
+  }, [order, prefillItems]);
 
   // Fixed page WIDTH (thermal-receipt-style, 80mm), but the page HEIGHT below is
   // just the size of the first sheet - newPage() below adds more identically-sized
@@ -840,6 +940,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['ticket'] }); // see saveMut's comment above
       toast('Pago confirmado');
       setShowCobro(false);
       onClose();
@@ -951,6 +1052,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
   // gets closed early (cierre.ts only allows closing today, so a closed diaCerrado
   // here always means "today, already closed" - not some future/past mismatch).
   const isPastDay = (!!orderFecha && orderFecha < todayStr()) || diaCerrado;
+
   const total = items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
   // Same signal items already give per-row via added_by_client - the
   // client_modified bell says "something changed" but not WHERE. Comes straight
@@ -1001,7 +1103,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1060 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1220 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1010,8 +1112,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 300, background: '#ECE5DD', display: 'flex',
-            flexDirection: 'column', flexShrink: 0, minHeight: 0,
+            width: 460, background: '#ECE5DD', display: 'flex',
+            flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
           }}>
             {/* Chat header */}
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '12px 14px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -1021,7 +1123,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.8 }}>{formatPhoneDisplay(order.customer_phone)}</div>
               </div>
-              <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0, justifyContent: 'flex-end' }}>
                 <button
                   className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
@@ -1044,6 +1146,17 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
+                {canTomarLista && (
+                  <button
+                    className="hdr-ic-btn"
+                    title="Seleccionar mensajes del cliente para armar el pedido"
+                    onClick={() => tomarLista.toggle()}
+                    disabled={isPastDay}
+                  >
+                    <ListChecks size={13} />
+                    <span>Tomar<br />lista</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1073,16 +1186,26 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       </span>
                     </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+                    {tomarLista.active && tomarLista.isEligible(msg) && (
+                      <input
+                        type="checkbox"
+                        checked={tomarLista.selectedIds.has(msg.id)}
+                        onChange={() => tomarLista.toggleMsg(msg.id)}
+                        style={{ marginTop: 8, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
+                      />
+                    )}
                     <div style={{
                       position: 'relative',
                       background: isOut ? '#DCF8C6' : '#fff',
                       borderRadius: isOut ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                       padding: '7px 10px', maxWidth: '85%', fontSize: 12,
                       boxShadow: '0 1px 2px rgba(0,0,0,.1)',
+                      cursor: tomarLista.active && tomarLista.isEligible(msg) ? 'pointer' : undefined,
                     }}
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
-                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}>
+                      onMouseLeave={() => setHoveredMsgId((id) => (id === msg.id ? null : id))}
+                      onClick={() => { if (tomarLista.active && tomarLista.isEligible(msg)) tomarLista.toggleMsg(msg.id); }}>
                       {isOut && (
                         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--vd)', marginBottom: 2 }}>{msg.sender?.name ?? 'Sistema'}</div>
                       )}
@@ -1101,7 +1224,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
                       {hoveredMsgId === msg.id && (
                         <button
                           title="Reenviar a otro chat"
-                          onClick={() => setForwardMsg(msg)}
+                          onClick={(e) => { e.stopPropagation(); setForwardMsg(msg); }}
                           style={{
                             position: 'absolute', top: -10, [isOut ? 'left' : 'right']: -10,
                             width: 26, height: 26, borderRadius: '50%', border: '1px solid var(--brd)',
@@ -1122,44 +1245,70 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro }: Prop
              </div>
             </div>
 
-            {/* Reply bar - visible to all roles */}
-            <div style={{
-              display: 'flex', gap: 6, padding: '8px 8px',
-              borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
-            }}>
-              <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
-              <button
-                title="Adjuntar foto, audio, video o documento"
-                onClick={() => chatFileInputRef.current?.click()}
-                disabled={sendMediaPending}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
-              >
-                <Paperclip size={16} />
-              </button>
-              <textarea
-                placeholder="Responder... (Enter envía)"
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                onKeyDown={handleChatKeyDown}
-                rows={3}
-                style={{
-                  flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
-                  padding: '8px 10px', fontSize: 13, resize: 'none', fontFamily: 'inherit',
-                  background: '#fff', lineHeight: 1.4,
-                }}
+            {/* Reply bar - visible to all roles - replaced by the Tomar lista
+                action bar while that selection mode is active. */}
+            {tomarLista.active ? (
+              <TomarListaActionBar
+                count={tomarLista.selectedIds.size}
+                pending={tomarLista.mutation.isPending}
+                onCancel={() => tomarLista.clear()}
+                onClearSelection={() => tomarLista.clearSelection()}
+                onProcess={handleProcesarTomarLista}
               />
-              <button
-                onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
-                disabled={!replyText.trim() || replyMut.isPending}
-                style={{
-                  background: 'var(--v)', color: '#fff', border: 'none',
-                  borderRadius: 8, padding: '0 10px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
-                }}>
-                <Send size={14} />
-              </button>
-            </div>
+            ) : (
+              <div style={{
+                display: 'flex', gap: 6, padding: '8px 8px',
+                borderTop: '1px solid rgba(0,0,0,.1)', background: '#F0F0F0', flexShrink: 0,
+              }}>
+                <input ref={chatFileInputRef} type="file" accept={CHAT_MEDIA_ACCEPT} onChange={handleChatPickImage} style={{ display: 'none' }} />
+                <button
+                  title="Adjuntar foto, audio, video o documento"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  disabled={sendMediaPending}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gt)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                >
+                  <Paperclip size={16} />
+                </button>
+                <textarea
+                  placeholder="Responder... (Enter envía)"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={handleChatKeyDown}
+                  rows={3}
+                  style={{
+                    flex: 1, border: '1.5px solid var(--brd)', borderRadius: 8,
+                    padding: '8px 10px', fontSize: 13, resize: 'none', fontFamily: 'inherit',
+                    background: '#fff', lineHeight: 1.4,
+                  }}
+                />
+                <button
+                  onClick={() => { const txt = replyText.trim(); if (txt) replyMut.mutate(txt); }}
+                  disabled={!replyText.trim() || replyMut.isPending}
+                  style={{
+                    background: 'var(--v)', color: '#fff', border: 'none',
+                    borderRadius: 8, padding: '0 10px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', fontSize: 12, flexShrink: 0,
+                  }}>
+                  <Send size={14} />
+                </button>
+              </div>
+            )}
           </div>
+        )}
+        {tomarListaResult && (
+          <TomarListaResultModal
+            unmatchedNames={tomarListaResult.unmatchedNames}
+            eligibleOrders={[]}
+            onConfirm={() => {
+              const merged = mergeExtractedItems(items, tomarListaResult.items);
+              setItems(merged.items);
+              toast(mergeResultToast(merged));
+              setCatalogDirty(true);
+              markDirty();
+              setTomarListaResult(null);
+            }}
+            onCancel={() => setTomarListaResult(null)}
+          />
         )}
 
         {/* ===== RIGHT: ORDER DETAIL ===== */}

@@ -8,6 +8,9 @@ import {
   storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime,
   isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime, detectMediaMime,
 } from '../lib/media.js';
+import { extractOrderItems } from '../services/ai/index.js';
+import { matchProductName } from '../lib/matchProduct.js';
+import { normalizeSearch } from '../lib/normalize.js';
 
 // Meta's own outbound size limits per media type - enforced here too so an
 // oversized upload fails fast with a clear message instead of getting rejected
@@ -714,5 +717,93 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       data: { form_links_blocked_at: new Date() },
     });
     return reply.send({ data: { ok: true } });
+  });
+
+  // POST /api/v1/inbox/:ticketId/parse-messages - "Tomar lista": staff selects
+  // 1+ of the customer's own text messages, an AI extracts product+quantity
+  // pairs (services/ai/index.ts, chained free-tier providers), each is matched
+  // against the org's real catalog (lib/matchProduct.ts). Pure computation -
+  // never writes to the DB, never creates/touches an order. The frontend takes
+  // the returned items and drops them into the same draft item list staff
+  // already reviews before hitting the real save button (POST/PATCH /orders).
+  fastify.post('/:ticketId/parse-messages', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const body = z.object({ messageIds: z.array(z.string().uuid()).min(1).max(50) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const messages = await fastify.prisma.ticketMessage.findMany({
+      where: { id: { in: body.data.messageIds }, ticket_id: ticket.id },
+    });
+    // Every id must resolve to a real message on THIS ticket - catches a stale
+    // client (message deleted/moved) or a tampered request (id from another
+    // ticket) instead of silently extracting from whatever subset matched.
+    if (messages.length !== body.data.messageIds.length) {
+      return reply.status(400).send({ error: 'Alguno de los mensajes seleccionados no existe en esta conversación', code: 'INVALID_MESSAGES' });
+    }
+    // Never trust the frontend's own checkbox gating - only the customer's own
+    // plain-text messages are eligible (never staff replies, never media).
+    if (messages.some(m => m.direction !== 'in' || !!m.media_type)) {
+      return reply.status(400).send({ error: 'Solo se pueden seleccionar mensajes de texto del cliente', code: 'INVALID_MESSAGES' });
+    }
+
+    const combinedText = messages
+      .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
+      .map(m => m.text)
+      .filter((t): t is string => !!t && t.trim().length > 0)
+      .join('\n');
+    if (!combinedText) {
+      return reply.status(400).send({ error: 'Los mensajes seleccionados no tienen texto', code: 'INVALID_MESSAGES' });
+    }
+
+    const products = await fastify.prisma.product.findMany({
+      where: { org_id: req.user.orgId, active: true },
+      select: { name: true, price_per_unit: true },
+    });
+    const catalog = products.map(p => ({ name: p.name, price_per_unit: p.price_per_unit ? Number(p.price_per_unit) : null }));
+
+    let extracted;
+    try {
+      extracted = await extractOrderItems(combinedText, catalog.map(c => c.name));
+    } catch (err) {
+      req.log.error({ err }, 'tomar-lista: extracción con IA falló en todos los proveedores');
+      return reply.status(502).send({ error: 'No se pudo procesar el texto con IA - intenta de nuevo', code: 'AI_EXTRACTION_FAILED' });
+    }
+
+    // Guards against a whitespace-only product_name (passes zod's min(1) on
+    // character count, but there's nothing there) - matchProductName would
+    // otherwise treat '' as a substring of every catalog entry and could
+    // still land a blank-ish line in the draft for staff to puzzle over.
+    const matched = extracted.filter(item => item.product_name.trim().length > 0).map(item => {
+      const m = matchProductName(item.product_name, catalog);
+      return {
+        product_name: m.name,
+        quantity_label: item.quantity_label ?? '',
+        price: m.price,
+        added_by_client: false,
+        ai_unmatched: !m.matched,
+      };
+    });
+    // Dedupe WITHIN this same extraction (case/accent-insensitive) - the AI
+    // can return the same product more than once if the customer mentioned it
+    // in more than one selected message (e.g. "quiero papa" ... later "y otra
+    // papa"), and two matched mentions of the same catalog product normalize
+    // to the identical name. Keeps the first occurrence's quantity_label, no
+    // summing - staff bumps the quantity by hand if the customer really meant
+    // more. This is independent of (and doesn't know about) whatever the
+    // frontend's own draft already has - see lib/tomarLista.ts's
+    // mergeExtractedItems on the frontend for that second, separate check.
+    const seenNames = new Set<string>();
+    const items = matched.filter(i => {
+      const key = normalizeSearch(i.product_name);
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
+    const unmatchedNames = items.filter(i => i.ai_unmatched).map(i => i.product_name);
+
+    return reply.send({ data: { items, unmatchedNames } });
   });
 }

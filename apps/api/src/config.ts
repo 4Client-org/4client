@@ -33,6 +33,15 @@ const envSchema = z.object({
   // toggled directly in Railway's env vars for that one environment rather than
   // inferred from an environment NAME string that could be renamed/duplicated.
   REQUIRE_2FA:               z.coerce.boolean().default(false),
+  // "Tomar lista" (routes/inbox.ts's /parse-messages): free-tier AI providers
+  // chained as fallback (services/ai/index.ts tries them in order, skipping any
+  // whose key isn't set) - a deliberate prototype-phase choice, not a claim that
+  // any one of these is production-grade on its own. All optional so the feature
+  // is a no-op (throws a clear error, doesn't crash the server) with none set.
+  GEMINI_API_KEY:            z.string().optional(),
+  GROQ_API_KEY:              z.string().optional(),
+  CEREBRAS_API_KEY:          z.string().optional(),
+  OPENROUTER_API_KEY:        z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
