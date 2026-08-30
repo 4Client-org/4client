@@ -26,6 +26,7 @@ interface DiscoveryConfig {
 }
 
 const TTL_MS = 60 * 60 * 1000; // re-check each provider's model list at most once an hour
+const MODELS_FETCH_TIMEOUT_MS = 10_000;
 const cache = new Map<string, { ids: string[]; at: number }>();
 
 export async function discoverCandidateModels(cacheKey: string, cfg: DiscoveryConfig): Promise<string[]> {
@@ -36,7 +37,7 @@ export async function discoverCandidateModels(cacheKey: string, cfg: DiscoveryCo
   // rest of the TTL when there's nothing left to try.
   if (hit && hit.ids.length > 0 && now - hit.at < TTL_MS) return hit.ids;
 
-  const res = await fetch(cfg.modelsUrl, { headers: cfg.headers() });
+  const res = await fetch(cfg.modelsUrl, { headers: cfg.headers(), signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`${cacheKey}: models list failed (${res.status})`);
   const data = await res.json();
 

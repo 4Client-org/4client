@@ -4,6 +4,10 @@ import { discoverCandidateModels, dropFromCache } from './modelDiscovery.js';
 
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODELS_URL = 'https://openrouter.ai/api/v1/models';
+// Bounds each attempt so a slow/hanging candidate can't stretch the whole
+// request past Railway's own upstream timeout (see gemini.ts's comment -
+// found live, applies to every provider that tries multiple candidates).
+const GENERATE_TIMEOUT_MS = 20_000;
 
 // OpenRouter's own /models response includes real pricing per model, so
 // "free" is actually detectable here (unlike Groq) - `:free`-suffixed id AND
@@ -40,6 +44,7 @@ async function callModel(model: string, text: string, catalogNames: string[]) {
       Authorization: `Bearer ${config.OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
     },
+    signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
     body: JSON.stringify({
       model,
       messages: [
