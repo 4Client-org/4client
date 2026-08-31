@@ -76,29 +76,32 @@ function CategoryPicker({ value, options, onChange, placeholder }: { value: stri
 
   useEffect(() => {
     if (!open) return;
-    const r = btnRef.current?.getBoundingClientRect();
-    if (r) setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    const reposition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    reposition();
     function onClickOutside(e: MouseEvent) {
       const target = e.target as Node;
       if (btnRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       setOpen(false);
     }
-    function onScrollOrResize() { setOpen(false); }
-    // Armar estos listeners un frame después, no en el mismo tick que abrió el
-    // menú - el clic que lo abre también mueve el foco al botón, y el propio
-    // navegador a veces hace un auto-scroll mínimo para dejarlo visible. Ese
-    // scroll disparaba `onScrollOrResize` de inmediato y cerraba el menú que
-    // se acababa de abrir en el mismo gesto ("con clic se abre y se cierra",
-    // pero con Enter no pasaba porque el botón ya estaba enfocado de antes,
-    // sin scroll nuevo que disparar). Un requestAnimationFrame alcanza para
-    // dejar pasar ese scroll incidental antes de empezar a escuchar de verdad.
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', onClickOutside);
-      window.addEventListener('scroll', onScrollOrResize, true);
-      window.addEventListener('resize', onScrollOrResize);
-    });
+    // REPOSICIONA en vez de cerrar en scroll/resize - antes cerraba
+    // (`setOpen(false)`), lo que resultó demasiado agresivo: un clic que abre
+    // el menú también mueve el foco al botón, y el navegador a veces hace un
+    // auto-scroll para dejarlo visible; ese scroll incidental cerraba el menú
+    // en el mismo gesto que lo abría. Un requestAnimationFrame de margen
+    // arregló ESE caso puntual, pero seguir cerrando en cualquier scroll deja
+    // la puerta abierta a que cualquier OTRA causa de scroll/resize (barra de
+    // notificaciones del navegador, otra extensión, lo que sea) reproduzca lo
+    // mismo. Reposicionar es estrictamente más robusto: el menú simplemente
+    // seguía a su botón, nunca desaparece por una causa que no sea elegir una
+    // opción o hacer clic realmente afuera.
+    function onScrollOrResize() { reposition(); }
+    document.addEventListener('mousedown', onClickOutside);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
     return () => {
-      cancelAnimationFrame(raf);
       document.removeEventListener('mousedown', onClickOutside);
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
