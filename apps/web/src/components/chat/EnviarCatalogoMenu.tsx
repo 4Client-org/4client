@@ -57,10 +57,18 @@ export function EnviarCatalogoMenu({ ticketId, products, disabled }: Props) {
     // Cierra en vez de reposicionar - más simple que recalcular coords en cada
     // scroll, y de todas formas es una interacción corta (elegir una opción).
     function onScrollOrResize() { close(); }
-    document.addEventListener('mousedown', onClickOutside);
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
+    // Un frame de gracia antes de armar estos listeners - el clic que abre el
+    // menú también enfoca el botón, y el navegador a veces hace un auto-scroll
+    // mínimo para dejarlo visible; sin este margen ese scroll incidental
+    // cerraba el menú en el mismo gesto que lo abría (mismo bug encontrado y
+    // corregido en config/ProductsSection.tsx's CategoryPicker).
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener('mousedown', onClickOutside);
+      window.addEventListener('scroll', onScrollOrResize, true);
+      window.addEventListener('resize', onScrollOrResize);
+    });
     return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener('mousedown', onClickOutside);
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
