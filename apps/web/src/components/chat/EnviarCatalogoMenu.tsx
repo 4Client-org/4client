@@ -45,8 +45,11 @@ export function EnviarCatalogoMenu({ ticketId, products, disabled }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    const r = btnRef.current?.getBoundingClientRect();
-    if (r) setCoords({ top: r.bottom + 6, left: r.left });
+    const reposition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setCoords({ top: r.bottom + 6, left: r.left });
+    };
+    reposition();
 
     function onClickOutside(e: MouseEvent) {
       const target = e.target as Node;
@@ -54,21 +57,17 @@ export function EnviarCatalogoMenu({ ticketId, products, disabled }: Props) {
       if (menuRef.current?.contains(target)) return;
       close();
     }
-    // Cierra en vez de reposicionar - más simple que recalcular coords en cada
-    // scroll, y de todas formas es una interacción corta (elegir una opción).
-    function onScrollOrResize() { close(); }
-    // Un frame de gracia antes de armar estos listeners - el clic que abre el
-    // menú también enfoca el botón, y el navegador a veces hace un auto-scroll
-    // mínimo para dejarlo visible; sin este margen ese scroll incidental
-    // cerraba el menú en el mismo gesto que lo abría (mismo bug encontrado y
-    // corregido en config/ProductsSection.tsx's CategoryPicker).
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', onClickOutside);
-      window.addEventListener('scroll', onScrollOrResize, true);
-      window.addEventListener('resize', onScrollOrResize);
-    });
+    // REPOSICIONA en vez de cerrar en scroll/resize (antes cerraba) - un clic
+    // que abre el menú también mueve el foco al botón, y el navegador a veces
+    // hace un auto-scroll para dejarlo visible; cerrar en CUALQUIER scroll
+    // dejaba la puerta abierta a que ese (u otro) scroll incidental cerrara el
+    // menú en el mismo gesto que lo abría. Mismo ajuste hecho en
+    // config/ProductsSection.tsx's CategoryPicker.
+    function onScrollOrResize() { reposition(); }
+    document.addEventListener('mousedown', onClickOutside);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
     return () => {
-      cancelAnimationFrame(raf);
       document.removeEventListener('mousedown', onClickOutside);
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
