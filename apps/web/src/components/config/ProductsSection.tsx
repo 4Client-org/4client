@@ -84,10 +84,21 @@ function CategoryPicker({ value, options, onChange, placeholder }: { value: stri
       setOpen(false);
     }
     function onScrollOrResize() { setOpen(false); }
-    document.addEventListener('mousedown', onClickOutside);
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
+    // Armar estos listeners un frame después, no en el mismo tick que abrió el
+    // menú - el clic que lo abre también mueve el foco al botón, y el propio
+    // navegador a veces hace un auto-scroll mínimo para dejarlo visible. Ese
+    // scroll disparaba `onScrollOrResize` de inmediato y cerraba el menú que
+    // se acababa de abrir en el mismo gesto ("con clic se abre y se cierra",
+    // pero con Enter no pasaba porque el botón ya estaba enfocado de antes,
+    // sin scroll nuevo que disparar). Un requestAnimationFrame alcanza para
+    // dejar pasar ese scroll incidental antes de empezar a escuchar de verdad.
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener('mousedown', onClickOutside);
+      window.addEventListener('scroll', onScrollOrResize, true);
+      window.addEventListener('resize', onScrollOrResize);
+    });
     return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener('mousedown', onClickOutside);
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
