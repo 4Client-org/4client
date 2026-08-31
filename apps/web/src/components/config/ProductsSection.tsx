@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Check, X, ChevronDown, ChevronRight, Search, Download, Upload } from 'lucide-react';
 import { sortCategoryEntries } from '../../lib/categoryOrder';
@@ -56,6 +57,74 @@ function StockToggle({ value, onChange, disabled }: { value: boolean; onChange: 
         background: '#fff', transition: 'left .15s', boxShadow: '0 1px 3px rgba(0,0,0,.3)',
       }} />
     </button>
+  );
+}
+
+// Reemplaza el <select> nativo de categoría - un `<select>` normal debía
+// bastar, pero un intento anterior (identidad de componente inestable, ya
+// corregido) no eliminó el problema reportado ("le doy clic y se cierra
+// solo") y no hay forma de reproducir/depurar un popup NATIVO del navegador
+// desde acá. Un desplegable propio, hecho en React de punta a punta (mismo
+// patrón de portal a document.body + position:fixed que EnviarCatalogoMenu.tsx),
+// saca el control nativo de la ecuación por completo - cero dependencia del
+// comportamiento del navegador/SO para abrir/cerrar el popup.
+function CategoryPicker({ value, options, onChange, placeholder }: { value: string; options: string[]; onChange: (v: string) => void; placeholder?: string }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (btnRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    function onScrollOrResize() { setOpen(false); }
+    document.addEventListener('mousedown', onClickOutside);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button type="button" ref={btnRef} className="fi" onClick={() => setOpen(o => !o)}
+        style={{ padding: '6px 8px', fontSize: 12, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, cursor: 'pointer', background: 'var(--b)' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: value ? 'inherit' : 'var(--gt)' }}>
+          {value || placeholder || 'Sin categoría'}
+        </span>
+        <ChevronDown size={12} style={{ flexShrink: 0 }} />
+      </button>
+      {open && coords && createPortal(
+        <div ref={menuRef} style={{
+          position: 'fixed', top: coords.top, left: coords.left, minWidth: coords.width, zIndex: 1000,
+          background: 'var(--b)', border: '1px solid var(--brd)', borderRadius: 'var(--rad)',
+          boxShadow: 'var(--shf)', padding: 4, maxHeight: 240, overflowY: 'auto',
+        }}>
+          {options.length === 0 && <div style={{ fontSize: 12, color: 'var(--gt)', padding: '6px 8px' }}>Sin categorías todavía</div>}
+          {options.map(opt => (
+            <button key={opt} type="button"
+              onClick={() => { onChange(opt); setOpen(false); }}
+              onMouseDown={e => e.preventDefault()}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', background: opt === value ? 'var(--vc)' : 'none',
+                border: 'none', padding: '7px 8px', fontSize: 13, borderRadius: 6, cursor: 'pointer', color: 'var(--n)',
+              }}>
+              {opt}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -237,20 +306,25 @@ export default function ProductsSection() {
         p.name.toLowerCase().includes(searchLower) || (p.category ?? '').toLowerCase().includes(searchLower))
     : [];
 
-  // Category `<select>` used by an editing row - same "existing category OR type
+  // Category picker used by an editing row - same "existing category OR type
   // a new one" toggle the old shared form used, just embedded in one grid cell.
+  // Uses CategoryPicker (custom dropdown, see above) instead of a native
+  // `<select>` - a native select here kept closing itself immediately on
+  // open ("le doy clic y se cierra solo"). One real cause was found and fixed
+  // (this cell used to be a component defined inline inside ProductsSection's
+  // own render body and invoked as JSX, `<CategoryCell />` - that gave it a
+  // fresh component identity every render, so React remounted the `<select>`'s
+  // real DOM node on every re-render, including the one triggered the instant
+  // its native popup opened) but the report persisted after that fix, so
+  // rather than keep chasing a browser-native popup's behavior blind,
+  // CategoryPicker takes the native control out of the equation entirely -
+  // it's a plain React-rendered dropdown (portal + position:fixed, same
+  // pattern as chat/EnviarCatalogoMenu.tsx), so there is no OS/browser-level
+  // popup left to close itself.
   //
   // Called as a plain function (`{renderCategoryCell()}`), NOT as a JSX
-  // component (`<CategoryCell />`) - it used to be the latter, which made
-  // React treat it as its own component type. Since it was defined inside
-  // ProductsSection's own render body, that "type" was a brand-new function
-  // reference every render, so React unmounted+remounted this `<select>`'s
-  // real DOM node on every re-render of the whole page - including the one
-  // that happens the instant you open the native dropdown to pick a category.
-  // The browser sees its anchor element get destroyed mid-open and snaps the
-  // dropdown shut immediately - the real bug behind "le doy clic y se cierra
-  // solo". Calling it as a normal function inlines its JSX into THIS render
-  // instead, so there's no separate component identity to remount.
+  // component (`<CategoryCell />`) - keeps this cell itself from ever having
+  // that same inline-component-identity problem again.
   function renderCategoryCell() {
     if (!draft) return null;
     if (draft.useNewCategory) {
@@ -270,11 +344,8 @@ export default function ProductsSection() {
     }
     return (
       <div style={{ display: 'flex', gap: 4 }}>
-        <select className="fi" style={{ padding: '6px 8px', fontSize: 12, flex: 1 }} value={draft.category}
-          onChange={e => setDraft(d => d && ({ ...d, category: e.target.value }))}>
-          {existingCategories.length === 0 && <option value="">Sin categoría</option>}
-          {existingCategories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <CategoryPicker value={draft.category} options={existingCategories}
+          onChange={c => setDraft(d => d && ({ ...d, category: c }))} />
         <button type="button" className="dc-btn" title="Nueva categoría"
           onClick={() => setDraft(d => d && ({ ...d, useNewCategory: true, newCategory: '' }))}>
           <Plus size={12} />
