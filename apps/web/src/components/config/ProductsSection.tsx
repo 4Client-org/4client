@@ -239,7 +239,19 @@ export default function ProductsSection() {
 
   // Category `<select>` used by an editing row - same "existing category OR type
   // a new one" toggle the old shared form used, just embedded in one grid cell.
-  function CategoryCell() {
+  //
+  // Called as a plain function (`{renderCategoryCell()}`), NOT as a JSX
+  // component (`<CategoryCell />`) - it used to be the latter, which made
+  // React treat it as its own component type. Since it was defined inside
+  // ProductsSection's own render body, that "type" was a brand-new function
+  // reference every render, so React unmounted+remounted this `<select>`'s
+  // real DOM node on every re-render of the whole page - including the one
+  // that happens the instant you open the native dropdown to pick a category.
+  // The browser sees its anchor element get destroyed mid-open and snaps the
+  // dropdown shut immediately - the real bug behind "le doy clic y se cierra
+  // solo". Calling it as a normal function inlines its JSX into THIS render
+  // instead, so there's no separate component identity to remount.
+  function renderCategoryCell() {
     if (!draft) return null;
     if (draft.useNewCategory) {
       return (
@@ -283,7 +295,7 @@ export default function ProductsSection() {
         <div key={p.id} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
           <input className="fi" style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600 }} value={draft.name}
             onChange={e => setDraft(d => d && ({ ...d, name: e.target.value }))} autoFocus />
-          <CategoryCell />
+          {renderCategoryCell()}
           <input className="fi" type="number" min="0" style={{ padding: '6px 8px', fontSize: 12 }} value={draft.price_per_unit}
             onChange={e => setDraft(d => d && ({ ...d, price_per_unit: e.target.value }))} placeholder="Precio" />
           <select className="fi" style={{ padding: '6px 8px', fontSize: 12 }} value={draft.unit_type}
@@ -299,11 +311,11 @@ export default function ProductsSection() {
           <StockToggle value={p.in_stock ?? true} onChange={v => toggleStock.mutate({ id: p.id, in_stock: v })} disabled={toggleStock.isPending} />
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="dc-btn" title="Guardar cambios" onClick={handleSubmit} disabled={save.isPending}
-              style={{ background: 'var(--v)', borderColor: 'var(--v)', color: '#000' }}>
+              style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
               <Check size={13} />
             </button>
             <button className="dc-btn" title="Cancelar" onClick={cancelEdit}
-              style={{ background: 'var(--r)', borderColor: 'var(--r)', color: '#000' }}>
+              style={{ borderColor: 'var(--r)', color: 'var(--r)' }}>
               <X size={13} />
             </button>
           </div>
@@ -350,7 +362,7 @@ export default function ProductsSection() {
         <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10 }}>
           <input className="fi" style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600 }} value={draft.name}
             onChange={e => setDraft(d => d && ({ ...d, name: e.target.value }))} placeholder="Nombre del producto" autoFocus />
-          <CategoryCell />
+          {renderCategoryCell()}
           <input className="fi" type="number" min="0" style={{ padding: '6px 8px', fontSize: 12 }} value={draft.price_per_unit}
             onChange={e => setDraft(d => d && ({ ...d, price_per_unit: e.target.value }))} placeholder="Precio" />
           <select className="fi" style={{ padding: '6px 8px', fontSize: 12 }} value={draft.unit_type}
@@ -366,11 +378,11 @@ export default function ProductsSection() {
           <StockToggle value={draft.in_stock} onChange={v => setDraft(d => d && ({ ...d, in_stock: v }))} />
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="dc-btn" title="Crear producto" onClick={handleSubmit} disabled={save.isPending}
-              style={{ background: 'var(--v)', borderColor: 'var(--v)', color: '#000' }}>
+              style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
               <Check size={13} />
             </button>
             <button className="dc-btn" title="Cancelar" onClick={cancelEdit}
-              style={{ background: 'var(--r)', borderColor: 'var(--r)', color: '#000' }}>
+              style={{ borderColor: 'var(--r)', color: 'var(--r)' }}>
               <X size={13} />
             </button>
           </div>
