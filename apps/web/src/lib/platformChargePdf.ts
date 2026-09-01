@@ -10,12 +10,17 @@ const TYPE_LABEL: Record<string, string> = {
   otro: 'Otro',
 };
 
+function periodLabel(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  return `${MESES[(m ?? 1) - 1] ?? period} ${y}`;
+}
+
 export interface ChargeForPdf {
   orgName: string;
-  type: string;
-  period?: string | null;
+  types: string[];
+  period: string;
   amount: number;
-  due_date: string;
   notes?: string | null;
 }
 
@@ -35,15 +40,13 @@ export function buildPlatformChargePdf(charge: ChargeForPdf): jsPDF {
   doc.setFont('helvetica', 'normal'); doc.text(charge.orgName, 55, y); y += 7;
 
   doc.setFont('helvetica', 'bold'); doc.text('Concepto:', 20, y);
-  doc.setFont('helvetica', 'normal'); doc.text(TYPE_LABEL[charge.type] ?? charge.type, 55, y); y += 7;
+  doc.setFont('helvetica', 'normal');
+  const conceptos = charge.types.map(t => TYPE_LABEL[t] ?? t).join(' + ');
+  const conceptoLines = doc.splitTextToSize(conceptos, 115);
+  doc.text(conceptoLines, 55, y); y += conceptoLines.length * 5 + 2;
 
-  if (charge.period) {
-    doc.setFont('helvetica', 'bold'); doc.text('Período:', 20, y);
-    doc.setFont('helvetica', 'normal'); doc.text(charge.period, 55, y); y += 7;
-  }
-
-  doc.setFont('helvetica', 'bold'); doc.text('Vencimiento:', 20, y);
-  doc.setFont('helvetica', 'normal'); doc.text(charge.due_date, 55, y); y += 7;
+  doc.setFont('helvetica', 'bold'); doc.text('Mes:', 20, y);
+  doc.setFont('helvetica', 'normal'); doc.text(periodLabel(charge.period), 55, y); y += 7;
 
   if (charge.notes) {
     doc.setFont('helvetica', 'bold'); doc.text('Notas:', 20, y);
