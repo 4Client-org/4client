@@ -427,7 +427,7 @@ export default async function devRoutes(fastify: FastifyInstance) {
     if (status) where.status = status;
 
     const charges = await fastify.prisma.platformCharge.findMany({
-      where, orderBy: { due_date: 'asc' },
+      where, orderBy: { period: 'desc' },
       include: { org: { select: { name: true, slug: true } } },
     });
     return reply.send({ data: charges });
@@ -435,10 +435,13 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
   const createChargeSchema = z.object({
     orgId:       z.string().uuid(),
-    type:        z.enum(['suscripcion', 'onboarding', 'otro']),
-    period:      z.string().regex(/^\d{4}-\d{2}$/).optional(),
+    // Varios conceptos en el mismo cobro (ej. onboarding + suscripción juntos)
+    // - antes un solo `type`, ampliado a array a pedido explícito del usuario.
+    types:       z.array(z.enum(['suscripcion', 'onboarding', 'otro'])).min(1),
+    // Reemplaza a due_date por completo - el usuario solo elige el MES del
+    // cobro (ej. "2026-09"), ya no una fecha de vencimiento específica.
+    period:      z.string().regex(/^\d{4}-\d{2}$/),
     amount:      z.number().positive(),
-    due_date:    z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     notes:       z.string().max(1000).optional(),
     // El PDF se arma en el navegador (jsPDF, mismo patrón que la factura de
     // pedidos en DetallePedidoModal.tsx) y se manda ya listo - este endpoint
@@ -470,15 +473,15 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
     const charge = await fastify.prisma.platformCharge.create({
       data: {
-        org_id: body.data.orgId, type: body.data.type, period: body.data.period ?? null,
-        amount: body.data.amount, due_date: new Date(body.data.due_date),
+        org_id: body.data.orgId, types: body.data.types, period: body.data.period,
+        amount: body.data.amount,
         notes: body.data.notes ?? null, report_url, created_by: req.user.userId,
       },
     });
 
     await audit(fastify.prisma, {
       orgId: body.data.orgId, actorId: req.user.userId, action: 'dev.charge_created',
-      targetId: charge.id, metadata: { type: body.data.type, amount: body.data.amount },
+      targetId: charge.id, metadata: { types: body.data.types, amount: body.data.amount },
     });
 
     return reply.status(201).send({ data: charge });

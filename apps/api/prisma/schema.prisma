@@ -627,11 +627,18 @@ model AuditLog {
 model PlatformCharge {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   org_id     String    @db.Uuid
-  type       String    @db.VarChar(20) // 'suscripcion' | 'onboarding' | 'otro'
-  period     String?   @db.VarChar(7)  // 'YYYY-MM', solo aplica a 'suscripcion'
+  // Varios conceptos en el mismo cobro (ej. onboarding + suscripción juntos
+  // en una sola factura) - cada elemento es 'suscripcion' | 'onboarding' |
+  // 'otro'. Antes era un solo `type` string; se amplió a array a pedido
+  // explícito del usuario tras la primera prueba.
+  types      String[]
+  // 'YYYY-MM' - ahora siempre obligatorio (antes solo aplicaba a
+  // 'suscripcion'). Reemplaza a due_date por completo: el usuario solo
+  // elige el MES del cobro, no una fecha de vencimiento - también a pedido
+  // explícito tras la primera prueba (due_date resultaba confuso, sobraba).
+  period     String    @db.VarChar(7)
   amount     Decimal   @db.Decimal(12, 2)
   status     String    @default("pendiente") @db.VarChar(10) // 'pendiente' | 'pagado'
-  due_date   DateTime  @db.Date
   paid_at    DateTime? @db.Timestamptz
   notes      String?
   report_url String?   // PDF generado y subido a R2 (services/storage.ts) - null si
@@ -643,6 +650,6 @@ model PlatformCharge {
   org     Organization @relation(fields: [org_id], references: [id])
   creator User         @relation(fields: [created_by], references: [id])
 
-  @@index([org_id, due_date])
+  @@index([org_id, period])
   @@map("platform_charges")
 }
