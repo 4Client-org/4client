@@ -223,6 +223,8 @@ describe('Centro de mando dev', () => {
       expect(charge.status).toBe('pendiente');
       expect(charge.paid_at).toBeNull();
       expect(charge.types).toEqual(['suscripcion', 'onboarding']);
+      expect(typeof charge.number).toBe('number'); // consecutivo real, no basado en fecha/hora
+      expect(charge.report_url).toBeNull(); // todavía sin adjuntar - ver POST /charges/:id/pdf
 
       const listRes = await app.inject({
         method: 'GET', url: `/api/v1/dev/charges?orgId=${orgId}&status=pendiente`,
@@ -265,6 +267,64 @@ describe('Centro de mando dev', () => {
         payload: { orgId, types: [], period: '2026-06', amount: 50000 },
       });
       expect(res.statusCode).toBe(400);
+    });
+
+    it('asigna números consecutivos crecientes entre cobros', async () => {
+      const r1 = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['otro'], period: '2026-07', amount: 10000 },
+      });
+      const r2 = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['otro'], period: '2026-07', amount: 10000 },
+      });
+      expect(r2.json().data.number).toBeGreaterThan(r1.json().data.number);
+    });
+
+    it('POST /charges/:id/pdf adjunta el PDF a un cobro ya creado', async () => {
+      const createRes = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['suscripcion'], period: '2026-08', amount: 20000 },
+      });
+      const chargeId = createRes.json().data.id;
+      const fakePdfBase64 = Buffer.from('%PDF-1.4 contenido de prueba').toString('base64');
+
+      const pdfRes = await app.inject({
+        method: 'POST', url: `/api/v1/dev/charges/${chargeId}/pdf`,
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { pdf_base64: fakePdfBase64 },
+      });
+      expect(pdfRes.statusCode).toBe(200);
+      // Sin R2 configurado en tests, report_url queda null - lo que importa es
+      // que el endpoint no falle y el cobro siga existiendo intacto.
+      expect(pdfRes.json().data.id).toBe(chargeId);
+    });
+
+    it('POST /charges/:id/pdf da 404 con un cobro inexistente', async () => {
+      const res = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges/00000000-0000-0000-0000-000000000000/pdf',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { pdf_base64: 'YQ==' },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('POST /charges/:id/pdf rechaza un rol no-dev', async () => {
+      const createRes = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['otro'], period: '2026-08', amount: 5000 },
+      });
+      const chargeId = createRes.json().data.id;
+      const res = await app.inject({
+        method: 'POST', url: `/api/v1/dev/charges/${chargeId}/pdf`,
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { pdf_base64: 'YQ==' },
+      });
+      expect(res.statusCode).toBe(403);
     });
   });
 

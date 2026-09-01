@@ -443,16 +443,16 @@ export default async function devRoutes(fastify: FastifyInstance) {
     period:      z.string().regex(/^\d{4}-\d{2}$/),
     amount:      z.number().positive(),
     notes:       z.string().max(1000).optional(),
-    // El PDF se arma en el navegador (jsPDF, mismo patrón que la factura de
-    // pedidos en DetallePedidoModal.tsx) y se manda ya listo - este endpoint
-    // solo lo sube a R2 (services/storage.ts) y guarda el registro.
-    pdf_base64:  z.string().optional(),
   });
 
-  // POST /dev/charges - crea un cobro nuevo en estado 'pendiente'. Si viene un
-  // PDF y R2 está configurado, lo sube y guarda su URL - si falla la subida o
-  // R2 no está configurado en este ambiente, el registro se guarda igual (solo
-  // sin report_url), nunca se pierde el cobro por un problema de storage.
+  // POST /dev/charges - crea un cobro nuevo en estado 'pendiente', SIN el PDF
+  // todavía. El número consecutivo (PlatformCharge.number, autoincrement)
+  // solo existe una vez creada la fila - el PDF necesita imprimir ESE número,
+  // así que el frontend arma el PDF DESPUÉS de esta llamada (con el `number`
+  // que devuelve acá) y lo adjunta con POST /charges/:id/pdf, un segundo paso
+  // separado. Antes se mandaban juntos en una sola llamada, pero eso obligaba
+  // a inventar un número no-secuencial (basado en la hora de generación) ya
+  // que el PDF se armaba antes de que la fila (y su número real) existiera.
   fastify.post('/charges', async (req: any, reply) => {
     const body = createChargeSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
@@ -460,22 +460,11 @@ export default async function devRoutes(fastify: FastifyInstance) {
     const org = await fastify.prisma.organization.findUnique({ where: { id: body.data.orgId } });
     if (!org) return reply.status(404).send({ error: 'Organización no encontrada', code: 'NOT_FOUND' });
 
-    let report_url: string | null = null;
-    if (body.data.pdf_base64 && storage.isConfigured()) {
-      try {
-        const buf = Buffer.from(body.data.pdf_base64, 'base64');
-        const key = `platform-charges/${org.slug}-${Date.now()}.pdf`;
-        report_url = await storage.upload(key, buf, 'application/pdf');
-      } catch {
-        report_url = null;
-      }
-    }
-
     const charge = await fastify.prisma.platformCharge.create({
       data: {
         org_id: body.data.orgId, types: body.data.types, period: body.data.period,
         amount: body.data.amount,
-        notes: body.data.notes ?? null, report_url, created_by: req.user.userId,
+        notes: body.data.notes ?? null, created_by: req.user.userId,
       },
     });
 
@@ -485,6 +474,41 @@ export default async function devRoutes(fastify: FastifyInstance) {
     });
 
     return reply.status(201).send({ data: charge });
+  });
+
+  // POST /dev/charges/:id/pdf - adjunta el PDF ya armado en el navegador (con
+  // el número consecutivo real, ver POST /charges arriba) a un cobro que ya
+  // existe. Si falla la subida a R2 o R2 no está configurado en este
+  // ambiente, el cobro se queda sin report_url pero el registro en sí ya
+  // existe - nunca se pierde el cobro por un problema de storage.
+  // bodyLimit explícito (Fastify por defecto usa 1MB) - el PDF viaja como
+  // base64 en el body (mismo criterio que files.ts's POST /invoice). El logo
+  // ya se comprime del lado del navegador (platformChargePdf.ts) antes de
+  // incrustarlo, pero este margen queda como salvaguarda ante cualquier PDF
+  // más pesado (muchos conceptos, notas largas, etc.).
+  fastify.post('/charges/:id/pdf', { bodyLimit: 6_000_000 }, async (req: any, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ pdf_base64: z.string().min(1) }).safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    const existing = await fastify.prisma.platformCharge.findUnique({
+      where: { id }, include: { org: { select: { slug: true } } },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Cobro no encontrado', code: 'NOT_FOUND' });
+
+    let report_url: string | null = null;
+    if (storage.isConfigured()) {
+      try {
+        const buf = Buffer.from(body.data.pdf_base64, 'base64');
+        const key = `platform-charges/${existing.org.slug}-${existing.number}.pdf`;
+        report_url = await storage.upload(key, buf, 'application/pdf');
+      } catch {
+        report_url = null;
+      }
+    }
+
+    const charge = await fastify.prisma.platformCharge.update({ where: { id }, data: { report_url } });
+    return reply.send({ data: charge });
   });
 
   // PATCH /dev/charges/:id - marcar pagado/pendiente.
