@@ -2,6 +2,7 @@ import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } fro
 import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
+import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
 import ChatVideo from '../ui/ChatVideo';
@@ -306,13 +307,13 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && handleClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row', width: '100%',
-        maxWidth: hasChat ? 1120 : 700,
+        maxWidth: hasChat ? 1210 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
       }}>
         {hasChat && (
-          <div style={{ width: 460, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ width: 550, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '10px 12px', fontWeight: 800, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
               <Smartphone size={15} />
               <span style={{ flex: 1 }}>{preNombre || formatPhoneDisplay(telefono)}</span>
@@ -353,6 +354,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   <span>Bloquear<br />Link</span>
                 </button>
               )}
+              {ticketId && <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />}
               {ticketId && canTomarLista && (
                 <button
                   className="hdr-ic-btn"

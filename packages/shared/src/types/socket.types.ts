@@ -14,7 +14,11 @@ export interface ServerToClientEvents {
   'ticket:message-status': (data: { ticketId: string; messageId: string; delivered: boolean; read_by_client: boolean; failed_reason: string | null }) => void;
   'ticket:unread': (data: { ticketId: string; count: number }) => void;
   'cierre:done': (data: { fecha: string }) => void;
-  'product:changed': (data: { id: string }) => void;
+  // `id` is absent for a bulk update (routes/products.ts's PATCH /bulk-price) -
+  // one event covers a whole Excel batch instead of firing per row, and every
+  // current listener (useProducts.ts) just invalidates its query regardless of
+  // payload, so there was never a need to enumerate every changed id here.
+  'product:changed': (data: { id?: string; bulk?: boolean }) => void;
 }
 
 export interface ClientToServerEvents {

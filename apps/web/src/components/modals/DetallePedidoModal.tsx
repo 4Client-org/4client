@@ -7,6 +7,7 @@ import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../..
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
+import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
 import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
@@ -1103,7 +1104,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1220 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1310 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1112,7 +1113,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 460, background: '#ECE5DD', display: 'flex',
+            width: 550, background: '#ECE5DD', display: 'flex',
             flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
           }}>
             {/* Chat header */}
@@ -1146,6 +1147,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
+                <EnviarCatalogoMenu ticketId={order.ticket_id!} products={products} disabled={isPastDay} />
                 {canTomarLista && (
                   <button
                     className="hdr-ic-btn"

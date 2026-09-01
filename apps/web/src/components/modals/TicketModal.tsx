@@ -21,6 +21,8 @@ import { ConfirmModal } from '../ui/ConfirmModal';
 import { useTomarLista, TomarListaItem } from '../../hooks/useTomarLista';
 import { TomarListaActionBar } from '../chat/TomarListaActionBar';
 import { TomarListaResultModal } from '../chat/TomarListaResultModal';
+import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
+import { useProducts } from '../../hooks/useProducts';
 
 const URL_RE = /(https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]{1,2000})/g;
 function renderText(text: string) {
@@ -182,6 +184,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   // of its own, so a successful extraction either opens NuevoPedidoModal (new
   // order) or DetallePedidoModal (merge into an existing one) pre-filled.
   const tomarLista = useTomarLista(ticketId);
+  const { data: products = [] } = useProducts();
   const [tomarListaResult, setTomarListaResult] = useState<{ items: TomarListaItem[]; unmatchedNames: string[] } | null>(null);
   // Same status/locked/client_deleted eligibility rule public.ts's own merge
   // flow uses (EDITABLE_STATUSES = nuevo/preparando/listo) - source==='form' is
@@ -232,7 +235,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: 1020,
+        width: '100%', maxWidth: 1110,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)',
         animation: 'mup .2s ease', maxHeight: '90vh',
@@ -240,7 +243,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
         {/* ===== LEFT: CHAT ===== */}
         <div style={{
-          width: 470, background: '#ECE5DD', display: 'flex',
+          width: 560, background: '#ECE5DD', display: 'flex',
           flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
@@ -273,6 +276,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
               </button>
+              <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />
               {canTomarLista && (
                 <button
                   className="hdr-ic-btn"
