@@ -197,32 +197,37 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
     setLocalInputs(prev => ({ ...prev, [key]: { ...getLocalForRow(item), [field]: val } }));
   }
 
-  // Only ai_unmatched/added_by_client rows ever get an editable name field -
-  // a normal catalog-linked line's name stays fixed to what it's already
-  // correctly linked to. added_by_client's own flag is NEVER cleared by
-  // editing here (see buildUpdatedItem below) - that flag is a permanent
-  // provenance record by design (see its own comment in schema.prisma),
-  // unlike ai_unmatched, which exists specifically so it CAN be resolved.
-  function canEditName(item: Item): boolean {
-    return !!(item.ai_unmatched || item.added_by_client);
+  // El nombre es editable en CUALQUIER fila, igual que cantidad y precio -
+  // antes solo las filas ai_unmatched/added_by_client lo permitían (staff
+  // reportó que no podían corregir el nombre de una fila ya vinculada al
+  // catálogo, ej. si Tomar lista/el catálogo la enlazó con el producto
+  // equivocado) - a pedido explícito, se quitó esa restricción. Sigue
+  // existiendo esta función (en vez de usar `true` directo en cada sitio)
+  // porque hay 6 llamadas repartidas en este archivo (navegación con
+  // flechas/Enter, render del input vs. span) - un solo lugar para volver a
+  // restringir esto si hiciera falta. added_by_client sigue sin poder
+  // limpiarse nunca por esta vía (ver buildUpdatedItem) - es un registro de
+  // procedencia permanente, algo aparte de si el nombre se puede tocar.
+  function canEditName(_item: Item): boolean {
+    return true;
   }
 
   // Shared by commitEditField (Factbox row edits) - handles the one thing that's
-  // genuinely new here: if the name actually changed on a flagged row, try to
-  // link it to a real catalog product (exact match, case/accent-insensitive -
-  // a human just made a deliberate correction, this isn't the AI guessing, so
-  // no fuzzy/substring tiers here, just a real match or not). A confident match
-  // clears ai_unmatched and adopts the catalog's own price IF nothing's been
-  // typed for price yet (never overwrites a price staff already set on
-  // purpose) - added_by_client is left exactly as it was either way, matching
-  // its permanent-provenance contract.
+  // genuinely new here: if the name actually changed, try to link it to a real
+  // catalog product (exact match, case/accent-insensitive - a human just made
+  // a deliberate correction, this isn't the AI guessing, so no fuzzy/substring
+  // tiers here, just a real match or not). A confident match clears
+  // ai_unmatched and adopts the catalog's own price IF nothing's been typed
+  // for price yet (never overwrites a price staff already set on purpose) -
+  // added_by_client is left exactly as it was either way, matching its
+  // permanent-provenance contract.
   function buildUpdatedItem(prior: Item, local: { qty: string; price: string; name?: string }): Item {
     const typedName = (local.name ?? prior.product_name).trim();
     let product_name = prior.product_name;
     let ai_unmatched = prior.ai_unmatched ?? false;
     let price = local.price.trim() || '0';
 
-    if (canEditName(prior) && typedName && typedName !== prior.product_name) {
+    if (typedName && typedName !== prior.product_name) {
       const match = products.find(p => normalizeSearch(p.name) === normalizeSearch(typedName));
       if (match) {
         product_name = match.name;
@@ -231,9 +236,14 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
           price = String(match.price_per_unit);
         }
       } else {
-        // No catalog match - keep the corrected text as-is, still flagged:
-        // the typo may be fixed, but it's still not a real catalog product.
+        // No hay match en el catálogo - conserva el texto corregido, y
+        // SIEMPRE marca ai_unmatched:true (sin importar si la fila ya estaba
+        // marcada antes) - el nombre ahora se puede editar en cualquier fila,
+        // así que renombrar una que SÍ calzaba hacia algo que ya no existe en
+        // el catálogo debe encender la marca de "revisar", si no quedaría
+        // viéndose como una fila normal con un nombre que no es un producto real.
         product_name = typedName;
+        ai_unmatched = true;
       }
     }
 
@@ -925,11 +935,9 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
                       />
                     ) : (
                       <span
-                        // Only flagged rows are clickable to rename - a normal
-                        // catalog-linked line's name stays fixed.
-                        onClick={hasNameField ? () => editItem(i, 'name') : undefined}
-                        style={{ cursor: hasNameField ? 'pointer' : 'default', display: 'block', wordBreak: 'break-word' }}
-                        title={hasNameField ? 'Clic para corregir el nombre y enlazarlo con el catálogo' : undefined}
+                        onClick={() => editItem(i, 'name')}
+                        style={{ cursor: 'pointer', display: 'block', wordBreak: 'break-word' }}
+                        title="Clic para corregir el nombre y enlazarlo con el catálogo"
                       >
                         {i.product_name}
                         {i.added_by_client && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cliente</span>}
