@@ -212,16 +212,17 @@ describe('Centro de mando dev', () => {
   });
 
   describe('cobros de plataforma (/dev/charges)', () => {
-    it('crea un cobro pendiente y lo marca pagado', async () => {
+    it('crea un cobro con varios conceptos a la vez y lo marca pagado', async () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, type: 'suscripcion', period: '2026-06', amount: 150000, due_date: '2026-06-05' },
+        payload: { orgId, types: ['suscripcion', 'onboarding'], period: '2026-06', amount: 150000 },
       });
       expect(createRes.statusCode).toBe(201);
       const charge = createRes.json().data;
       expect(charge.status).toBe('pendiente');
       expect(charge.paid_at).toBeNull();
+      expect(charge.types).toEqual(['suscripcion', 'onboarding']);
 
       const listRes = await app.inject({
         method: 'GET', url: `/api/v1/dev/charges?orgId=${orgId}&status=pendiente`,
@@ -252,9 +253,18 @@ describe('Centro de mando dev', () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${adminToken}` },
-        payload: { orgId, type: 'onboarding', amount: 50000, due_date: '2026-06-05' },
+        payload: { orgId, types: ['onboarding'], period: '2026-06', amount: 50000 },
       });
       expect(createRes.statusCode).toBe(403);
+    });
+
+    it('rechaza un cobro sin ningún concepto seleccionado', async () => {
+      const res = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: [], period: '2026-06', amount: 50000 },
+      });
+      expect(res.statusCode).toBe(400);
     });
   });
 

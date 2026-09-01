@@ -6,25 +6,32 @@ import { toast } from '../ui/Toast';
 import { buildPlatformChargePdf, pdfToBase64 } from '../../lib/platformChargePdf';
 import type { DevOrg } from './OrgSelector';
 
+type ChargeType = 'suscripcion' | 'onboarding' | 'otro';
+
 interface Charge {
   id: string;
   org_id: string;
   org: { name: string; slug: string };
-  type: 'suscripcion' | 'onboarding' | 'otro';
-  period: string | null;
+  types: ChargeType[];
+  period: string;
   amount: string;
   status: 'pendiente' | 'pagado';
-  due_date: string;
   paid_at: string | null;
   notes: string | null;
   report_url: string | null;
 }
 
-const TYPE_LABEL: Record<string, string> = { suscripcion: 'Suscripción', onboarding: 'Onboarding', otro: 'Otro' };
+const TYPE_LABEL: Record<ChargeType, string> = { suscripcion: 'Suscripción', onboarding: 'Onboarding', otro: 'Otro' };
+const TYPE_OPTIONS: ChargeType[] = ['suscripcion', 'onboarding', 'otro'];
 const CYCLE_DAYS = 30;
 
 function daysSince(iso: string): number {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
+
+function currentMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 // Panel de recordatorio - una franja por organización activa, "al día"/"por
@@ -35,7 +42,7 @@ function daysSince(iso: string): number {
 function ReminderStrip({ orgs, charges }: { orgs: DevOrg[]; charges: Charge[] }) {
   const rows = orgs.filter(o => o.active).map(org => {
     const paidSubs = charges
-      .filter(c => c.org_id === org.id && c.type === 'suscripcion' && c.status === 'pagado' && c.paid_at)
+      .filter(c => c.org_id === org.id && c.types.includes('suscripcion') && c.status === 'pagado' && c.paid_at)
       .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime());
     const referenceDate = paidSubs[0]?.paid_at ?? org.created_at;
     const days = daysSince(referenceDate);
@@ -63,7 +70,9 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
   const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<'' | 'pendiente' | 'pagado'>('');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ type: 'suscripcion' as Charge['type'], period: '', amount: '', due_date: '', notes: '' });
+  const [form, setForm] = useState<{ types: ChargeType[]; period: string; amount: string; notes: string }>({
+    types: ['suscripcion'], period: currentMonth(), amount: '', notes: '',
+  });
 
   const { data: orgs = [] } = useQuery({
     queryKey: ['dev-organizations'],
@@ -86,25 +95,27 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
     enabled: !!org,
   });
 
+  function toggleType(t: ChargeType) {
+    setForm(f => ({ ...f, types: f.types.includes(t) ? f.types.filter(x => x !== t) : [...f.types, t] }));
+  }
+
   const create = useMutation({
     mutationFn: async () => {
       if (!org) throw new Error('Elige una organización primero');
+      if (form.types.length === 0) throw new Error('Elige al menos un concepto');
       const amount = parseFloat(form.amount);
-      const doc = buildPlatformChargePdf({
-        orgName: org.name, type: form.type, period: form.period || null,
-        amount, due_date: form.due_date, notes: form.notes || null,
-      });
+      const doc = buildPlatformChargePdf({ orgName: org.name, types: form.types, period: form.period, amount, notes: form.notes || null });
       const pdf_base64 = pdfToBase64(doc);
       return api.post('/dev/charges', {
-        orgId: org.id, type: form.type, period: form.period || undefined,
-        amount, due_date: form.due_date, notes: form.notes || undefined, pdf_base64,
+        orgId: org.id, types: form.types, period: form.period,
+        amount, notes: form.notes || undefined, pdf_base64,
       });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['dev-charges'] });
       qc.invalidateQueries({ queryKey: ['dev-charges-all'] });
       setShowForm(false);
-      setForm({ type: 'suscripcion', period: '', amount: '', due_date: '', notes: '' });
+      setForm({ types: ['suscripcion'], period: currentMonth(), amount: '', notes: '' });
       toast('Cobro registrado');
     },
     onError: (e: any) => toast(e.message, true),
@@ -139,28 +150,25 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
       {showForm && org && (
         <div style={{ background: 'var(--vc)', border: '2px solid var(--v)', borderRadius: 'var(--rad)', padding: 18, marginBottom: 18 }}>
           <div style={{ fontWeight: 800, marginBottom: 14, color: 'var(--vd)' }}>Nuevo cobro para {org.name}</div>
+          <div style={{ marginBottom: 14 }}>
+            <label className="fl">Conceptos (elige uno o varios) *</label>
+            <div style={{ display: 'flex', gap: 14, marginTop: 6 }}>
+              {TYPE_OPTIONS.map(t => (
+                <label key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={form.types.includes(t)} onChange={() => toggleType(t)} />
+                  {TYPE_LABEL[t]}
+                </label>
+              ))}
+            </div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
             <div>
-              <label className="fl">Tipo</label>
-              <select className="fi" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as Charge['type'] }))}>
-                <option value="suscripcion">Suscripción</option>
-                <option value="onboarding">Onboarding</option>
-                <option value="otro">Otro</option>
-              </select>
+              <label className="fl">Mes del cobro *</label>
+              <input className="fi" type="month" value={form.period} onChange={e => setForm(f => ({ ...f, period: e.target.value }))} />
             </div>
-            {form.type === 'suscripcion' && (
-              <div>
-                <label className="fl">Período (AAAA-MM)</label>
-                <input className="fi" value={form.period} onChange={e => setForm(f => ({ ...f, period: e.target.value }))} placeholder="2026-09" />
-              </div>
-            )}
             <div>
               <label className="fl">Valor *</label>
               <input className="fi" type="number" min="0" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="150000" />
-            </div>
-            <div>
-              <label className="fl">Vencimiento *</label>
-              <input className="fi" type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} />
             </div>
             <div style={{ gridColumn: '1 / -1' }}>
               <label className="fl">Notas</label>
@@ -169,7 +177,7 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
           </div>
           <div style={{ display: 'flex', gap: 9 }}>
             <button className="bpri" style={{ flex: 0, padding: '10px 22px', margin: 0 }}
-              onClick={() => create.mutate()} disabled={create.isPending || !form.amount || !form.due_date}>
+              onClick={() => create.mutate()} disabled={create.isPending || !form.amount || !form.period || form.types.length === 0}>
               <Check size={14} /> {create.isPending ? 'Generando...' : 'Crear y generar PDF'}
             </button>
             <button className="bsec" style={{ flex: 0, padding: '10px 18px' }} onClick={() => setShowForm(false)}>
@@ -187,15 +195,14 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
         <div style={{ color: 'var(--gt)', padding: 16, fontSize: 13 }}>Sin cobros registrados para esta organización.</div>
       ) : (
         <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 100px 110px 110px 90px 60px', padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
-            <span>Tipo</span><span>Período</span><span>Valor</span><span>Vencimiento</span><span>Estado</span><span />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 110px 90px 60px', padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
+            <span>Conceptos</span><span>Mes</span><span>Valor</span><span>Estado</span><span />
           </div>
           {charges.map(c => (
-            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '120px 100px 110px 110px 90px 60px', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{TYPE_LABEL[c.type]}</span>
-              <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.period ?? '-'}</span>
+            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 110px 90px 60px', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{c.types.map(t => TYPE_LABEL[t] ?? t).join(' + ')}</span>
+              <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.period}</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--vd)' }}>${Number(c.amount).toLocaleString('es-CO')}</span>
-              <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.due_date.slice(0, 10)}</span>
               <span>
                 {c.status === 'pagado' ? (
                   <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'var(--vc)', color: 'var(--v)' }}>Pagado</span>
