@@ -18,7 +18,13 @@ const GENERATE_TIMEOUT_MS = 20_000;
 // of trying to detect "free" by price. Excludes audio (whisper), moderation/
 // safety classifiers, and Groq's own "compound" agentic wrapper models -
 // none of those are a fit for a plain extraction prompt.
-const SKIP_PATTERN = /guard|whisper|compound|safeguard/i;
+// qwen3.6-27b and allam-2-7b confirmed live (sep/2026, real key, real
+// extraction prompt): qwen3.6-27b consistently 400s ("Failed to validate
+// JSON") on this exact prompt/schema (matches a real production failure),
+// allam-2-7b returns valid JSON but drops items (14 of 20 in a test
+// extraction) - excluded outright instead of letting live discovery keep
+// re-picking either one.
+const SKIP_PATTERN = /guard|whisper|compound|safeguard|qwen3\.6|allam/i;
 
 async function getCandidates(): Promise<string[]> {
   return discoverCandidateModels('groq', {
@@ -29,9 +35,14 @@ async function getCandidates(): Promise<string[]> {
       Array.isArray(m.input_modalities) && m.input_modalities.includes('text') &&
       Array.isArray(m.output_modalities) && m.output_modalities.includes('text') &&
       !SKIP_PATTERN.test(m.id ?? ''),
-    // Confirmed working with a real request against this account (Aug 2026) -
-    // tried first if Groq still lists it active.
-    preferredIds: ['openai/gpt-oss-20b'],
+    // Los 3 confirmados con una extraccion real contra este account (Aug y
+    // sep/2026) - probados en ese orden si Groq los sigue listando activos.
+    // openai/gpt-oss-20b es el unico que fallo en produccion una vez (400,
+    // ver groq.ts's SKIP_PATTERN de arriba para el candidato que realmente
+    // causo eso) - se mantiene primero porque, probado de nuevo en vivo,
+    // sigue respondiendo bien (20/20 items, ~1.5s) - esa falla puntual no se
+    // repitio.
+    preferredIds: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
     maxCandidates: 3,
   });
 }
