@@ -13,7 +13,18 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // attempt keeps the worst case (all candidates slow/dead) a fixed, known
 // multiple of these numbers instead of open-ended.
 const MODELS_TIMEOUT_MS = 10_000;
-const GENERATE_TIMEOUT_MS = 20_000;
+// Bajado de 20s a 12s (y ver maxCandidates más abajo) - confirmado en vivo
+// (sep/2026, con la key real, pidiendo una extracción de tamaño real) que
+// Google está teniendo congestión real en TODA la familia "flash" ahora
+// mismo (503 "This model is currently experiencing high demand" incluso en
+// modelos nuevos como gemini-3.7-flash) - no es un modelo puntual roto, es
+// capacidad del lado de Google. Cuando pasa, tarda varios segundos en
+// devolver el 503 (no es instantáneo) - un timeout más corto deja mas
+// margen para que Groq (confirmado igual de rápido y confiable, ver
+// groq.ts) rescate la petición dentro del tiempo que el navegador/Railway
+// están dispuestos a esperar, en vez de quemar el presupuesto completo
+// reintentando un proveedor que hoy está lento.
+const GENERATE_TIMEOUT_MS = 12_000;
 
 // Google's /models response is NOT OpenAI-shaped like Groq/OpenRouter -
 // `{ models: [{ name: "models/gemini-x", supportedGenerationMethods: [...] }] }`,
@@ -44,7 +55,13 @@ async function getCandidates(): Promise<string[]> {
       Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent') &&
       !SKIP_PATTERN.test(m.name),
     preferredIds: PREFERRED_IDS,
-    maxCandidates: 3,
+    // Bajado de 3 a 1 - confirmado en vivo (sep/2026) que los otros 2
+    // candidatos que la lista en vivo venia agregando (gemini-2.5-flash,
+    // gemini-2.5-pro) siguen 404 "no longer available to new users", no es
+    // algo que se vaya a arreglar solo. Reintentarlos solo suma dos llamadas
+    // que fallan rapido (ver isPermanentModelError) pero igual restan tiempo
+    // - con un solo candidato conocido-bueno, un fallo cae directo a Groq.
+    maxCandidates: 1,
   });
 }
 

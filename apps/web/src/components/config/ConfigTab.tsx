@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Package, Users, Code2 } from 'lucide-react';
+import { Package, Users, Code2, Receipt } from 'lucide-react';
 import { useAuthStore } from '../../store/auth';
 import ProductsSection from './ProductsSection';
 import EmployeesSection from './EmployeesSection';
 import UsersSection from './UsersSection';
 import DevSection from './DevSection';
+import BillingSection from './BillingSection';
 
 // ─── ConfigTab root ───────────────────────────────────────────────────────────
 
@@ -12,11 +13,19 @@ import DevSection from './DevSection';
 // kept having to manage the same person's name in both places. Still two separate
 // things under the hood (a domiciliario assigned to a pedido isn't necessarily
 // someone with a login), just no longer two separate tabs to hunt between.
-type Section = 'productos' | 'usuarios' | 'dev';
+type Section = 'productos' | 'usuarios' | 'facturacion' | 'dev';
 
 export default function ConfigTab() {
   const user = useAuthStore(s => s.user);
   const isDev = user?.role === 'dev';
+  // Facturación (registro de solo lectura de los cobros de la plataforma a
+  // esta organización, ver BillingSection.tsx/routes/billing.ts) es SOLO
+  // para el admin - dev NO la ve acá (a propósito, reportado como pestaña
+  // duplicada): su propia vista de trabajo para esto es DevTools >
+  // Facturación, que ya cubre esta misma organización (y cualquier otra,
+  // más crear/editar cobros) - mostrarle también esta versión de solo
+  // lectura era pura redundancia.
+  const canSeeBilling = user?.role === 'admin';
   // dev is a superset of admin, not a separate restricted role - it lands on
   // DevTools by default (that's the reason a dev account exists) but can reach
   // every admin section too, instead of having to ask an admin to make changes.
@@ -25,6 +34,7 @@ export default function ConfigTab() {
   const tabs: { key: Section; label: string; icon: React.ReactNode }[] = [
     { key: 'productos', label: 'Productos', icon: <Package size={15} /> },
     { key: 'usuarios',  label: 'Usuarios',  icon: <Users size={15} /> },
+    ...(canSeeBilling ? [{ key: 'facturacion' as Section, label: 'Facturación', icon: <Receipt size={15} /> }] : []),
     ...(isDev ? [{ key: 'dev' as Section, label: 'DevTools', icon: <Code2 size={15} /> }] : []),
   ];
 
@@ -67,6 +77,7 @@ export default function ConfigTab() {
           </div>
         </>
       )}
+      {section === 'facturacion' && canSeeBilling && <BillingSection />}
 
       {section === 'dev' && isDev && <DevSection />}
     </div>

@@ -21,6 +21,7 @@ import webhookRoutes from './routes/webhook.js';
 import userRoutes from './routes/users.js';
 import configRoutes from './routes/config.js';
 import devRoutes from './routes/dev.js';
+import billingRoutes from './routes/billing.js';
 import publicRoutes from './routes/public.js';
 import { authenticate } from './middleware/auth.js';
 import type { FastifyRequest, FastifyReply, FastifyError } from 'fastify';
@@ -136,6 +137,7 @@ async function start() {
   await fastify.register(userRoutes,     { prefix: '/api/v1/users' });
   await fastify.register(configRoutes,   { prefix: '/api/v1/config' });
   await fastify.register(devRoutes,      { prefix: '/api/v1/dev' });
+  await fastify.register(billingRoutes,  { prefix: '/api/v1/billing' });
   await fastify.register(publicRoutes,   { prefix: '/api/v1/public' });
 
   // Health check

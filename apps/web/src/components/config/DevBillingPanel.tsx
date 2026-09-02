@@ -10,6 +10,7 @@ type ChargeType = 'suscripcion' | 'onboarding' | 'otro';
 
 interface Charge {
   id: string;
+  number: number;
   org_id: string;
   org: { name: string; slug: string };
   types: ChargeType[];
@@ -100,16 +101,24 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
   }
 
   const create = useMutation({
+    // Dos pasos: primero se crea el cobro (así existe su `number` real,
+    // autoincrement en la BD) y RECIÉN con ese número se arma el PDF - antes
+    // se armaba el PDF primero y se mandaba junto con la creación en una sola
+    // llamada, pero eso no permitía imprimir un consecutivo de verdad (el
+    // número aún no existía en ese momento).
     mutationFn: async () => {
       if (!org) throw new Error('Elige una organización primero');
       if (form.types.length === 0) throw new Error('Elige al menos un concepto');
       const amount = parseFloat(form.amount);
-      const doc = buildPlatformChargePdf({ orgName: org.name, types: form.types, period: form.period, amount, notes: form.notes || null });
-      const pdf_base64 = pdfToBase64(doc);
-      return api.post('/dev/charges', {
+      const created = await api.post<{ data: Charge }>('/dev/charges', {
         orgId: org.id, types: form.types, period: form.period,
-        amount, notes: form.notes || undefined, pdf_base64,
+        amount, notes: form.notes || undefined,
       });
+      const doc = await buildPlatformChargePdf({
+        number: created.data.number, orgName: org.name, types: form.types, period: form.period, amount, notes: form.notes || null,
+      });
+      await api.post(`/dev/charges/${created.data.id}/pdf`, { pdf_base64: pdfToBase64(doc) });
+      return created.data;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['dev-charges'] });
@@ -195,11 +204,12 @@ export default function DevBillingPanel({ org }: { org: DevOrg | null }) {
         <div style={{ color: 'var(--gt)', padding: 16, fontSize: 13 }}>Sin cobros registrados para esta organización.</div>
       ) : (
         <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 110px 90px 60px', padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
-            <span>Conceptos</span><span>Mes</span><span>Valor</span><span>Estado</span><span />
+          <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 100px 110px 90px 60px', padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
+            <span>No.</span><span>Conceptos</span><span>Mes</span><span>Valor</span><span>Estado</span><span />
           </div>
           {charges.map(c => (
-            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 110px 90px 60px', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
+            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 100px 110px 90px 60px', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
+              <span style={{ fontSize: 12, color: 'var(--gt)', fontFamily: 'monospace' }}>4C-{String(c.number).padStart(6, '0')}</span>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{c.types.map(t => TYPE_LABEL[t] ?? t).join(' + ')}</span>
               <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.period}</span>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--vd)' }}>${Number(c.amount).toLocaleString('es-CO')}</span>

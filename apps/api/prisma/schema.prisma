@@ -626,6 +626,12 @@ model AuditLog {
 // mando" del rol dev (routes/dev.ts) - ninguna otra parte de la app lo toca.
 model PlatformCharge {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // Consecutivo real (no el `id` UUID) - lo que se imprime en el PDF como
+  // número de comprobante. Secuencia de Postgres, global entre todas las
+  // organizaciones (no reinicia por cliente) - simple y sin condición de
+  // carrera posible, apropiado para un comprobante interno de cobro (no es
+  // una factura electrónica DIAN, que exige numeración autorizada aparte).
+  number     Int       @unique @default(autoincrement())
   org_id     String    @db.Uuid
   // Varios conceptos en el mismo cobro (ej. onboarding + suscripción juntos
   // en una sola factura) - cada elemento es 'suscripcion' | 'onboarding' |
