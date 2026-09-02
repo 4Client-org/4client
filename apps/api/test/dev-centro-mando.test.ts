@@ -216,7 +216,7 @@ describe('Centro de mando dev', () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: ['suscripcion', 'onboarding'], period: '2026-06', amount: 150000 },
+        payload: { orgId, types: ['suscripcion', 'onboarding'], period: '2026-06', amounts: { suscripcion: 100000, onboarding: 50000 } },
       });
       expect(createRes.statusCode).toBe(201);
       const charge = createRes.json().data;
@@ -225,6 +225,8 @@ describe('Centro de mando dev', () => {
       expect(charge.types).toEqual(['suscripcion', 'onboarding']);
       expect(typeof charge.number).toBe('number'); // consecutivo real, no basado en fecha/hora
       expect(charge.report_url).toBeNull(); // todavía sin adjuntar - ver POST /charges/:id/pdf
+      expect(charge.amounts).toEqual({ suscripcion: 100000, onboarding: 50000 });
+      expect(Number(charge.amount)).toBe(150000); // total calculado por el backend, no confiado del cliente
 
       const listRes = await app.inject({
         method: 'GET', url: `/api/v1/dev/charges?orgId=${orgId}&status=pendiente`,
@@ -255,7 +257,7 @@ describe('Centro de mando dev', () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${adminToken}` },
-        payload: { orgId, types: ['onboarding'], period: '2026-06', amount: 50000 },
+        payload: { orgId, types: ['onboarding'], period: '2026-06', amounts: { onboarding: 50000 } },
       });
       expect(createRes.statusCode).toBe(403);
     });
@@ -264,21 +266,37 @@ describe('Centro de mando dev', () => {
       const res = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: [], period: '2026-06', amount: 50000 },
+        payload: { orgId, types: [], period: '2026-06', amounts: {} },
       });
       expect(res.statusCode).toBe(400);
+    });
+
+    it('rechaza un cobro donde amounts no coincide exactamente con los conceptos elegidos', async () => {
+      const faltaUno = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['suscripcion', 'onboarding'], period: '2026-06', amounts: { suscripcion: 100000 } },
+      });
+      expect(faltaUno.statusCode).toBe(400);
+
+      const sobraUno = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['suscripcion'], period: '2026-06', amounts: { suscripcion: 100000, otro: 5000 } },
+      });
+      expect(sobraUno.statusCode).toBe(400);
     });
 
     it('asigna números consecutivos crecientes entre cobros', async () => {
       const r1 = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: ['otro'], period: '2026-07', amount: 10000 },
+        payload: { orgId, types: ['otro'], period: '2026-07', amounts: { otro: 10000 } },
       });
       const r2 = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: ['otro'], period: '2026-07', amount: 10000 },
+        payload: { orgId, types: ['otro'], period: '2026-07', amounts: { otro: 10000 } },
       });
       expect(r2.json().data.number).toBeGreaterThan(r1.json().data.number);
     });
@@ -287,7 +305,7 @@ describe('Centro de mando dev', () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: ['suscripcion'], period: '2026-08', amount: 20000 },
+        payload: { orgId, types: ['suscripcion'], period: '2026-08', amounts: { suscripcion: 20000 } },
       });
       const chargeId = createRes.json().data.id;
       const fakePdfBase64 = Buffer.from('%PDF-1.4 contenido de prueba').toString('base64');
@@ -316,7 +334,7 @@ describe('Centro de mando dev', () => {
       const createRes = await app.inject({
         method: 'POST', url: '/api/v1/dev/charges',
         headers: { authorization: `Bearer ${devToken}` },
-        payload: { orgId, types: ['otro'], period: '2026-08', amount: 5000 },
+        payload: { orgId, types: ['otro'], period: '2026-08', amounts: { otro: 5000 } },
       });
       const chargeId = createRes.json().data.id;
       const res = await app.inject({
@@ -325,6 +343,93 @@ describe('Centro de mando dev', () => {
         payload: { pdf_base64: 'YQ==' },
       });
       expect(res.statusCode).toBe(403);
+    });
+
+    it('PUT /charges/:id edita conceptos/mes/valores/notas sin cambiar el number', async () => {
+      const createRes = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['suscripcion'], period: '2026-09', amounts: { suscripcion: 100000 } },
+      });
+      const original = createRes.json().data;
+
+      const putRes = await app.inject({
+        method: 'PUT', url: `/api/v1/dev/charges/${original.id}`,
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { types: ['suscripcion', 'onboarding'], period: '2026-10', amounts: { suscripcion: 100000, onboarding: 60000 }, notes: 'editado' },
+      });
+      expect(putRes.statusCode).toBe(200);
+      const updated = putRes.json().data;
+      expect(updated.number).toBe(original.number); // el consecutivo no cambia al editar
+      expect(updated.types).toEqual(['suscripcion', 'onboarding']);
+      expect(updated.period).toBe('2026-10');
+      expect(updated.amounts).toEqual({ suscripcion: 100000, onboarding: 60000 });
+      expect(Number(updated.amount)).toBe(160000);
+      expect(updated.notes).toBe('editado');
+    });
+
+    it('PUT /charges/:id rechaza amounts que no coincide con types, 404 con inexistente, y 403 para no-dev', async () => {
+      const createRes = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['otro'], period: '2026-09', amounts: { otro: 1000 } },
+      });
+      const chargeId = createRes.json().data.id;
+
+      const badAmounts = await app.inject({
+        method: 'PUT', url: `/api/v1/dev/charges/${chargeId}`,
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { types: ['otro'], period: '2026-09', amounts: { otro: 1000, suscripcion: 5000 } },
+      });
+      expect(badAmounts.statusCode).toBe(400);
+
+      const notFound = await app.inject({
+        method: 'PUT', url: '/api/v1/dev/charges/00000000-0000-0000-0000-000000000000',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { types: ['otro'], period: '2026-09', amounts: { otro: 1000 } },
+      });
+      expect(notFound.statusCode).toBe(404);
+
+      const notDev = await app.inject({
+        method: 'PUT', url: `/api/v1/dev/charges/${chargeId}`,
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { types: ['otro'], period: '2026-09', amounts: { otro: 1000 } },
+      });
+      expect(notDev.statusCode).toBe(403);
+    });
+
+    it('DELETE /charges/:id borra el cobro, 404 con inexistente, 403 para no-dev', async () => {
+      const createRes = await app.inject({
+        method: 'POST', url: '/api/v1/dev/charges',
+        headers: { authorization: `Bearer ${devToken}` },
+        payload: { orgId, types: ['otro'], period: '2026-09', amounts: { otro: 3000 } },
+      });
+      const chargeId = createRes.json().data.id;
+
+      const notDev = await app.inject({
+        method: 'DELETE', url: `/api/v1/dev/charges/${chargeId}`,
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(notDev.statusCode).toBe(403);
+
+      const delRes = await app.inject({
+        method: 'DELETE', url: `/api/v1/dev/charges/${chargeId}`,
+        headers: { authorization: `Bearer ${devToken}` },
+      });
+      expect(delRes.statusCode).toBe(200);
+      expect(delRes.json().data.id).toBe(chargeId);
+
+      const listRes = await app.inject({
+        method: 'GET', url: `/api/v1/dev/charges?orgId=${orgId}`,
+        headers: { authorization: `Bearer ${devToken}` },
+      });
+      expect(listRes.json().data.some((c: any) => c.id === chargeId)).toBe(false);
+
+      const again = await app.inject({
+        method: 'DELETE', url: '/api/v1/dev/charges/00000000-0000-0000-0000-000000000000',
+        headers: { authorization: `Bearer ${devToken}` },
+      });
+      expect(again.statusCode).toBe(404);
     });
   });
 

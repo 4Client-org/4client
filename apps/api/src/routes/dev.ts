@@ -441,9 +441,17 @@ export default async function devRoutes(fastify: FastifyInstance) {
     // Reemplaza a due_date por completo - el usuario solo elige el MES del
     // cobro (ej. "2026-09"), ya no una fecha de vencimiento específica.
     period:      z.string().regex(/^\d{4}-\d{2}$/),
-    amount:      z.number().positive(),
+    // Valor de CADA concepto por separado (ej. {"suscripcion": 100000,
+    // "onboarding": 50000}) - antes un solo `amount` total sin desglose, a
+    // pedido explícito del usuario tras la primera prueba. El total se
+    // calcula acá abajo, nunca se confía en un total mandado aparte.
+    amounts:     z.record(z.enum(['suscripcion', 'onboarding', 'otro']), z.number().positive()),
     notes:       z.string().max(1000).optional(),
-  });
+  }).refine(d => {
+    const typeSet = new Set(d.types);
+    const amountKeys = Object.keys(d.amounts);
+    return amountKeys.length === typeSet.size && amountKeys.every(k => typeSet.has(k as any));
+  }, { message: 'Cada concepto elegido debe tener exactamente un valor' });
 
   // POST /dev/charges - crea un cobro nuevo en estado 'pendiente', SIN el PDF
   // todavía. El número consecutivo (PlatformCharge.number, autoincrement)
@@ -460,17 +468,18 @@ export default async function devRoutes(fastify: FastifyInstance) {
     const org = await fastify.prisma.organization.findUnique({ where: { id: body.data.orgId } });
     if (!org) return reply.status(404).send({ error: 'Organización no encontrada', code: 'NOT_FOUND' });
 
+    const amount = Object.values(body.data.amounts).reduce((s, v) => s + v, 0);
     const charge = await fastify.prisma.platformCharge.create({
       data: {
         org_id: body.data.orgId, types: body.data.types, period: body.data.period,
-        amount: body.data.amount,
+        amount, amounts: body.data.amounts,
         notes: body.data.notes ?? null, created_by: req.user.userId,
       },
     });
 
     await audit(fastify.prisma, {
       orgId: body.data.orgId, actorId: req.user.userId, action: 'dev.charge_created',
-      targetId: charge.id, metadata: { types: body.data.types, amount: body.data.amount },
+      targetId: charge.id, metadata: { types: body.data.types, amounts: body.data.amounts, amount },
     });
 
     return reply.status(201).send({ data: charge });
@@ -509,6 +518,75 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
     const charge = await fastify.prisma.platformCharge.update({ where: { id }, data: { report_url } });
     return reply.send({ data: charge });
+  });
+
+  // Mismo shape que createChargeSchema pero sin orgId - la organización de un
+  // cobro no se cambia editando, para eso se borra y se crea uno nuevo.
+  const updateChargeSchema = z.object({
+    types:   z.array(z.enum(['suscripcion', 'onboarding', 'otro'])).min(1),
+    period:  z.string().regex(/^\d{4}-\d{2}$/),
+    amounts: z.record(z.enum(['suscripcion', 'onboarding', 'otro']), z.number().positive()),
+    notes:   z.string().max(1000).optional(),
+  }).refine(d => {
+    const typeSet = new Set(d.types);
+    const amountKeys = Object.keys(d.amounts);
+    return amountKeys.length === typeSet.size && amountKeys.every(k => typeSet.has(k as any));
+  }, { message: 'Cada concepto elegido debe tener exactamente un valor' });
+
+  // PUT /dev/charges/:id - edita conceptos/mes/valores/notas de un cobro ya
+  // creado (org, number y created_by no cambian - para eso se borra y se crea
+  // uno nuevo). El PDF anterior queda desactualizado hasta que el frontend lo
+  // regenere y lo vuelva a subir vía POST /charges/:id/pdf - misma key en R2
+  // (mismo `number`), así que se sobreescribe solo, sin dejar un PDF viejo
+  // huérfano.
+  fastify.put('/charges/:id', async (req: any, reply) => {
+    const { id } = req.params as { id: string };
+    const body = updateChargeSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    const amount = Object.values(body.data.amounts).reduce((s, v) => s + v, 0);
+    const charge = await fastify.prisma.platformCharge.update({
+      where: { id },
+      data: {
+        types: body.data.types, period: body.data.period,
+        amount, amounts: body.data.amounts, notes: body.data.notes ?? null,
+      },
+    }).catch(() => null);
+    if (!charge) return reply.status(404).send({ error: 'Cobro no encontrado', code: 'NOT_FOUND' });
+
+    await audit(fastify.prisma, {
+      orgId: charge.org_id, actorId: req.user.userId, action: 'dev.charge_updated',
+      targetId: charge.id, metadata: { types: body.data.types, amounts: body.data.amounts, amount },
+    });
+
+    return reply.send({ data: charge });
+  });
+
+  // DELETE /dev/charges/:id - borra un cobro por completo (ej. se creó por
+  // error). Se guarda un snapshot en audit_logs ANTES de borrar - mismo
+  // criterio de "no perder el rastro" que /dev/actions/reopen-cierre. El PDF
+  // ya subido a R2 (si lo hay) queda huérfano en el bucket - no se borra acá,
+  // no rompe nada dejarlo y evita otra llamada de red por un archivo de unos
+  // pocos KB.
+  fastify.delete('/charges/:id', async (req: any, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await fastify.prisma.platformCharge.findUnique({ where: { id } });
+    if (!existing) return reply.status(404).send({ error: 'Cobro no encontrado', code: 'NOT_FOUND' });
+
+    await fastify.prisma.platformCharge.delete({ where: { id } });
+
+    await audit(fastify.prisma, {
+      orgId: existing.org_id, actorId: req.user.userId, action: 'dev.charge_deleted',
+      targetId: id,
+      metadata: {
+        snapshot: {
+          types: existing.types, period: existing.period, amount: existing.amount.toString(),
+          amounts: existing.amounts, notes: existing.notes, status: existing.status,
+        },
+      },
+    });
+
+    return reply.send({ data: existing });
   });
 
   // PATCH /dev/charges/:id - marcar pagado/pendiente.
