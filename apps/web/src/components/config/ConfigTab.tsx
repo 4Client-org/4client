@@ -19,11 +19,13 @@ export default function ConfigTab() {
   const user = useAuthStore(s => s.user);
   const isDev = user?.role === 'dev';
   // Facturación (registro de solo lectura de los cobros de la plataforma a
-  // esta organización, ver BillingSection.tsx/routes/billing.ts) es para el
-  // admin de la organización - dev también la ve (superset), pero su propia
-  // vista de trabajo para ESO es DevTools > Facturación (crea/edita cobros
-  // de cualquier organización, no solo la propia).
-  const canSeeBilling = user?.role === 'admin' || isDev;
+  // esta organización, ver BillingSection.tsx/routes/billing.ts) es SOLO
+  // para el admin - dev NO la ve acá (a propósito, reportado como pestaña
+  // duplicada): su propia vista de trabajo para esto es DevTools >
+  // Facturación, que ya cubre esta misma organización (y cualquier otra,
+  // más crear/editar cobros) - mostrarle también esta versión de solo
+  // lectura era pura redundancia.
+  const canSeeBilling = user?.role === 'admin';
   // dev is a superset of admin, not a separate restricted role - it lands on
   // DevTools by default (that's the reason a dev account exists) but can reach
   // every admin section too, instead of having to ask an admin to make changes.
