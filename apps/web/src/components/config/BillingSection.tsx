@@ -10,6 +10,9 @@ interface Charge {
   types: ChargeType[];
   period: string;
   amount: string;
+  // Valor de cada concepto por separado - null en cobros creados antes de
+  // este campo (solo muestran el total, sin desglose por línea).
+  amounts: Partial<Record<ChargeType, number>> | null;
   status: 'pendiente' | 'pagado';
   paid_at: string | null;
   notes: string | null;
@@ -42,29 +45,41 @@ export default function BillingSection() {
         <div style={{ color: 'var(--gt)', fontSize: 14, padding: 16 }}>Todavía no hay facturas registradas.</div>
       ) : (
         <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 100px 110px 90px 60px', padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
-            <span>No.</span><span>Conceptos</span><span>Mes</span><span>Valor</span><span>Estado</span><span />
-          </div>
-          {charges.map(c => (
-            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 100px 110px 90px 60px', alignItems: 'center', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
-              <span style={{ fontSize: 12, color: 'var(--gt)', fontFamily: 'monospace' }}>4C-{String(c.number).padStart(6, '0')}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{c.types.map(t => TYPE_LABEL[t] ?? t).join(' + ')}</span>
-              <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.period}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--vd)' }}>${Number(c.amount).toLocaleString('es-CO')}</span>
-              <span style={{
-                fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, width: 'fit-content',
-                background: c.status === 'pagado' ? 'var(--vc)' : 'var(--rc)',
-                color: c.status === 'pagado' ? 'var(--v)' : 'var(--r)',
-              }}>
-                {c.status === 'pagado' ? 'Pagado' : 'Pendiente'}
-              </span>
-              <span>
-                {c.report_url && (
-                  <a href={c.report_url} target="_blank" rel="noreferrer noopener" className="dc-btn" title="Ver PDF" style={{ display: 'inline-flex' }}>
-                    <FileText size={12} />
-                  </a>
-                )}
-              </span>
+          {charges.map((c, i) => (
+            <div key={c.id} style={{ padding: '12px 14px', borderTop: i === 0 ? 'none' : '1px solid var(--brd)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 12, color: 'var(--gt)', fontFamily: 'monospace' }}>4C-{String(c.number).padStart(6, '0')}</span>
+                  <span style={{ fontSize: 12, color: 'var(--gt)' }}>{c.period}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--vd)' }}>${Number(c.amount).toLocaleString('es-CO')}</span>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+                    background: c.status === 'pagado' ? 'var(--vc)' : 'var(--rc)',
+                    color: c.status === 'pagado' ? 'var(--v)' : 'var(--r)',
+                  }}>
+                    {c.status === 'pagado' ? 'Pagado' : 'Pendiente'}
+                  </span>
+                  {c.report_url && (
+                    <a href={c.report_url} target="_blank" rel="noreferrer noopener" className="dc-btn" title="Ver PDF" style={{ display: 'inline-flex' }}>
+                      <FileText size={12} />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {c.types.map(t => (
+                  <div key={t} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5 }}>
+                    <span style={{ color: 'var(--n)' }}>{TYPE_LABEL[t] ?? t}</span>
+                    <span style={{ color: 'var(--gt)' }}>
+                      {c.amounts?.[t] != null ? `$${Number(c.amounts[t]).toLocaleString('es-CO')}` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {c.notes && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--gt)', fontStyle: 'italic' }}>{c.notes}</div>}
             </div>
           ))}
         </div>

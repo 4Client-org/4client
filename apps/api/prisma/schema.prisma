@@ -643,7 +643,17 @@ model PlatformCharge {
   // elige el MES del cobro, no una fecha de vencimiento - también a pedido
   // explícito tras la primera prueba (due_date resultaba confuso, sobraba).
   period     String    @db.VarChar(7)
+  // Total = suma de `amounts`, calculado y guardado por el backend (no
+  // confiar en que el frontend lo sume bien) - se mantiene como columna
+  // aparte porque el panel de recordatorio y las listas solo necesitan el
+  // total, sin tener que parsear el JSON en cada consulta.
   amount     Decimal   @db.Decimal(12, 2)
+  // Valor de CADA concepto por separado, ej. {"suscripcion": 100000,
+  // "onboarding": 50000} - a pedido explícito del usuario (antes un solo
+  // valor total para todos los conceptos juntos, sin poder ver/editar cuánto
+  // correspondía a cada uno). Null en cobros creados antes de este cambio
+  // (siguen mostrando solo el total, sin desglose).
+  amounts    Json?
   status     String    @default("pendiente") @db.VarChar(10) // 'pendiente' | 'pagado'
   paid_at    DateTime? @db.Timestamptz
   notes      String?

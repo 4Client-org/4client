@@ -66,7 +66,10 @@ export interface ChargeForPdf {
   orgName: string;
   types: string[];
   period: string;
-  amount: number;
+  // Valor de cada concepto por separado (ej. {suscripcion: 100000, onboarding:
+  // 50000}) - el total impreso se calcula sumando esto, nunca se recibe un
+  // total aparte, para que nunca puedan quedar desincronizados.
+  amounts: Record<string, number>;
   notes?: string | null;
 }
 
@@ -110,12 +113,14 @@ export async function buildPlatformChargePdf(charge: ChargeForPdf): Promise<jsPD
   doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(GREEN_DARK);
   doc.text(charge.orgName, 20, y); y += 12;
 
-  // ── Tabla de conceptos ──
+  // ── Tabla de conceptos (con el valor de cada uno por separado) ──
+  const VALOR_X = PAGE_W - 24;
   doc.setFillColor(GREEN);
   doc.rect(20, y, PAGE_W - 40, 8, 'F');
   doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor('#FFFFFF');
   doc.text('CONCEPTO', 24, y + 5.5);
-  doc.text('PERÍODO', PAGE_W - 70, y + 5.5);
+  doc.text('PERÍODO', 110, y + 5.5);
+  doc.text('VALOR', VALOR_X, y + 5.5, { align: 'right' });
   y += 8;
 
   doc.setFont('helvetica', 'normal'); doc.setTextColor('#111827');
@@ -124,7 +129,8 @@ export async function buildPlatformChargePdf(charge: ChargeForPdf): Promise<jsPD
     doc.rect(20, y, PAGE_W - 40, 9, 'F');
     doc.setFontSize(10);
     doc.text(TYPE_LABEL[t] ?? t, 24, y + 6);
-    doc.text(periodLabel(charge.period), PAGE_W - 70, y + 6);
+    doc.text(periodLabel(charge.period), 110, y + 6);
+    doc.text(`$${(charge.amounts[t] ?? 0).toLocaleString('es-CO')}`, VALOR_X, y + 6, { align: 'right' });
     y += 9;
   }
   doc.setDrawColor('#E5E7EB'); doc.setLineWidth(0.3);
@@ -140,13 +146,14 @@ export async function buildPlatformChargePdf(charge: ChargeForPdf): Promise<jsPD
   }
 
   // ── Total ──
+  const total = Object.values(charge.amounts).reduce((s, v) => s + v, 0);
   y += 6;
   doc.setFillColor(GREEN_DARK);
   doc.rect(20, y, PAGE_W - 40, 16, 'F');
   doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor('#FFFFFF');
   doc.text('VALOR TOTAL', 26, y + 10.5);
   doc.setFontSize(15);
-  doc.text(`$${charge.amount.toLocaleString('es-CO')}`, PAGE_W - 26, y + 11, { align: 'right' });
+  doc.text(`$${total.toLocaleString('es-CO')}`, PAGE_W - 26, y + 11, { align: 'right' });
 
   // ── Pie de página ──
   const footerY = 265;
