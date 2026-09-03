@@ -5,18 +5,30 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { passwordSchema } from '../lib/password.js';
 import { audit } from '../lib/audit.js';
 
+// Preparación para el futuro login por nombre de usuario (todavía no
+// implementado - /login sigue pidiendo email) - opcional por ahora, así se
+// puede ir completando desde Configuración > Usuarios sin obligar a
+// llenarlo en cuentas ya existentes. Se normaliza a minúsculas igual que
+// email, para que la unicidad no dependa de mayúsculas/minúsculas.
+const usernameSchema = z.string().trim().toLowerCase()
+  .min(3, 'Mínimo 3 caracteres')
+  .max(30, 'Máximo 30 caracteres')
+  .regex(/^[a-z0-9._-]+$/, 'Solo minúsculas, números, puntos, guiones y guion bajo');
+
 const createUserSchema = z.object({
   name:     z.string().min(2),
   email:    z.string().email(),
+  username: usernameSchema.optional(),
   password: passwordSchema,
   role:     z.enum(['admin', 'encargado', 'domiciliario']),
 });
 
 const updateUserSchema = z.object({
-  name:   z.string().min(2).optional(),
-  email:  z.string().email().optional(),
-  role:   z.enum(['admin', 'encargado', 'domiciliario']).optional(),
-  active: z.boolean().optional(),
+  name:     z.string().min(2).optional(),
+  email:    z.string().email().optional(),
+  username: usernameSchema.optional(),
+  role:     z.enum(['admin', 'encargado', 'domiciliario']).optional(),
+  active:   z.boolean().optional(),
 });
 
 const resetPassSchema = z.object({
@@ -31,7 +43,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
       // from acting on them, they don't appear in the list in the first place, so
       // there's nothing to even suggest they could be edited/reset/deactivated.
       where: { org_id: req.user.orgId, ...(req.user.role !== 'dev' ? { role: { not: 'dev' } } : {}) },
-      select: { id: true, name: true, email: true, role: true, active: true, last_login: true, created_at: true },
+      select: { id: true, name: true, email: true, username: true, role: true, active: true, last_login: true, created_at: true },
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
     });
     return reply.send({ data: users });
@@ -52,16 +64,23 @@ export default async function userRoutes(fastify: FastifyInstance) {
     });
     if (existing) return reply.status(409).send({ error: 'Ese email ya está registrado en la plataforma', code: 'DUPLICATE_EMAIL' });
 
+    // Mismo criterio que email arriba - único en toda la plataforma.
+    if (body.data.username) {
+      const usernameTaken = await fastify.prisma.user.findFirst({ where: { username: body.data.username } });
+      if (usernameTaken) return reply.status(409).send({ error: 'Ese nombre de usuario ya está en uso', code: 'DUPLICATE_USERNAME' });
+    }
+
     const password_hash = await bcrypt.hash(body.data.password, 12);
     const user = await fastify.prisma.user.create({
       data: {
         org_id: req.user.orgId,
         name: body.data.name,
         email: body.data.email.toLowerCase(),
+        username: body.data.username,
         password_hash,
         role: body.data.role,
       },
-      select: { id: true, name: true, email: true, role: true, active: true, created_at: true },
+      select: { id: true, name: true, email: true, username: true, role: true, active: true, created_at: true },
     });
     await audit(fastify.prisma, {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'user.create',
@@ -88,6 +107,14 @@ export default async function userRoutes(fastify: FastifyInstance) {
         where: { email: body.data.email.toLowerCase(), id: { not: id } },
       });
       if (conflict) return reply.status(409).send({ error: 'Ese email ya está registrado en la plataforma', code: 'DUPLICATE_EMAIL' });
+    }
+
+    // Mismo criterio que email arriba.
+    if (body.data.username) {
+      const usernameConflict = await fastify.prisma.user.findFirst({
+        where: { username: body.data.username, id: { not: id } },
+      });
+      if (usernameConflict) return reply.status(409).send({ error: 'Ese nombre de usuario ya está en uso', code: 'DUPLICATE_USERNAME' });
     }
 
     const updateData = { ...body.data, ...(body.data.email ? { email: body.data.email.toLowerCase() } : {}) };

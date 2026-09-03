@@ -55,6 +55,13 @@ model User {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   org_id        String    @db.Uuid
   email         String    @db.VarChar(200)
+  // Preparación para pasar el login de email a nombre de usuario (pedido
+  // explícito, no implementado todavía - /login sigue pidiendo email por
+  // ahora). Nullable porque las cuentas existentes no tienen uno todavía y se
+  // van a ir completando desde Configuración > Usuarios; único en toda la
+  // plataforma igual que email (mismo razonamiento que la migración
+  // unique_user_email de arriba).
+  username      String?   @unique @db.VarChar(30)
   password_hash String    @db.VarChar(100)
   name          String    @db.VarChar(200)
   role          String    @db.VarChar(20)
