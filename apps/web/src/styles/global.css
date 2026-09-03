@@ -60,7 +60,7 @@ input,select,textarea{font-family:var(--f);}
 .al{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
 .ah{background:var(--b);border-bottom:2px solid var(--brd);padding:0 20px;position:sticky;top:0;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,.05);flex-shrink:0;}
 .ht{display:flex;align-items:stretch;justify-content:space-between;min-height:54px;}
-.hleft{display:flex;align-items:stretch;}
+.hleft{display:flex;align-items:stretch;min-width:0;}
 .hlogo{display:flex;align-items:center;gap:10px;padding:0 16px 0 0;border-right:2px solid var(--brd);margin-right:4px;flex-shrink:0;}
 .hlogo-t{font-size:20px;font-weight:900;color:var(--vd);}
 .hright{display:flex;align-items:center;gap:9px;padding:0 0 0 12px;}
@@ -69,7 +69,7 @@ input,select,textarea{font-family:var(--f);}
 .uav.adm{background:var(--vd);}
 .un{font-size:13px;font-weight:700;color:var(--n);}
 .ur2{font-size:11px;color:var(--gt);}
-.tabs{display:flex;gap:0;padding:0;align-items:stretch;}
+.tabs{display:flex;gap:0;padding:0;align-items:stretch;min-width:0;}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
@@ -379,7 +379,10 @@ input,select,textarea{font-family:var(--f);}
 .inbox-item-preview{font-size:12px;color:var(--gt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .inbox-unread{background:var(--v);color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;min-width:20px;text-align:center;flex-shrink:0;}
 .inbox-chat{flex:1;display:flex;flex-direction:column;overflow:hidden;}
-.inbox-chat-head{padding:14px 18px;border-bottom:2px solid var(--brd);background:var(--b);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.inbox-chat-head{padding:14px 18px;border-bottom:2px solid var(--brd);background:var(--b);display:flex;align-items:center;gap:10px;justify-content:space-between;flex-shrink:0;}
+/* Solo aparece en celular (ver el media query max-width:768px más abajo) - en
+   desktop las 2 columnas están visibles a la vez, no hace falta "volver". */
+.inbox-back{display:none;background:none;border:none;cursor:pointer;color:var(--n);padding:4px;flex-shrink:0;align-items:center;}
 .inbox-messages{flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:6px;background:#ECE5DD;}
 .chat-bub{max-width:70%;width:fit-content;padding:9px 13px;font-size:14px;line-height:1.45;word-break:break-word;position:relative;}
 .chat-bub.in{background:#fff;border-radius:0 12px 12px 12px;align-self:flex-start;box-shadow:0 1px 2px rgba(0,0,0,.1);}
@@ -470,6 +473,21 @@ input,select,textarea{font-family:var(--f);}
   .ktit{font-size:17px;}
 }
 
+/* CHAT ON PHONE (<=768px): the 2-column WhatsApp-style layout (sidebar list +
+   conversation, both always visible) doesn't fit side by side on a phone -
+   collapse to ONE column at a time, driven purely by .has-selection (added by
+   InboxPanel.tsx from its existing `selectedId` state, no new width-detection
+   JS needed). List shows by default; picking a chat swaps to the conversation
+   full-width with a "volver" button (.inbox-back, hidden everywhere else). */
+@media (max-width:768px){
+  .inbox-wrap{flex-direction:column;}
+  .inbox-sidebar{width:100%;border-right:none;}
+  .inbox-wrap.has-selection .inbox-sidebar{display:none;}
+  .inbox-chat{display:none;}
+  .inbox-wrap.has-selection .inbox-chat{display:flex;}
+  .inbox-back{display:flex;}
+}
+
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
    but guard against page-level breakage and keep modals usable single-column */
 @media (max-width:560px){
@@ -495,5 +513,24 @@ input,select,textarea{font-family:var(--f);}
   .ur2{display:none;}
   .uav{width:26px;height:26px;font-size:11px;}
   .hlogo-t{font-size:15px;}
-  .tab{padding:0 8px;font-size:11px;}
+  /* Los 4 tabs en icono-solo (patrón bottom-nav): a este ancho el label de texto
+     no cabe junto al ícono sin forzar scroll horizontal en .tabs, y un tab activo
+     con texto largo ("Tickets & Pedidos") dejaba los demás casi invisibles fuera
+     de pantalla. Cada botón conserva su `title` (tooltip/accesibilidad) - solo se
+     oculta el <span class="tab-label"> visualmente. */
+  .tab-label{display:none;}
+  .tab{padding:0 10px;font-size:11px;gap:0;}
+  /* Colores/fondo se quedan inline (no cambian con el viewport) - !important
+     hace falta solo para ganarle al padding/minWidth/fontSize inline, mismo
+     recurso ya usado una vez en este archivo para el mismo tipo de choque. */
+  .dev-badge{padding:4px 10px !important;min-width:0 !important;font-size:11px !important;letter-spacing:1px !important;}
+}
+
+/* PANTALLAS MUY GRANDES (TV / monitor ultrawide, >=1600px): el tablero (.slane)
+   ya se beneficia del ancho extra (scrollea horizontal, más columnas visibles
+   a la vez) y queda fuera de este cap a propósito - pero el resto del
+   contenido (texto, tablas, formularios) no debería estirarse a líneas
+   absurdamente largas solo porque el monitor es enorme. */
+@media (min-width:1600px){
+  .ac{max-width:1900px;margin:0 auto;}
 }

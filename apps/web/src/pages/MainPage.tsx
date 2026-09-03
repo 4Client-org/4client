@@ -196,7 +196,9 @@ export default function MainPage() {
               <img src="/fruver-san-gabriel.jpeg" alt="Fruver San Gabriel" style={{ height: 34, objectFit: 'contain' }} />
             </div>
             {isDevEnvironment() && (
-              <div style={{
+              // Tamaño/padding se achican en celular vía .dev-badge en global.css -
+              // el color/fondo se queda inline porque no cambia con el viewport.
+              <div className="dev-badge" style={{
                 background: '#DC2626', color: '#fff', fontWeight: 900, fontSize: 15,
                 padding: '4px 40px', minWidth: 140, borderRadius: 8, letterSpacing: '2px',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -205,13 +207,13 @@ export default function MainPage() {
               </div>
             )}
             <div className="tabs">
-              <button className={`tab${tab === 'swimlane' ? ' on' : ''}`} onClick={() => setTab('swimlane')}>
-                <ClipboardList size={15} /> Tickets & Pedidos
+              <button className={`tab${tab === 'swimlane' ? ' on' : ''}`} onClick={() => setTab('swimlane')} title="Tickets & Pedidos">
+                <ClipboardList size={15} /> <span className="tab-label">Tickets & Pedidos</span>
               </button>
               {isAdmin && (
                 <button className={`tab${tab === 'inbox' ? ' on' : ''}`}
-                  onClick={() => setTab('inbox')}>
-                  <MessageSquare size={15} /> Chats WPP
+                  onClick={() => setTab('inbox')} title="Chats WPP">
+                  <MessageSquare size={15} /> <span className="tab-label">Chats WPP</span>
                   {unreadWpp > 0 && (
                     <span style={{
                       position: 'absolute', top: 7, right: 6,
@@ -225,13 +227,13 @@ export default function MainPage() {
                 </button>
               )}
               {isAdmin && (
-                <button className={`tab${tab === 'resumen' ? ' on' : ''}`} onClick={() => setTab('resumen')}>
-                  <BarChart2 size={15} /> Informe del día
+                <button className={`tab${tab === 'resumen' ? ' on' : ''}`} onClick={() => setTab('resumen')} title="Informe del día">
+                  <BarChart2 size={15} /> <span className="tab-label">Informe del día</span>
                 </button>
               )}
               {isAdmin && (
-                <button className={`tab${tab === 'config' ? ' on' : ''}`} onClick={() => setTab('config')}>
-                  <Settings size={15} /> Configuración
+                <button className={`tab${tab === 'config' ? ' on' : ''}`} onClick={() => setTab('config')} title="Configuración">
+                  <Settings size={15} /> <span className="tab-label">Configuración</span>
                 </button>
               )}
             </div>
