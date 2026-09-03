@@ -526,11 +526,8 @@ input,select,textarea{font-family:var(--f);}
   .dev-badge{padding:4px 10px !important;min-width:0 !important;font-size:11px !important;letter-spacing:1px !important;}
 }
 
-/* PANTALLAS MUY GRANDES (TV / monitor ultrawide, >=1600px): el tablero (.slane)
-   ya se beneficia del ancho extra (scrollea horizontal, más columnas visibles
-   a la vez) y queda fuera de este cap a propósito - pero el resto del
-   contenido (texto, tablas, formularios) no debería estirarse a líneas
-   absurdamente largas solo porque el monitor es enorme. */
-@media (min-width:1600px){
-  .ac{max-width:1900px;margin:0 auto;}
-}
+/* Se probó un cap de ancho acá para pantallas >=1600px (TV/ultrawide) - se
+   quitó: en un monitor normal de esa medida se veía como que la app "se
+   angostó" en vez de mejorar nada, justo lo que el usuario pidió explícitamente
+   NO tocar ("en tamaño PC normal como estaba antes, sin dañar nada"). PC de
+   cualquier tamaño queda exactamente igual que antes de esta sesión. */
