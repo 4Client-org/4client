@@ -83,7 +83,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token, device_token: DEVICE, phone_last4: PHONE4, items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
+      payload: { consent: true, token, device_token: DEVICE, phone_last4: PHONE4, items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('VALIDATION_ERROR');
@@ -93,7 +93,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token, device_token: DEVICE, phone_last4: PHONE4, address: 'Calle 1 #2-34', items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
+      payload: { consent: true, token, device_token: DEVICE, phone_last4: PHONE4, address: 'Calle 1 #2-34', items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
     });
     expect(res.statusCode).toBe(201);
     firstOrderId = res.json().data.orderId;
@@ -114,7 +114,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token: manualToken, device_token: 'device-manual', address: 'Calle Manual 1',
         items: [
           { product_name: 'Mango', quantity_label: '2 kg' },
@@ -164,7 +164,7 @@ describe('public form routes', () => {
     const submit = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token: multiToken, device_token: 'some-other-device', phone_last4: '2201', address: 'Calle Test 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: multiToken, device_token: 'some-other-device', phone_last4: '2201', address: 'Calle Test 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(submit.statusCode).toBe(201);
 
@@ -237,7 +237,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token, device_token: DEVICE, phone_last4: PHONE4,
         merge_order_id: firstOrderId,
         address: 'Calle 123 #45-67',
@@ -304,7 +304,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token, device_token: DEVICE, phone_last4: PHONE4,
         merge_order_id: firstOrderId,
         address: 'Calle 123 #45-67x',
@@ -325,7 +325,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token, device_token: DEVICE, phone_last4: PHONE4,
         merge_order_id: firstOrderId,
         address: before.address,
@@ -347,7 +347,7 @@ describe('public form routes', () => {
     const caminoToken = await issueFormToken(app, ticket.id, orgId);
     const create = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
-      payload: { token: caminoToken, device_token: 'device-camino', phone_last4: '2288', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: caminoToken, device_token: 'device-camino', phone_last4: '2288', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     const caminoOrderId = create.json().data.orderId;
     await app.prisma.order.update({ where: { id: caminoOrderId }, data: { status: 'camino' } });
@@ -355,7 +355,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token: caminoToken, device_token: 'device-camino', phone_last4: '2288', merge_order_id: caminoOrderId,
         address: 'Calle Camino 1',
         items: [{ product_name: 'Mango', quantity_label: '1 kg' }, { product_name: 'Piña', quantity_label: '1 unidad' }],
@@ -388,7 +388,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token: staffOrderToken, device_token: 'device-staff-order', phone_last4: '2260',
         merge_order_id: staffOrder.id, address: 'Calle Encargado 1',
         items: [{ product_name: 'Mango', quantity_label: '1 kg' }],
@@ -438,7 +438,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token, device_token: DEVICE, phone_last4: PHONE4, merge_order_id: firstOrderId, address: 'Calle Cerrado 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token, device_token: DEVICE, phone_last4: PHONE4, merge_order_id: firstOrderId, address: 'Calle Cerrado 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().code).toBe('ORDER_NOT_EDITABLE');
@@ -456,7 +456,7 @@ describe('public form routes', () => {
     const caminoToken2 = await issueFormToken(app, ticket.id, orgId);
     const create = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
-      payload: { token: caminoToken2, device_token: 'device-camino-2', phone_last4: '2266', address: 'Calle Camino 2', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: caminoToken2, device_token: 'device-camino-2', phone_last4: '2266', address: 'Calle Camino 2', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     const orderId = create.json().data.orderId;
     await app.prisma.order.update({ where: { id: orderId }, data: { status: 'camino' } });
@@ -508,7 +508,7 @@ describe('public form routes', () => {
     const submitRes = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token: sentToken, device_token: 'device-002', phone_last4: PHONE4, address: 'Calle Atribucion 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: sentToken, device_token: 'device-002', phone_last4: PHONE4, address: 'Calle Atribucion 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(submitRes.statusCode).toBe(201);
     const newOrderId = submitRes.json().data.orderId;
@@ -546,7 +546,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token: autoToken, device_token: 'device-auto', address: 'Calle Auto 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: autoToken, device_token: 'device-auto', address: 'Calle Auto 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(res.statusCode).toBe(201);
 
@@ -589,7 +589,7 @@ describe('public form routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/public/submit',
-      payload: { token: dayCloseToken, device_token: 'device-dayclosed', address: 'Calle Tarde 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: dayCloseToken, device_token: 'device-dayclosed', address: 'Calle Tarde 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(res.statusCode).toBe(201);
 
@@ -617,7 +617,7 @@ describe('public form routes', () => {
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token, device_token: 'device-delete-1', address: 'Calle Elimina 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token, device_token: 'device-delete-1', address: 'Calle Elimina 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       expect(create.statusCode).toBe(201);
       const orderId = create.json().data.orderId;
@@ -645,7 +645,7 @@ describe('public form routes', () => {
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token, device_token: 'device-delete-2', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token, device_token: 'device-delete-2', address: 'Calle Camino 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       const orderId = create.json().data.orderId;
       await app.prisma.order.update({ where: { id: orderId }, data: { status: 'camino' } });
@@ -692,7 +692,7 @@ describe('public form routes', () => {
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token, device_token: 'device-real', address: 'Calle Mismatch 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token, device_token: 'device-real', address: 'Calle Mismatch 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       const orderId = create.json().data.orderId;
 
@@ -716,7 +716,7 @@ describe('public form routes', () => {
       const tokenB = await issueFormToken(app, ticketB.id, orgId);
       const createB = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token: tokenB, device_token: 'device-b', address: 'Calle B 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token: tokenB, device_token: 'device-b', address: 'Calle B 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       const orderBId = createB.json().data.orderId;
 
@@ -737,7 +737,7 @@ describe('public form routes', () => {
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token, device_token: 'device-double', address: 'Calle Doble 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token, device_token: 'device-double', address: 'Calle Doble 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       const orderId = create.json().data.orderId;
 
@@ -761,7 +761,7 @@ describe('public form routes', () => {
       const token = await issueFormToken(app, ticket.id, orgId);
       const create = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token, device_token: 'device-resub', address: 'Calle Resub 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token, device_token: 'device-resub', address: 'Calle Resub 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       const orderId = create.json().data.orderId;
 
@@ -773,7 +773,7 @@ describe('public form routes', () => {
 
       const resubmit = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: {
+        payload: { consent: true,
           token, device_token: 'device-resub', merge_order_id: orderId,
           address: 'Calle Resub Nueva 2', items: [{ product_name: 'Mango', quantity_label: '2 kg' }],
         },
@@ -820,7 +820,7 @@ describe('public form routes', () => {
       const submit = await app.inject({
         method: 'POST',
         url: '/api/v1/public/submit',
-        payload: { token: revokedToken, device_token: DEVICE, phone_last4: '2299', address: 'Calle Revocado 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token: revokedToken, device_token: DEVICE, phone_last4: '2299', address: 'Calle Revocado 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       expect(submit.statusCode).toBe(401);
       expect(submit.json().code).toBe('INVALID_TOKEN');
@@ -909,14 +909,14 @@ describe('public form routes', () => {
     for (let i = 0; i < 3; i++) {
       const res = await app.inject({
         method: 'POST', url: '/api/v1/public/submit',
-        payload: { token: capToken, device_token: device, phone_last4: '2244', address: 'Calle Limite 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+        payload: { consent: true, token: capToken, device_token: device, phone_last4: '2244', address: 'Calle Limite 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
       });
       expect(res.statusCode).toBe(201);
     }
     // The 4th today hits the cap.
     const blocked = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
-      payload: { token: capToken, device_token: device, phone_last4: '2244', address: 'Calle Limite 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token: capToken, device_token: device, phone_last4: '2244', address: 'Calle Limite 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(blocked.statusCode).toBe(429);
     expect(blocked.json().code).toBe('FORM_LIMIT_REACHED');
@@ -1024,7 +1024,7 @@ describe('public /submit - Meta WhatsApp delivery tracking on the order confirma
 
     const res = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
-      payload: { token, device_token: 'device-wpp-submit', phone_last4: '9920', address: 'Calle WPP 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      payload: { consent: true, token, device_token: 'device-wpp-submit', phone_last4: '9920', address: 'Calle WPP 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(res.statusCode).toBe(201);
 
@@ -1063,7 +1063,7 @@ describe('public /submit - cobro en casa chosen by the client on the form', () =
 
     const submit = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
-      payload: {
+      payload: { consent: true,
         token, device_token: 'device-cod-form', phone_last4: '9930', address: 'Calle Cod Form 1',
         payment_method: 'cod', items: [{ product_name: 'Mango', quantity_label: '1 kg' }],
       },
@@ -1090,6 +1090,76 @@ describe('public /submit - cobro en casa chosen by the client on the form', () =
     });
     expect(patch.statusCode).toBe(200);
     expect(patch.json().data.cod_choice).toBe('completo');
+  });
+});
+
+describe('public /submit - consentimiento de tratamiento de datos (Ley 1581 de 2012)', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    // resolveActorUser (public.ts) needs a real active admin/encargado to attribute
+    // the order to - without one, /submit 500s with NO_USER before ever reaching
+    // order creation, same as every other describe block here that calls /submit.
+    await createTestUser(app.prisma, orgId, 'admin', 'ConsentFormAdmin1!');
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('GET /form-info reports hasConsent:false for a ticket that never accepted', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119940', customer_name: 'Cliente Sin Consentir' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=dev-consent` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.hasConsent).toBe(false);
+  });
+
+  it('POST /submit rejects with CONSENT_REQUIRED when the ticket never consented and consent is not sent as true', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119941', customer_name: 'Cliente Rechaza' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { token, device_token: 'device-no-consent', address: 'Calle Sin Consentir 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('CONSENT_REQUIRED');
+    const stillNull = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(stillNull.consent_given_at).toBeNull();
+  });
+
+  it('POST /submit with consent:true stamps consent_given_at once, and a later submit on the same ticket succeeds without resending it', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119942', customer_name: 'Cliente Consiente' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+
+    const first = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token, device_token: 'device-consent-1', address: 'Calle Consiente 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(first.statusCode).toBe(201);
+    const afterFirst = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(afterFirst.consent_given_at).not.toBeNull();
+    const stampedAt = afterFirst.consent_given_at;
+
+    // form-info now reports it as already consented - the real form won't even
+    // render the checkbox on this ticket's next load.
+    const info = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=dev-consent` });
+    expect(info.json().data.hasConsent).toBe(true);
+
+    // A second order on the SAME ticket, consent omitted entirely this time -
+    // must still succeed (already on file), and the original timestamp must not
+    // get clobbered by a second stamp.
+    const second = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { token, device_token: 'device-consent-1', address: 'Calle Consiente 2', items: [{ product_name: 'Piña', quantity_label: '1 kg' }] },
+    });
+    expect(second.statusCode).toBe(201);
+    const afterSecond = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(afterSecond.consent_given_at?.getTime()).toBe(stampedAt?.getTime());
   });
 });
 

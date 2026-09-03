@@ -225,6 +225,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           clientName: ticket.customer_name ?? '',
           orgName: ticket.org.name,
           orgId: ticket.org_id,
+          // false = el formulario debe mostrar el checkbox de consentimiento antes
+          // de dejar enviar - true = ya se aceptó en un pedido anterior, no se
+          // vuelve a preguntar (ver POST /submit).
+          hasConsent: !!ticket.consent_given_at,
           orders: todaysOrders.map(o => ({
             id: o.id,
             num: o.num,
@@ -358,6 +362,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // closed it while the client was filling the form) this just falls through to
       // creating a new order instead of blocking the submission.
       merge_order_id: z.string().uuid().optional(),
+      // Solo se exige/lee la PRIMERA vez (mientras ticket.consent_given_at sea
+      // null) - una vez aceptado queda guardado en el ticket, un cliente que
+      // ya aceptó no vuelve a ver el checkbox en su próximo pedido.
+      consent: z.boolean().optional(),
       items: z.array(z.object({
         product_name:   z.string().min(1).max(200),
         quantity_label: z.string().max(100),
@@ -374,6 +382,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       ticket = await loadTicketByFormToken(body.data.token);
     } catch (err) {
       return sendInvalidToken(err, reply);
+    }
+
+    // Ley 1581 de 2012 - consentimiento informado antes de procesar el pedido.
+    // Solo se exige la primera vez por ticket (ver comentario del schema arriba).
+    if (!ticket.consent_given_at) {
+      if (body.data.consent !== true) {
+        return reply.status(400).send({
+          error: 'Debes aceptar la Política de Tratamiento de Datos para poder enviar tu pedido.',
+          code: 'CONSENT_REQUIRED',
+        });
+      }
+      await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { consent_given_at: new Date() } });
     }
 
     const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);

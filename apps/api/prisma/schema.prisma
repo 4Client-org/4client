@@ -292,6 +292,15 @@ model Ticket {
   // + all invoices) for this ticket until this timestamp, self-expiring with no
   // staff action needed (unlike the manual org-wide "bloquear todos los links").
   link_blocked_until   DateTime? @db.Timestamptz
+  // Ley 1581 de 2012 (protección de datos, Colombia) - momento en que este
+  // cliente aceptó la Política de Tratamiento de Datos en el formulario de
+  // pedido (routes/public.ts, POST /submit). Null = todavía no aceptó (se le
+  // exige antes de dejar enviar el pedido). Se guarda UNA sola vez por ticket
+  // - un pedido posterior del mismo cliente no vuelve a pedirlo. Un ticket ya
+  // existente antes de que esta política existiera queda en null hasta que el
+  // cliente vuelva a escribir y complete el formulario de nuevo (Decreto 1377
+  // de 2013, art. 10 - no se borra ni se asume nada retroactivamente).
+  consent_given_at   DateTime? @db.Timestamptz
 
   org                Organization      @relation(fields: [org_id], references: [id])
   messages           TicketMessage[]
