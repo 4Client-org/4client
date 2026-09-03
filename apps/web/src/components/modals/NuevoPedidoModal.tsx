@@ -1,5 +1,5 @@
 import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks, Menu } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
@@ -206,6 +206,25 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   });
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
 
+  // Mismo patrón que TicketModal.tsx - en celular la fila de botones
+  // (Formulario/Bloquear Link/Catálogo/Tomar lista) pasa a un menú
+  // hamburguesa, mismos botones/handlers, ver .tk-actions/.tk-hamburger en
+  // global.css. Se cierra solo con acciones "terminales", no con Catálogo
+  // (que abre su propio submenú encima).
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (actionsRef.current?.contains(target) || hamburgerRef.current?.contains(target)) return;
+      setActionsOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [actionsOpen]);
+
   function handleSend() {
     if (!replyText.trim() || replyMut.isPending) return;
     replyMut.mutate(replyText.trim());
@@ -318,53 +337,60 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
               <Smartphone size={15} />
               <span style={{ flex: 1 }}>{preNombre || formatPhoneDisplay(telefono)}</span>
               {ticketId && (
-                <button
-                  className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
-                  disabled={isPastDay}
-                  onClick={async () => {
-                    let url: string;
-                    try {
-                      const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
-                      url = res.data.url;
-                    } catch { toast('No se pudo generar el link', true); return; }
-                    try {
-                      // Three separate messages, in order (awaited, not fire-and-
-                      // forget - each must arrive in this exact sequence).
-                      await replyMut.mutateAsync(buildFormLinkWarningMessage());
-                      await replyMut.mutateAsync(url);
-                      await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
-                    } catch {
-                      // replyMut's own onError already toasted the specific reason.
-                    }
-                  }}
-                >
-                  <ClipboardList size={13} />
-                  Formulario
-                </button>
-              )}
-              {ticketId && (
-                <button
-                  className="hdr-ic-btn"
-                  title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
-                  onClick={() => setShowBlockConfirm(true)}
-                  disabled={blockLinkMut.isPending || isPastDay}
-                >
-                  <Ban size={13} />
-                  <span>Bloquear<br />Link</span>
-                </button>
-              )}
-              {ticketId && <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />}
-              {ticketId && canTomarLista && (
-                <button
-                  className="hdr-ic-btn"
-                  title="Seleccionar mensajes del cliente para armar el pedido"
-                  onClick={() => tomarLista.toggle()}
-                  disabled={isPastDay}
-                >
-                  <ListChecks size={13} />
-                  <span>Tomar<br />lista</span>
-                </button>
+                <>
+                  <button ref={hamburgerRef} className="tk-hamburger" title="Más acciones"
+                    onClick={() => setActionsOpen(o => !o)}>
+                    <Menu size={18} />
+                  </button>
+                  <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
+                    <button
+                      className="hdr-ic-btn"
+                      title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
+                      disabled={isPastDay}
+                      onClick={async () => {
+                        setActionsOpen(false);
+                        let url: string;
+                        try {
+                          const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
+                          url = res.data.url;
+                        } catch { toast('No se pudo generar el link', true); return; }
+                        try {
+                          // Three separate messages, in order (awaited, not fire-and-
+                          // forget - each must arrive in this exact sequence).
+                          await replyMut.mutateAsync(buildFormLinkWarningMessage());
+                          await replyMut.mutateAsync(url);
+                          await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
+                        } catch {
+                          // replyMut's own onError already toasted the specific reason.
+                        }
+                      }}
+                    >
+                      <ClipboardList size={13} />
+                      Formulario
+                    </button>
+                    <button
+                      className="hdr-ic-btn"
+                      title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
+                      onClick={() => { setActionsOpen(false); setShowBlockConfirm(true); }}
+                      disabled={blockLinkMut.isPending || isPastDay}
+                    >
+                      <Ban size={13} />
+                      <span>Bloquear<br />Link</span>
+                    </button>
+                    <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />
+                    {canTomarLista && (
+                      <button
+                        className="hdr-ic-btn"
+                        title="Seleccionar mensajes del cliente para armar el pedido"
+                        onClick={() => { setActionsOpen(false); tomarLista.toggle(); }}
+                        disabled={isPastDay}
+                      >
+                        <ListChecks size={13} />
+                        <span>Tomar<br />lista</span>
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
             </div>
             {convoData?.no_wpp_number && (

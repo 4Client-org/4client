@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks, Menu } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -278,6 +278,23 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     setSplitTransfer('');
   }, [showCobro]);
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
+  // Mismo patrón que TicketModal.tsx - en celular la fila de botones
+  // (Formulario/Bloquear Link/Catálogo/Tomar lista) pasa a un menú
+  // hamburguesa, mismos botones/handlers, ver .tk-actions/.tk-hamburger en
+  // global.css.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (actionsRef.current?.contains(target) || hamburgerRef.current?.contains(target)) return;
+      setActionsOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [actionsOpen]);
   // Separate from confirmDlg - papelera needs a free-text reason, not just a
   // yes/no confirm, and re-sending after a restore must ask again every time
   // (backend clears papelera_reason on restore, so there's nothing to prefill).
@@ -1124,11 +1141,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.8 }}>{formatPhoneDisplay(order.customer_phone)}</div>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0, justifyContent: 'flex-end' }}>
+              <button ref={hamburgerRef} className="tk-hamburger" title="Más acciones"
+                onClick={() => setActionsOpen(o => !o)}>
+                <Menu size={18} />
+              </button>
+              <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
                 <button
                   className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
-                  onClick={sendFormLink}
+                  onClick={() => { setActionsOpen(false); sendFormLink(); }}
                   disabled={formLinkMut.isPending || isPastDay}
                 >
                   <ClipboardList size={13} />
@@ -1137,11 +1158,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 <button
                   className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
-                  onClick={() => setConfirmDlg({
+                  onClick={() => { setActionsOpen(false); setConfirmDlg({
                     msg: 'Vas a bloquear el link del formulario - el cliente no podrá usarlo y tendrás que enviarle uno nuevo. ¿Deseas bloquearlo?',
                     onOk: () => blockLinkMut.mutate(),
                     danger: true,
-                  })}
+                  }); }}
                   disabled={blockLinkMut.isPending || isPastDay}
                 >
                   <Ban size={13} />
@@ -1152,7 +1173,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   <button
                     className="hdr-ic-btn"
                     title="Seleccionar mensajes del cliente para armar el pedido"
-                    onClick={() => tomarLista.toggle()}
+                    onClick={() => { setActionsOpen(false); tomarLista.toggle(); }}
                     disabled={isPastDay}
                   >
                     <ListChecks size={13} />
