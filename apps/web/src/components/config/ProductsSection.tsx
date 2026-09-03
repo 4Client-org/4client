@@ -514,6 +514,12 @@ export default function ProductsSection() {
         </div>
       </div>
 
+      {/* La grilla usa columnas de ancho fijo (GRID_COLS) - en celular eso ya no
+          cabe en la pantalla. En vez de achicar/apilar columnas (cambiaría cómo
+          se ve y se edita en desktop), este wrapper deja que se desplace de
+          lado en vez de desbordar la página - mismo resguardo que .ac ya usa
+          para el tablero de Tickets & Pedidos. */}
+      <div style={{ overflowX: 'auto' }}>
       {renderNewRow()}
 
       {isLoading ? (
@@ -558,6 +564,7 @@ export default function ProductsSection() {
           );
         })
       )}
+      </div>
     </div>
   );
 }

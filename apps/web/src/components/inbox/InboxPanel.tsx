@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward, ArrowLeft } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -268,7 +268,10 @@ export default function InboxPanel() {
     ?? (searchSelectedTicket?.id === selectedId ? searchSelectedTicket : undefined);
 
   return (
-    <div className="inbox-wrap">
+    // has-selection solo importa en celular (ver .inbox-wrap en global.css) - a
+    // partir de ahí es lo que decide si se muestra la lista o la conversación,
+    // una sola columna a la vez en vez de las 2 apretadas lado a lado.
+    <div className={`inbox-wrap${selectedId ? ' has-selection' : ''}`}>
       {/* LEFT SIDEBAR */}
       <div className="inbox-sidebar">
         <div className="inbox-sidebar-header" style={{ padding: '12px 16px', borderBottom: '2px solid var(--brd)', background: 'var(--vc)' }}>
@@ -396,6 +399,11 @@ export default function InboxPanel() {
         <div className="inbox-chat">
           {/* Chat header */}
           <div className="inbox-chat-head">
+            {/* Solo visible en celular (ver .inbox-back en global.css) - en desktop
+                las 2 columnas ya están visibles a la vez, no hace falta "volver". */}
+            <button className="inbox-back" onClick={() => setSelectedId(null)} title="Volver a la lista" aria-label="Volver a la lista">
+              <ArrowLeft size={19} />
+            </button>
             {editingTicket ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
                 <input className="fi2" value={editName} onChange={(e) => setEditName(e.target.value)}
