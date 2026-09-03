@@ -189,10 +189,18 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].text).toContain('solo para hacer tu pedido');
     expect(outbound[0].text).toContain('Ahorros Bancolombia');
-    expect(outbound[0].text).not.toContain('http');
+    // Ley 1581 de 2012 - el aviso de privacidad va pegado al final de ESTE mismo
+    // mensaje (buildPrivacyNoticeMessage), no del link del pedido - por eso SÍ
+    // lleva una URL (la de la política, no la del formulario) y eso es a propósito.
+    expect(outbound[0].text).toContain('política de privacidad');
+    expect(outbound[0].text).toContain('politica-privacidad.html');
     expect(outbound[0].wpp_message_id).toBeTruthy();
     expect(outbound[0].failed_reason).toBeNull();
+    // El link del PEDIDO sigue siendo el único contenido de este segundo mensaje -
+    // nada del aviso de privacidad se mezcla acá, para que el cliente pueda
+    // reenviar/copiar solo el link.
     expect(outbound[1].text).toMatch(/^https?:\/\//);
+    expect(outbound[1].text).not.toContain('politica-privacidad');
     expect(outbound[1].wpp_message_id).toBeTruthy();
     expect(outbound[1].failed_reason).toBeNull();
     expect(outbound[2].text).toContain('Diligencia por favor el pedido');

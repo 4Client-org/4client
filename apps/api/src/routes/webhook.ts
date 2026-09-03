@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../lib/formLink.js';
+import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage, buildPrivacyNoticeMessage } from '../lib/formLink.js';
 import {
   storeMedia, detectImageMime, detectMediaMime,
   isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime,
@@ -284,7 +284,11 @@ async function ingestMessage(
           return;
         }
 
-        const welcomeAndNotice = `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
+        // El aviso de privacidad va al FINAL, después del warning de seguridad -
+        // pedido explícito: "el primer mensaje automático... diga al final, en
+        // cursiva", para que quede como prueba de que se avisó antes de mandar
+        // el link del formulario donde el cliente entrega sus datos.
+        const welcomeAndNotice = `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}\n\n${buildPrivacyNoticeMessage()}`;
         try {
           await sendAndRecord(welcomeAndNotice);
         } catch (err) {

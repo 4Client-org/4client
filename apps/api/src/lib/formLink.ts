@@ -71,3 +71,21 @@ export function buildFormLinkWarningMessage(): string {
 export function buildFormLinkFollowUpMessage(): string {
   return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
 }
+
+// Fija por ahora - una sola organización real hoy. Mismo valor que
+// apps/web/src/pages/ClientFormPage.tsx's PRIVACY_POLICY_URL (no hay forma
+// simple de compartir una constante entre ambos paquetes acá) - cuando haya
+// una segunda organización, ambas pasan a leer esto de Organization en la DB
+// en vez de una constante duplicada en cada lado.
+const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web/politica-privacidad.html';
+
+// Ley 1581 de 2012 - aviso de privacidad, en cursiva (sintaxis de WhatsApp:
+// _texto_), pegado al FINAL del mensaje de bienvenida (ver webhook.ts) - no es
+// un mensaje aparte, a propósito: sirve como prueba de que se avisó al cliente
+// ANTES de que este entregue cualquier dato (nombre, dirección) por el
+// formulario que se manda a continuación. El checkbox del formulario
+// (ClientFormPage.tsx) sigue siendo donde se CAPTURA el consentimiento en sí -
+// esto es la notificación temprana, en el chat, no un sustituto de ese checkbox.
+export function buildPrivacyNoticeMessage(): string {
+  return `_Al continuar usando este chat para tus pedidos, aceptas nuestra política de privacidad: ${PRIVACY_POLICY_URL}_`;
+}
