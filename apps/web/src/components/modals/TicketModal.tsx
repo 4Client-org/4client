@@ -283,6 +283,10 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
               onClick={() => setActionsOpen(o => !o)}>
               <Menu size={18} />
             </button>
+            {/* Solo celular - el × de siempre vive en el panel de pedidos
+                (página 2 del carrusel), inalcanzable mientras se ve el chat
+                (página 1) sin deslizar primero. Mismo onClose. */}
+            <button className="tk-chat-close" title="Cerrar" onClick={onClose}>×</button>
             <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
               <button
                 className="hdr-ic-btn"

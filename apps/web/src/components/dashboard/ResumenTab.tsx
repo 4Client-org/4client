@@ -204,7 +204,7 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
           <div className="ktit">Informe del día</div>
           <div className="kmeta">Tiempo real - actualización automática</div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <DatePickerES value={fecha} onChange={setFecha} />
           {dashboard?.cierre?.cerrado ? (
             <>

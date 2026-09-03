@@ -336,6 +336,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '10px 12px', fontWeight: 800, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
               <Smartphone size={15} />
               <span style={{ flex: 1 }}>{preNombre || formatPhoneDisplay(telefono)}</span>
+              {/* Solo celular - el × de siempre vive en el formulario de pedido
+                  (a la derecha), inalcanzable en un celular angosto. */}
+              <button className="tk-chat-close" title="Cerrar" onClick={handleClose}>×</button>
               {ticketId && (
                 <>
                   <button ref={hamburgerRef} className="tk-hamburger" title="Más acciones"

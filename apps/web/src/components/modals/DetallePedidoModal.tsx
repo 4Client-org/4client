@@ -1145,6 +1145,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 onClick={() => setActionsOpen(o => !o)}>
                 <Menu size={18} />
               </button>
+              {/* Solo celular - el × de siempre vive en el panel de pedido (a la
+                  derecha), inalcanzable en un celular angosto sin ese espacio. */}
+              <button className="tk-chat-close" title="Cerrar" onClick={handleClose}>×</button>
               <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
                 <button
                   className="hdr-ic-btn"

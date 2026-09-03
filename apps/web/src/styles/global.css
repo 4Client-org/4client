@@ -239,8 +239,22 @@ input,select,textarea{font-family:var(--f);}
 .tk-actions{display:flex;flex-wrap:wrap;gap:5px;flex-shrink:0;justify-content:flex-end;}
 .tk-hamburger{display:none;background:none;border:none;color:#fff;cursor:pointer;padding:4px;align-items:center;flex-shrink:0;}
 .tk-swipe-hint{display:none;}
+/* El × de siempre (.mclose) vive en el panel de pedido/formulario a la
+   derecha - inalcanzable en celular sin ese ancho. Este es su equivalente
+   para la cabecera del chat (fondo oscuro var(--vd), por eso blanco/
+   translúcido en vez del estilo claro de .mclose), oculto salvo en celular. */
+.tk-chat-close{display:none;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center;flex-shrink:0;}
+.tk-chat-close:hover{background:rgba(255,255,255,.3);}
 .idel{background:var(--rc);border:none;color:var(--r);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;}
 .idel:hover{background:var(--r);color:#fff;}
+
+/* UsersSection - tarjeta de usuario. En escritorio, .user-card-head (avatar+
+   nombre) y .user-card-meta (rol/estado/acciones) van lado a lado en una
+   sola fila (igual que antes) - en celular (ver el media query más abajo)
+   se apilan en 2 filas, porque los anchos fijos de rol/estado no dejaban
+   espacio real al nombre (se veían montados encima). */
+.user-card-row{display:flex;align-items:center;gap:10px;}
+.user-card-head{flex:1;min-width:0;}
 
 /* FACTURA */
 .factbox{background:var(--bg);border-radius:var(--rad);padding:14px 16px;border:2px solid var(--brd);}
@@ -457,6 +471,8 @@ input,select,textarea{font-family:var(--f);}
   .slane-scell{padding:7px;min-height:100px;gap:6px;}
   .tk-name{font-size:13px;}
   .tk-preview{font-size:11px;}
+  .tk-num{font-size:10px;}
+  .tk-urg{font-size:10px;padding:1px 5px;gap:2px;}
   .tk-ver-btn{padding:8px 10px;min-height:32px;}
   .tk-crear-btn{min-height:32px;padding:7px 10px;}
   .dc-card{padding:8px 9px;}
@@ -479,6 +495,11 @@ input,select,textarea{font-family:var(--f);}
   .tk-preview{font-size:10px;}
   .tk-phone{font-size:9px;}
   .tk-badge{font-size:9px;padding:2px 6px;}
+  .tk-num{font-size:9px;}
+  /* T-01 apretado contra el reloj de tiempo transcurrido a este ancho - el
+     texto de minutos se esconde, dejando solo el ícono de alerta (el color
+     rojo/naranja ya avisa que hay urgencia, no hace falta el número acá). */
+  .tk-urg{font-size:0;padding:2px 4px;gap:0;}
   .dc-card{padding:6px 7px;}
   .dc-num{font-size:10px;}
   .dc-prod{font-size:10px;}
@@ -506,7 +527,15 @@ input,select,textarea{font-family:var(--f);}
    full-width with a "volver" button (.inbox-back, hidden everywhere else). */
 @media (max-width:768px){
   .inbox-wrap{flex-direction:column;}
-  .inbox-sidebar{width:100%;border-right:none;}
+  /* flex:1;min-height:0 es lo que faltaba - en fila (desktop) el sidebar ya
+     estira a la altura completa de .inbox-wrap por defecto (cross-axis), pero
+     en columna (celular) un flex-item sin esto se dimensiona por su
+     CONTENIDO en el eje principal - crecía tan alto como todos los chats
+     juntos en vez de quedar acotado, y su propio .inbox-sidebar-list (que
+     scrollea internamente con flex:1) nunca tenía una altura real contra la
+     cual medirse. Resultado real reportado: no dejaba bajar con scroll para
+     ver todos los chats - la lista se cortaba, no era que no scrolleara. */
+  .inbox-sidebar{width:100%;border-right:none;flex:1;min-height:0;}
   .inbox-wrap.has-selection .inbox-sidebar{display:none;}
   .inbox-chat{display:none;}
   .inbox-wrap.has-selection .inbox-chat{display:flex;}
@@ -539,6 +568,7 @@ input,select,textarea{font-family:var(--f);}
     font-weight:700;color:var(--vd);background:var(--vc);border-bottom:1px solid var(--vm);
   }
   .tk-hamburger{display:flex;}
+  .tk-chat-close{display:flex;}
   .tk-actions{display:none;}
   .tk-actions.open{
     display:flex;flex-direction:column;position:fixed;top:64px;right:12px;z-index:1000;
@@ -587,6 +617,9 @@ input,select,textarea{font-family:var(--f);}
      hace falta solo para ganarle al padding/minWidth/fontSize inline, mismo
      recurso ya usado una vez en este archivo para el mismo tipo de choque. */
   .dev-badge{padding:4px 10px !important;min-width:0 !important;font-size:11px !important;letter-spacing:1px !important;}
+  .user-card-row{flex-direction:column;align-items:stretch;gap:8px;}
+  .user-card-meta{flex-wrap:wrap;}
+  .user-card-role-col,.user-card-status-col{width:auto !important;}
 }
 
 /* Se probó un cap de ancho acá para pantallas >=1600px (TV/ultrawide) - se

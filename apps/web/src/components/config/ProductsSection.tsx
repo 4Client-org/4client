@@ -443,7 +443,7 @@ export default function ProductsSection() {
   function renderNewRow() {
     if (editingId !== '__new__' || !draft) return null;
     return (
-      <div style={{ border: '1.5px solid var(--v)', borderRadius: 'var(--rad)', overflow: 'hidden', marginBottom: 12 }}>
+      <div style={{ border: '1.5px solid var(--v)', borderRadius: 'var(--rad)', overflowX: 'auto', marginBottom: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10 }}>
           <input className="fi" style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600 }} value={draft.name}
             onChange={e => setDraft(d => d && ({ ...d, name: e.target.value }))} placeholder="Nombre del producto" autoFocus />
@@ -488,7 +488,7 @@ export default function ProductsSection() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, color: 'var(--gt)' }}>{(products as any[]).length} productos activos</span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative' }}>
             <Search size={14} color="var(--gt)" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
             <input
@@ -496,7 +496,7 @@ export default function ProductsSection() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Buscar producto..."
-              style={{ paddingLeft: 32, width: 220 }}
+              style={{ paddingLeft: 32, width: 220, maxWidth: '100%' }}
             />
           </div>
           <input ref={fileInputRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleExcelUpload} />
@@ -515,11 +515,15 @@ export default function ProductsSection() {
       </div>
 
       {/* La grilla usa columnas de ancho fijo (GRID_COLS) - en celular eso ya no
-          cabe en la pantalla. En vez de achicar/apilar columnas (cambiaría cómo
-          se ve y se edita en desktop), este wrapper deja que se desplace de
-          lado en vez de desbordar la página - mismo resguardo que .ac ya usa
-          para el tablero de Tickets & Pedidos. */}
-      <div style={{ overflowX: 'auto' }}>
+          cabe en la pantalla. Cada caja de abajo (renderNewRow, resultados de
+          búsqueda, cada categoría) maneja su PROPIO scroll horizontal en vez
+          de envolver todo desde afuera - un wrapper afuera con overflow-x:auto
+          no servía de nada porque cada caja ya tenía su propio overflow:hidden
+          (para las esquinas redondeadas), que recortaba el contenido ANTES de
+          que el wrapper de afuera pudiera ver que había algo que scrollear -
+          quedaba invisible (precio/unidad/stock), no solo "hay que scrollear".
+          Bug real encontrado probando en celular. */}
+      <div>
       {renderNewRow()}
 
       {isLoading ? (
@@ -532,7 +536,7 @@ export default function ProductsSection() {
         filteredFlat.length === 0 ? (
           <div style={{ color: 'var(--gt)', fontSize: 14, padding: 16 }}>Sin resultados para "{search}"</div>
         ) : (
-          <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflow: 'hidden' }}>
+          <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflowX: 'auto' }}>
             <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
               <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
             </div>
@@ -553,7 +557,7 @@ export default function ProductsSection() {
                 <span style={{ fontSize: 11, color: 'var(--gt)', fontWeight: 600 }}>{(prods as any[]).length} productos</span>
               </button>
               {!collapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', overflowX: 'auto' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '6px 14px', gap: 10, borderTop: '1px solid var(--brd)', fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
                     <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
                   </div>
