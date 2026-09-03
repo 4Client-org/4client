@@ -85,6 +85,16 @@ model User {
   platform_charges_created PlatformCharge[]
 
   @@unique([org_id, email])
+  // Login único global (routes/auth.ts busca por email SIN filtrar por
+  // org_id - un mismo email en dos organizaciones distintas hacía que
+  // findFirst() devolviera una fila arbitraria, y la cuenta "perdedora" nunca
+  // podía loguearse). El compound de arriba se deja intacto porque seed.ts/
+  // dev.ts ya lo usan como key de upsert - este es un constraint aparte, no
+  // un reemplazo. Decisión explícita del negocio: un mismo correo no puede
+  // administrar dos organizaciones distintas en la plataforma (si hiciera
+  // falta alguna vez, un alias tipo admin+otronegocio@gmail.com lo resuelve
+  // sin costo).
+  @@unique([email])
   @@map("users")
 }
 

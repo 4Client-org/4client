@@ -341,6 +341,14 @@ export default async function devRoutes(fastify: FastifyInstance) {
     if (clash) slug = `${slug}-${randomBytes(2).toString('hex')}`;
 
     const email = body.data.admin_email.toLowerCase();
+
+    // Email único en toda la plataforma (@@unique([email]) en schema.prisma) -
+    // sin este chequeo, un choque con OTRA organización ya existente rompería
+    // la transacción de abajo con un P2002 crudo, capturado por el catch
+    // genérico como un 500 poco explicativo.
+    const existing = await fastify.prisma.user.findFirst({ where: { email } });
+    if (existing) return reply.status(409).send({ error: 'Ese email ya está registrado en la plataforma', code: 'DUPLICATE_EMAIL' });
+
     const password_hash = await bcrypt.hash(body.data.admin_password, 12);
 
     try {

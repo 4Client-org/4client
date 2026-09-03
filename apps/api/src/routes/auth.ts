@@ -117,6 +117,13 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     const { email, password } = body.data;
 
+    // Sin org_id a propósito - el login no pregunta a qué organización se
+    // entra, solo email+password. Esto SOLO es seguro porque email tiene
+    // @@unique([email]) en schema.prisma (a nivel de toda la plataforma, no
+    // por organización) - antes de ese constraint, dos organizaciones podían
+    // tener cada una un usuario con el mismo email y esta consulta devolvía
+    // una fila arbitraria, dejando a una de las dos cuentas sin poder
+    // loguearse nunca (encontrado en una auditoría de seguridad).
     const user = await fastify.prisma.user.findFirst({
       where: { email: email.toLowerCase(), active: true },
       include: { org: true },

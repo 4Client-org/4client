@@ -42,10 +42,15 @@ export default async function userRoutes(fastify: FastifyInstance) {
     const body = createUserSchema.safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
+    // Global, no scopeado a esta organización - el email es único en toda la
+    // plataforma (@@unique([email]) en schema.prisma), no solo dentro de un
+    // mismo tenant. Sin este chequeo previo, un choque con OTRA organización
+    // llegaría crudo a la DB como un P2002 sin capturar acá (500 genérico en
+    // vez de este 409 explicando qué pasó).
     const existing = await fastify.prisma.user.findFirst({
-      where: { org_id: req.user.orgId, email: body.data.email.toLowerCase() },
+      where: { email: body.data.email.toLowerCase() },
     });
-    if (existing) return reply.status(409).send({ error: 'Email ya registrado en esta organización', code: 'DUPLICATE_EMAIL' });
+    if (existing) return reply.status(409).send({ error: 'Ese email ya está registrado en la plataforma', code: 'DUPLICATE_EMAIL' });
 
     const password_hash = await bcrypt.hash(body.data.password, 12);
     const user = await fastify.prisma.user.create({
@@ -76,12 +81,13 @@ export default async function userRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'No puedes desactivarte a ti mismo', code: 'SELF_DEACTIVATE' });
     }
 
-    // Check email uniqueness if changing email
+    // Check email uniqueness if changing email - global, mismo motivo que en
+    // el POST de arriba (email único en toda la plataforma, no por org).
     if (body.data.email) {
       const conflict = await fastify.prisma.user.findFirst({
-        where: { org_id: req.user.orgId, email: body.data.email.toLowerCase(), id: { not: id } },
+        where: { email: body.data.email.toLowerCase(), id: { not: id } },
       });
-      if (conflict) return reply.status(409).send({ error: 'Email ya registrado en esta organización', code: 'DUPLICATE_EMAIL' });
+      if (conflict) return reply.status(409).send({ error: 'Ese email ya está registrado en la plataforma', code: 'DUPLICATE_EMAIL' });
     }
 
     const updateData = { ...body.data, ...(body.data.email ? { email: body.data.email.toLowerCase() } : {}) };
