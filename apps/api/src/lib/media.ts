@@ -1,21 +1,19 @@
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-
-// SIEMPRE disco local, nunca R2 - a diferencia de files.ts's invoice PDFs
-// (que sí van a R2 si está configurado). Decisión explícita del negocio: R2
-// es solo para las facturas de pedido que genera 4Client, no para imágenes/
-// audios/videos/documentos que pasan por el chat de WhatsApp. Mismo modelo
-// de "el token opaco es el único gate" que formLink.ts usa para form links -
-// una foto de chat solo la busca staff que ya tiene este token exacto (vino
-// de una fila de TicketMessage que puede ver), no hay nada más que chequear
-// más allá de "existe este token" una vez pasado el propio auth de la ruta.
-const UPLOADS_MEDIA_DIR = path.join(process.cwd(), 'uploads', 'media');
-const MEDIA_TOKEN_BYTES = 20;
-
-// The token itself carries its own extension (e.g. "<40 hex chars>.jpg") so the
-// real Content-Type can be recovered on GET without a separate DB column - the
-// hex portion is what's actually unguessable, the extension is just routing info.
+// Decisión explícita del negocio: NADA de imágenes/audios/videos/documentos
+// del chat de WhatsApp se guarda de nuestro lado - ni en R2, ni en disco, ni
+// como bytes en la BD. Se queda "como en WhatsApp normal": vive en los
+// servidores de Meta, y acá solo se guarda el media_id que Meta ya nos da
+// (misma idea que ya se hacía con wpp_message_id - una referencia, no el
+// contenido). Cuando alguien necesita VER una foto/audio/video/documento,
+// inbox.ts's GET /media/:id le pide una URL fresca a Meta (getMediaUrl) y
+// descarga los bytes en el momento, sin guardar nada - Meta solo la retiene
+// 30 días, pasado eso ya no hay forma de recuperarla, ni para nosotros ni
+// para el negocio (decisión aceptada explícitamente, ver el commit).
+//
+// Antes de este cambio storeMedia()/loadMedia() guardaban una copia local -
+// esas funciones ya no existen. Lo que queda acá es solo la validación de
+// tipo/firma de archivo, que ahora se aplica en el momento de SERVIR el
+// archivo (cada vez que se pide a Meta), no al ingresar el mensaje - incluso
+// mejor defensa que antes (se revalida en cada vista, no solo una vez).
 const MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
@@ -32,8 +30,8 @@ const MIME_EXT: Record<string, string> = {
 };
 
 // Meta reports some audio mime types with a codec parameter appended
-// (e.g. "audio/ogg; codecs=opus") - strip it before any MIME_EXT lookup, or
-// every voice note would silently fall through to the generic .bin extension.
+// (e.g. "audio/ogg; codecs=opus") - strip it before any mime-set lookup below,
+// or every voice note would silently fail its allow-list check.
 export function normalizeMime(mimeType: string): string {
   return mimeType.split(';')[0].trim().toLowerCase();
 }
@@ -108,25 +106,11 @@ export function detectMediaMime(buffer: Buffer, declaredMime: string): string | 
   return null;
 }
 
-export async function storeMedia(buffer: Buffer, mimeType: string): Promise<string> {
-  const ext = MIME_EXT[normalizeMime(mimeType)] ?? 'bin';
-  const token = `${crypto.randomBytes(MEDIA_TOKEN_BYTES).toString('hex')}.${ext}`;
-  if (!fs.existsSync(UPLOADS_MEDIA_DIR)) fs.mkdirSync(UPLOADS_MEDIA_DIR, { recursive: true });
-  fs.writeFileSync(path.join(UPLOADS_MEDIA_DIR, token), buffer);
-  return token;
-}
-
-export async function loadMedia(token: string): Promise<Buffer> {
-  return fs.promises.readFile(path.join(UPLOADS_MEDIA_DIR, token));
-}
-
-export function mimeTypeForToken(token: string): string {
-  const ext = path.extname(token).slice(1).toLowerCase();
-  return Object.entries(MIME_EXT).find(([, e]) => e === ext)?.[0] ?? 'application/octet-stream';
-}
-
-// Only a bare "<hex>.<ext>" shape is ever valid - guards both the storage key
-// (no path traversal) and the GET route (no arbitrary lookups).
-export function isValidMediaToken(token: string): boolean {
-  return /^[0-9a-f]{40}\.(jpg|png|webp|ogg|mp3|m4a|amr|mp4|3gp|pdf|bin)$/.test(token);
+// Solo un filtro barato antes de tocar la BD/red - el gate real en
+// inbox.ts's GET /media/:id es el lookup de TicketMessage scopeado a la
+// organización del que pide, esto solo descarta basura obvia (Meta reporta
+// media_id como una cadena numérica larga, pero se deja algo de margen por
+// si Meta cambia el formato sin avisar).
+export function isValidMetaMediaId(id: string): boolean {
+  return /^[0-9]{5,40}$/.test(id);
 }

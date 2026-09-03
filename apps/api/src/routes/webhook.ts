@@ -3,10 +3,6 @@ import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage, buildPrivacyNoticeMessage } from '../lib/formLink.js';
-import {
-  storeMedia, detectImageMime, detectMediaMime,
-  isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime,
-} from '../lib/media.js';
 
 // Shared across every place a stored TicketMessage's media kind needs naming.
 type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
@@ -98,12 +94,13 @@ async function ingestMessage(
   text: string | null,
   waMsgId: string,
   sentAt: Date,
-  // Set for any inbound media - `media.url` is OUR OWN opaque storage token (see
-  // lib/media.ts) for image/audio/video/document, never Meta's own short-lived
-  // media URL, so it stays resolvable whenever staff actually open the chat, not
-  // just for the ~5 minutes Meta's URL would have lived. For 'location' it's a
-  // plain Google Maps link instead (no file to store - the coordinates arrive
-  // directly in the webhook payload, nothing to download).
+  // Set for any inbound media - `media.url` is Meta's OWN media_id (its Graph
+  // API object id, not a downloadable URL and not ours) for image/audio/video/
+  // document. Nada se descarga/guarda acá a propósito - ver inbox.ts's GET
+  // /media/:id, que resuelve este id contra Meta en el momento en que alguien
+  // realmente necesita ver el archivo. For 'location' it's a plain Google Maps
+  // link instead (no file at all - the coordinates arrive directly in the
+  // webhook payload).
   media?: { url: string; type: MediaType },
   // True when `phone` is a synthesized placeholder (Meta delivered this message
   // with no real sender number) - see the dispatcher above. Marks the ticket so
@@ -327,10 +324,14 @@ async function ingestMessage(
 }
 
 // A photo the customer sent - Meta's webhook only gives us a media id (no
-// downloadable URL), so this does the two-step resolve-then-download against the
-// Graph API (see MetaCloudProvider.getMediaUrl/downloadMedia) before handing off to
-// ingestMessage with the resulting bytes already stored in OUR OWN storage (never
-// a public URL, and not tied to the ~5min Meta media URL's own lifetime).
+// downloadable URL, not bytes) - se guarda TAL CUAL como media_url. Ya no se
+// descarga nada acá (decisión explícita: nada de media del chat se guarda de
+// nuestro lado, ni en R2 ni en disco - se queda en los servidores de Meta,
+// "como en WhatsApp normal"). inbox.ts's GET /media/:id es quien de verdad
+// resuelve este id contra la Graph API (getMediaUrl+downloadMedia), en el
+// momento en que alguien realmente necesita VER la imagen - Meta la retiene
+// 30 días, pasado eso ya no hay bytes que pedir (decisión aceptada
+// explícitamente, no hay copia de respaldo de nuestro lado).
 async function ingestImageMessage(
   fastify: FastifyInstance,
   phoneNumberId: string,
@@ -342,68 +343,20 @@ async function ingestImageMessage(
   noWppNumber = false,
   rawPayload?: unknown,
   bsuidHint?: string,
-  // Only affects the failure-fallback text below ('foto' vs 'sticker') - the
-  // successful path stores/renders both identically as type 'image'.
-  kindLabel: 'foto' | 'sticker' = 'foto',
 ) {
-  const org = await fastify.prisma.organization.findFirst({
-    where: { wpp_meta_phone_id: phoneNumberId, active: true },
-  });
-  if (!org) {
-    fastify.log.warn({ phoneNumberId }, 'WPP: no org for phone_number_id (imagen)');
-    return;
-  }
-  const provider = MetaCloudProvider.fromOrg(org);
-  if (!provider) {
-    fastify.log.warn({ orgId: org.id }, 'WPP: imagen entrante descartada - org sin credenciales Meta');
-    return;
-  }
-
-  try {
-    const { url, mimeType } = await provider.getMediaUrl(image.id);
-    const buffer = await provider.downloadMedia(url);
-    // Meta's own mime_type is still just a label, not a fact about the downloaded
-    // bytes - checking the real file signature before ever storing/serving this
-    // is the same defense-in-depth the outbound upload path has (inbox.ts's
-    // send-image), applied to content coming FROM WhatsApp instead of TO it.
-    const realMime = detectImageMime(buffer);
-    if (!realMime) throw new Error(`downloaded media does not look like a real image (Meta reported ${mimeType})`);
-    const token = await storeMedia(buffer, realMime);
-    await ingestMessage(
-      fastify, phoneNumberId, phone, name,
-      image.caption ? String(image.caption).slice(0, 4096) : null,
-      waMsgId, sentAt, { url: token, type: 'image' }, noWppNumber, rawPayload, bsuidHint,
-    );
-  } catch (err) {
-    fastify.log.error({ err, phone }, 'WPP: error descargando imagen entrante');
-    // Still record SOMETHING - without this, a download failure (Meta API hiccup,
-    // the ~5min media URL expiring before we got to it, etc.) meant the customer's
-    // photo vanished with nothing but a server log line: no message in the chat at
-    // all, no way for staff to even know one was sent. Every OUTBOUND failure
-    // already leaves a visible red-X via failed_reason - this is the inbound
-    // equivalent, using the same wpp_message_id so a Meta webhook retry for this
-    // same photo still only ever produces one row (ingestMessage's own dedup).
-    await ingestMessage(
-      fastify, phoneNumberId, phone, name,
-      kindLabel === 'sticker'
-        ? 'El cliente envió un sticker, pero no se pudo descargar. Pídele que lo reenvíe.'
-        : 'El cliente envió una foto, pero no se pudo descargar. Pídele que la reenvíe.',
-      waMsgId, sentAt, undefined, noWppNumber, rawPayload, bsuidHint,
-    ).catch(err2 => fastify.log.error({ err: err2, phone }, 'WPP: error registrando fallback de imagen'));
-  }
+  // Una foto y un sticker se guardan/renderizan idéntico, como type 'image' -
+  // ya no hay un fallback de "no se pudo descargar" que necesite distinguirlos
+  // (nada se descarga acá, ver comentario de la función).
+  await ingestMessage(
+    fastify, phoneNumberId, phone, name,
+    image.caption ? String(image.caption).slice(0, 4096) : null,
+    waMsgId, sentAt, { url: image.id, type: 'image' }, noWppNumber, rawPayload, bsuidHint,
+  );
 }
 
-const MEDIA_KIND_LABEL: Record<'audio' | 'video' | 'document', string> = {
-  audio: 'audio', video: 'video', document: 'documento',
-};
-const MEDIA_KIND_VALIDATOR: Record<'audio' | 'video' | 'document', (mime: string) => boolean> = {
-  audio: isSupportedAudioMime, video: isSupportedVideoMime, document: isSupportedDocumentMime,
-};
-
-// Same resolve-then-download shape as ingestImageMessage above, generalized for
-// the three media kinds that all go through Meta's media-id resolution (audio,
-// video, document) - only the byte-signature check (detectMediaMime vs
-// detectImageMime) and the mime allow-list actually differ per kind.
+// Same call shape as ingestImageMessage above, generalized for the three
+// remaining media kinds (audio, video, document) - only the caption-vs-
+// filename text fallback differs per kind.
 async function ingestBinaryMediaMessage(
   fastify: FastifyInstance,
   phoneNumberId: string,
@@ -417,48 +370,18 @@ async function ingestBinaryMediaMessage(
   rawPayload?: unknown,
   bsuidHint?: string,
 ) {
-  const label = MEDIA_KIND_LABEL[kind];
-  const org = await fastify.prisma.organization.findFirst({
-    where: { wpp_meta_phone_id: phoneNumberId, active: true },
-  });
-  if (!org) {
-    fastify.log.warn({ phoneNumberId }, `WPP: no org for phone_number_id (${label})`);
-    return;
-  }
-  const provider = MetaCloudProvider.fromOrg(org);
-  if (!provider) {
-    fastify.log.warn({ orgId: org.id }, `WPP: ${label} entrante descartado - org sin credenciales Meta`);
-    return;
-  }
-
-  try {
-    const { url, mimeType } = await provider.getMediaUrl(media.id);
-    if (!MEDIA_KIND_VALIDATOR[kind](mimeType)) {
-      throw new Error(`unsupported ${label} mime type reported by Meta: ${mimeType}`);
-    }
-    const buffer = await provider.downloadMedia(url);
-    const realMime = detectMediaMime(buffer, mimeType);
-    if (!realMime) throw new Error(`downloaded media does not look like a real ${label} (Meta reported ${mimeType})`);
-    const token = await storeMedia(buffer, realMime);
-    // Caption if the type carries one, else the original filename (documents) -
-    // never both, and never a raw unbounded string either way.
-    const text = media.caption ? String(media.caption).slice(0, 4096)
-      : media.filename ? String(media.filename).slice(0, 500)
-      : null;
-    await ingestMessage(
-      fastify, phoneNumberId, phone, name, text,
-      waMsgId, sentAt, { url: token, type: kind }, noWppNumber, rawPayload, bsuidHint,
-    );
-  } catch (err) {
-    fastify.log.error({ err, phone }, `WPP: error descargando ${label} entrante`);
-    // Same reasoning as ingestImageMessage's own fallback - a download failure
-    // must still leave a visible row in the chat, not just a server log line.
-    await ingestMessage(
-      fastify, phoneNumberId, phone, name,
-      `El cliente envió un ${label}, pero no se pudo descargar. Pídele que lo reenvíe.`,
-      waMsgId, sentAt, undefined, noWppNumber, rawPayload, bsuidHint,
-    ).catch(err2 => fastify.log.error({ err: err2, phone }, `WPP: error registrando fallback de ${label}`));
-  }
+  // Caption if the type carries one, else the original filename (documents) -
+  // never both, and never a raw unbounded string either way. La validación de
+  // mime real (MEDIA_KIND_VALIDATOR/detectMediaMime) ya no aplica acá - se
+  // mueve al momento de SERVIR el archivo (inbox.ts's GET /media/:id), que es
+  // cuando de verdad se descargan los bytes de Meta.
+  const text = media.caption ? String(media.caption).slice(0, 4096)
+    : media.filename ? String(media.filename).slice(0, 500)
+    : null;
+  await ingestMessage(
+    fastify, phoneNumberId, phone, name, text,
+    waMsgId, sentAt, { url: media.id, type: kind }, noWppNumber, rawPayload, bsuidHint,
+  );
 }
 
 // Unlike every other media type, a location never goes through Meta's media-id
@@ -695,7 +618,7 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           // display pipeline as a regular photo, only the media id's location
           // in the payload differs.
           if (msg.type === 'sticker' && msg.sticker?.id) {
-            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.sticker, msg.id, sentAt, noWppNumber, payload, bsuidHint, 'sticker')
+            ingestImageMessage(fastify, metadata.phone_number_id, phone, name, msg.sticker, msg.id, sentAt, noWppNumber, payload, bsuidHint)
               .catch(err => fastify.log.error({ err }, 'WPP: error ingiriendo sticker'));
             continue;
           }

@@ -7,7 +7,7 @@ import { audit } from '../lib/audit.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
 import {
-  storeMedia, loadMedia, mimeTypeForToken, isValidMediaToken, isSupportedImageMime, detectImageMime,
+  isValidMetaMediaId, isSupportedImageMime, detectImageMime,
   isSupportedAudioMime, isSupportedVideoMime, isSupportedDocumentMime, detectMediaMime,
 } from '../lib/media.js';
 import { extractOrderItems } from '../services/ai/index.js';
@@ -247,13 +247,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/inbox/messages/:messageId/forward - reenvía un mensaje existente
-  // (texto o cualquier media) a uno o varios OTROS chats, sin que el navegador del
-  // staff tenga que volver a descargar/subir el archivo - la media ya vive en
-  // nuestro propio storage bajo un token reutilizable (storeMedia genera un token
-  // random, no por contenido, así que varias filas TicketMessage pueden apuntar
-  // al mismo media_url sin problema; GET /media/:token no exige un dueño único).
-  // Solo se leen los bytes de vuelta (loadMedia) cuando hay que volver a subirlos
-  // A META - la fila nueva en nuestra BD reutiliza el token tal cual.
+  // (texto o cualquier media) a uno o varios OTROS chats. La media nunca vive de
+  // nuestro lado (ver lib/media.ts) - la fila nueva simplemente reutiliza el
+  // mismo media_id de Meta que ya tenía el mensaje original (varias filas
+  // TicketMessage pueden apuntar al mismo media_id sin problema, GET /media/:id
+  // no exige un dueño único), así que VER el reenvío funciona igual que ver el
+  // original. Pero un media_id de Meta NO es reutilizable para ENVIAR de nuevo -
+  // hay que pedirle los bytes a Meta una sola vez (no una por destino) y volver
+  // a subirlos como una copia nueva por cada chat destino.
   fastify.post('/messages/:messageId/forward', {
     preHandler: [authenticate],
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -281,13 +282,29 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const foundIds = new Set(targets.map((t) => t.id));
     const missing = targetIds.filter((id) => !foundIds.has(id));
 
-    // Los bytes solo se necesitan para volver a subirlos a Meta por CADA
-    // destino (un media id no es reutilizable entre envíos) - una sola lectura,
-    // no una por destino.
     const isLocation = source.media_type === 'location';
     const hasUploadableMedia = !!source.media_type && !isLocation;
-    const buffer = hasUploadableMedia ? await loadMedia(source.media_url!) : null;
-    const mimeType = source.media_url ? mimeTypeForToken(source.media_url) : null;
+    // Los bytes solo se necesitan para volver a subirlos a Meta por CADA
+    // destino - una sola descarga acá (no una por destino), y se descartan
+    // apenas termina el for de abajo (nunca se guardan). Si Meta ya no lo
+    // tiene (más de 30 días), el reenvío sigue creando la fila en cada chat
+    // destino (para que quede el registro), pero no llega a enviarse por
+    // WhatsApp - mismo caso que "org sin credenciales", visto más abajo.
+    let buffer: Buffer | null = null;
+    let mimeType: string | null = null;
+    if (hasUploadableMedia && source.media_url) {
+      const org = await fastify.prisma.organization.findUnique({ where: { id: req.user.orgId } });
+      const sourceProvider = org ? MetaCloudProvider.fromOrg(org) : null;
+      if (sourceProvider) {
+        try {
+          const resolved = await sourceProvider.getMediaUrl(source.media_url);
+          buffer = await sourceProvider.downloadMedia(resolved.url);
+          mimeType = resolved.mimeType;
+        } catch (err) {
+          fastify.log.warn({ err, messageId }, 'WPP: no se pudo obtener de Meta el media original a reenviar (¿expiró, más de 30 días?)');
+        }
+      }
+    }
     // "https://maps.google.com/?q=LAT,LNG" - formato fijo que webhook.ts siempre
     // genera (ingestLocationMessage) - único lugar que ya arma este link.
     const locationMatch = isLocation ? source.media_url?.match(/\?q=(-?[\d.]+),(-?[\d.]+)/) : null;
@@ -392,7 +409,23 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'El archivo no es una imagen válida del tipo indicado', code: 'VALIDATION_ERROR' });
     }
 
-    const token = await storeMedia(buffer, body.data.mime_type);
+    // Nada de esto se guarda de nuestro lado (ni R2 ni disco) - se sube
+    // directo a Meta y SU media_id (no un token propio) es lo que queda en
+    // media_url. Por eso hace falta el provider desde ya: sin credenciales de
+    // Meta no hay dónde subir el archivo, así que no tiene sentido crear un
+    // mensaje que después nunca va a poder mostrarse.
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    if (!provider) {
+      return reply.status(422).send({ error: 'Esta organización no tiene credenciales de WhatsApp configuradas', code: 'NO_WPP_CREDENTIALS' });
+    }
+    let mediaId: string;
+    try {
+      mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+    } catch (err: any) {
+      fastify.log.error({ err, ticketId }, 'WPP: error subiendo imagen a Meta');
+      return reply.status(502).send({ error: 'No se pudo subir la imagen a WhatsApp', code: 'WPP_UPLOAD_FAILED' });
+    }
+
     const caption = body.data.caption?.trim() || null;
 
     const message = await fastify.prisma.ticketMessage.create({
@@ -400,7 +433,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
         ticket_id: ticketId,
         direction: 'out',
         text: caption,
-        media_url: token,
+        media_url: mediaId,
         media_type: 'image',
         media_caption: caption,
         sent_by: req.user.userId,
@@ -415,40 +448,12 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
-    // Same reasoning as /reply above - fired in the background, not awaited
-    // before responding. An image upload+send round trip to Meta is if anything
-    // slower than a plain text send, so this matters here at least as much.
-    const provider = MetaCloudProvider.fromOrg(ticket.org);
-    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
-    if (!provider) {
-      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, imagen solo guardada en BD');
-    } else {
-      const orgId = req.user.orgId;
-      // Bytes uploaded straight to Meta (never a public URL of ours) - see
-      // meta-cloud.ts's uploadMedia/sendImage for why that's the point.
-      provider.uploadMedia(buffer, body.data.mime_type)
-        .then((mediaId) => provider.sendImage(ticket.phone, mediaId, caption ?? undefined))
-        .then(async ({ messageId }) => {
-          await fastify.prisma.ticketMessage.update({ where: { id: message.id }, data: { wpp_message_id: messageId } });
-          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
-            ticketId, messageId: message.id, delivered: false, read_by_client: false, failed_reason: null,
-          });
-        })
-        .catch(async (err: any) => {
-          const wpp_error = err?.message ?? 'Error desconocido Meta API';
-          fastify.log.error({ err, ticketId }, 'WPP: error enviando imagen via Meta API');
-          const failed = await fastify.prisma.ticketMessage.update({
-            where: { id: message.id },
-            data: { failed_reason: String(wpp_error).slice(0, 255) },
-            select: { delivered: true, read_by_client: true, failed_reason: true },
-          });
-          fastify.io.to(`org:${orgId}`).emit('ticket:message-status', {
-            ticketId, messageId: message.id, ...failed,
-          });
-        });
-    }
+    // El upload ya se esperó arriba (hacía falta el media_id para poder crear
+    // el mensaje) - solo el envío en sí queda en segundo plano, igual que /reply.
+    trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+      provider.sendImage(ticket.phone, mediaId, caption ?? undefined));
 
-    return reply.status(201).send({ data: message, wpp_status });
+    return reply.status(201).send({ data: message, wpp_status: 'sending' });
   });
 
   // Shared tail for every outbound-media route below (audio/video/document) -
@@ -508,9 +513,20 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const realMime = detectMediaMime(buffer, body.data.mime_type);
     if (!realMime) return reply.status(400).send({ error: 'El archivo no es un audio válido del tipo indicado', code: 'VALIDATION_ERROR' });
 
-    const token = await storeMedia(buffer, body.data.mime_type);
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    if (!provider) {
+      return reply.status(422).send({ error: 'Esta organización no tiene credenciales de WhatsApp configuradas', code: 'NO_WPP_CREDENTIALS' });
+    }
+    let mediaId: string;
+    try {
+      mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+    } catch (err: any) {
+      fastify.log.error({ err, ticketId }, 'WPP: error subiendo audio a Meta');
+      return reply.status(502).send({ error: 'No se pudo subir el audio a WhatsApp', code: 'WPP_UPLOAD_FAILED' });
+    }
+
     const message = await fastify.prisma.ticketMessage.create({
-      data: { ticket_id: ticketId, direction: 'out', media_url: token, media_type: 'audio', sent_by: req.user.userId },
+      data: { ticket_id: ticketId, direction: 'out', media_url: mediaId, media_type: 'audio', sent_by: req.user.userId },
       include: { sender: { select: { id: true, name: true } } },
     });
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
@@ -519,15 +535,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
-    const provider = MetaCloudProvider.fromOrg(ticket.org);
-    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
-    if (!provider) {
-      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, audio solo guardado en BD');
-    } else {
-      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
-        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendAudio(ticket.phone, mediaId)));
-    }
-    return reply.status(201).send({ data: message, wpp_status });
+    trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id, provider.sendAudio(ticket.phone, mediaId));
+    return reply.status(201).send({ data: message, wpp_status: 'sending' });
   });
 
   // POST /api/v1/inbox/:ticketId/send-video - staff sends a video, optional caption.
@@ -557,10 +566,21 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const realMime = detectMediaMime(buffer, body.data.mime_type);
     if (!realMime) return reply.status(400).send({ error: 'El archivo no es un video válido del tipo indicado', code: 'VALIDATION_ERROR' });
 
-    const token = await storeMedia(buffer, body.data.mime_type);
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    if (!provider) {
+      return reply.status(422).send({ error: 'Esta organización no tiene credenciales de WhatsApp configuradas', code: 'NO_WPP_CREDENTIALS' });
+    }
+    let mediaId: string;
+    try {
+      mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+    } catch (err: any) {
+      fastify.log.error({ err, ticketId }, 'WPP: error subiendo video a Meta');
+      return reply.status(502).send({ error: 'No se pudo subir el video a WhatsApp', code: 'WPP_UPLOAD_FAILED' });
+    }
+
     const caption = body.data.caption?.trim() || null;
     const message = await fastify.prisma.ticketMessage.create({
-      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: token, media_type: 'video', media_caption: caption, sent_by: req.user.userId },
+      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: mediaId, media_type: 'video', media_caption: caption, sent_by: req.user.userId },
       include: { sender: { select: { id: true, name: true } } },
     });
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
@@ -569,15 +589,9 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
-    const provider = MetaCloudProvider.fromOrg(ticket.org);
-    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
-    if (!provider) {
-      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, video solo guardado en BD');
-    } else {
-      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
-        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendVideo(ticket.phone, mediaId, caption ?? undefined)));
-    }
-    return reply.status(201).send({ data: message, wpp_status });
+    trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+      provider.sendVideo(ticket.phone, mediaId, caption ?? undefined));
+    return reply.status(201).send({ data: message, wpp_status: 'sending' });
   });
 
   // POST /api/v1/inbox/:ticketId/send-document - staff sends a PDF, optional caption.
@@ -608,11 +622,22 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const realMime = detectMediaMime(buffer, body.data.mime_type);
     if (!realMime) return reply.status(400).send({ error: 'El archivo no es un documento válido del tipo indicado', code: 'VALIDATION_ERROR' });
 
-    const token = await storeMedia(buffer, body.data.mime_type);
+    const provider = MetaCloudProvider.fromOrg(ticket.org);
+    if (!provider) {
+      return reply.status(422).send({ error: 'Esta organización no tiene credenciales de WhatsApp configuradas', code: 'NO_WPP_CREDENTIALS' });
+    }
+    let mediaId: string;
+    try {
+      mediaId = await provider.uploadMedia(buffer, body.data.mime_type);
+    } catch (err: any) {
+      fastify.log.error({ err, ticketId }, 'WPP: error subiendo documento a Meta');
+      return reply.status(502).send({ error: 'No se pudo subir el documento a WhatsApp', code: 'WPP_UPLOAD_FAILED' });
+    }
+
     const caption = body.data.caption?.trim() || null;
     const filename = body.data.filename.trim();
     const message = await fastify.prisma.ticketMessage.create({
-      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: token, media_type: 'document', media_caption: filename, sent_by: req.user.userId },
+      data: { ticket_id: ticketId, direction: 'out', text: caption, media_url: mediaId, media_type: 'document', media_caption: filename, sent_by: req.user.userId },
       include: { sender: { select: { id: true, name: true } } },
     });
     fastify.io.to(`org:${req.user.orgId}`).emit('ticket:message', { ticketId, message: message as any });
@@ -621,50 +646,76 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       fastify.io.to(`org:${req.user.orgId}`).emit('ticket:unread', { ticketId, count: 0 });
     }
 
-    const provider = MetaCloudProvider.fromOrg(ticket.org);
-    const wpp_status: 'sending' | 'no_credentials' = provider ? 'sending' : 'no_credentials';
-    if (!provider) {
-      fastify.log.warn({ ticketId }, 'WPP: org sin credenciales Meta, documento solo guardado en BD');
-    } else {
-      trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
-        provider.uploadMedia(buffer, body.data.mime_type).then((mediaId) => provider.sendDocument(ticket.phone, mediaId, filename, caption ?? undefined)));
-    }
-    return reply.status(201).send({ data: message, wpp_status });
+    trackOutboundMediaSend(fastify, req.user.orgId, ticketId, message.id,
+      provider.sendDocument(ticket.phone, mediaId, filename, caption ?? undefined));
+    return reply.status(201).send({ data: message, wpp_status: 'sending' });
   });
 
-  // GET /api/v1/inbox/media/:token - serves a chat photo (inbound or outbound).
-  // Staff-auth only (bearer JWT) - unlike the client-facing invoice/form links,
-  // nobody outside the org's own staff session is ever meant to open this, so the
-  // opaque token doesn't need its own TTL/revocation layer on top of that.
+  // GET /api/v1/inbox/media/:token - serves a chat photo/audio/video/document
+  // (inbound or outbound). Staff-auth only (bearer JWT) - unlike the
+  // client-facing invoice/form links, nobody outside the org's own staff
+  // session is ever meant to open this.
+  //
+  // Nada de esto vive de nuestro lado (decisión explícita del negocio - ni R2
+  // ni disco ni BD) - `token` acá es el media_id que Meta ya nos dio (ver
+  // lib/media.ts), y esta ruta le pide los bytes a Meta EN VIVO cada vez que
+  // alguien quiere ver el archivo, en vez de leerlos de un storage propio.
+  // Meta solo retiene el media 30 días - pasado eso, esto 404ea con
+  // MEDIA_EXPIRED, no hay copia de respaldo que servir.
   fastify.get('/media/:token', { preHandler: [authenticate] }, async (req, reply) => {
-    const { token } = req.params as { token: string };
-    if (!isValidMediaToken(token)) return reply.status(400).send({ error: 'Token inválido' });
+    const { token: mediaId } = req.params as { token: string };
+    if (!isValidMetaMediaId(mediaId)) return reply.status(400).send({ error: 'Identificador inválido' });
 
-    // Confirms this token actually belongs to a message in THIS user's org before
-    // serving it - the token's entropy alone already makes it unguessable, this is
-    // just the org-isolation check every other org-scoped lookup in this file has.
+    // Confirma que este media_id realmente pertenece a un mensaje de la
+    // organización de quien pide - el gate real (antes, y ahora también,
+    // la entropía del identificador no alcanza sola como control de acceso).
     const msg = await fastify.prisma.ticketMessage.findFirst({
-      where: { media_url: token, ticket: { org_id: req.user.orgId } },
-      select: { id: true },
+      where: { media_url: mediaId, ticket: { org_id: req.user.orgId } },
+      select: { media_type: true, ticket: { select: { org: { select: { wpp_meta_phone_id: true, wpp_meta_token: true } } } } },
     });
     if (!msg) return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
 
+    const provider = MetaCloudProvider.fromOrg(msg.ticket.org);
+    if (!provider) return reply.status(404).send({ error: 'Organización sin credenciales de WhatsApp', code: 'NOT_FOUND' });
+
+    let buffer: Buffer;
+    let declaredMime: string;
     try {
-      const buffer = await loadMedia(token);
-      reply.header('Content-Type', mimeTypeForToken(token));
-      reply.header('Cache-Control', 'private, max-age=86400');
-      // Stops a browser from ever second-guessing the Content-Type above and
-      // trying to sniff/render the bytes as something else (e.g. HTML) if this
-      // response is ever opened directly instead of through ChatImage's
-      // fetch-as-blob path - the standard defense against a mislabeled upload
-      // being executed instead of just failing to display as an image.
-      reply.header('X-Content-Type-Options', 'nosniff');
-      reply.header('Content-Disposition', 'inline');
-      return reply.send(buffer);
+      const resolved = await provider.getMediaUrl(mediaId);
+      declaredMime = resolved.mimeType;
+      buffer = await provider.downloadMedia(resolved.url);
     } catch (err) {
-      req.log.error({ err, token }, 'No se pudo leer la imagen del almacenamiento');
+      // El caso normal de este catch: pasaron más de 30 días y Meta ya lo
+      // borró - no es un error nuestro, es el límite de retención de Meta
+      // (aceptado a propósito, no guardamos copia propia de respaldo).
+      req.log.warn({ err, mediaId }, 'WPP: no se pudo obtener el media desde Meta (¿expiró, más de 30 días?)');
+      return reply.status(404).send({
+        error: 'Este archivo ya no está disponible - WhatsApp solo lo retiene 30 días y no guardamos copia propia',
+        code: 'MEDIA_EXPIRED',
+      });
+    }
+
+    // Nunca confiar en el mime_type que reporta Meta a secas - se revalida la
+    // firma real de los bytes acá, en CADA vista (antes se hacía una sola vez
+    // al ingresar el mensaje; ahora, al no guardar nada, este es el único
+    // momento en que hay bytes en la mano para revisar - misma defensa,
+    // aplicada en otro punto).
+    const realMime = msg.media_type === 'image' ? detectImageMime(buffer) : detectMediaMime(buffer, declaredMime);
+    if (!realMime) {
+      req.log.error({ mediaId, declaredMime }, 'WPP: el archivo que devolvió Meta no coincide con ningún tipo soportado');
       return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
     }
+
+    reply.header('Content-Type', realMime);
+    reply.header('Cache-Control', 'private, max-age=86400');
+    // Stops a browser from ever second-guessing the Content-Type above and
+    // trying to sniff/render the bytes as something else (e.g. HTML) if this
+    // response is ever opened directly instead of through ChatImage's
+    // fetch-as-blob path - the standard defense against a mislabeled upload
+    // being executed instead of just failing to display as an image.
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Content-Disposition', 'inline');
+    return reply.send(buffer);
   });
 
   // GET /api/v1/inbox/:ticketId/form-link - genera link firmado para el formulario del cliente

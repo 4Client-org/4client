@@ -202,23 +202,28 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(stored!.failed_reason).toContain('Re-engagement');
   });
 
-  it('POST /:ticketId/send-image stores the photo (media_type/media_url set) and sends it via Meta\'s two-step upload-then-send, never a public URL', async () => {
+  it('POST /:ticketId/send-image uploads to Meta FIRST (media_url is Meta\'s own media_id, never a public URL of ours, never stored locally), then GET /media/:id fetches it back live from Meta', async () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230004', customer_name: 'Cliente Foto' } });
-    const fakeMediaId = `media-id-${Date.now()}`;
+    const fakeMediaId = '11111111111111';
     const fakeWamid = `wamid.IMG${Date.now()}`;
+    const fakeDownloadUrl = 'https://fake-meta-cdn.example/download/img-abc';
 
-    // Two distinct Meta endpoints get hit in sequence - branch on the URL so each
+    // Smallest valid PNG (1x1, base64) - real bytes, so the magic-byte check on
+    // both the way in (send-image) and the way out (GET /media/:id, which
+    // re-downloads these SAME bytes from the mock) is genuine, not a placeholder.
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    // Four distinct Meta calls happen across this test (upload, send, and then
+    // GET /media/:id's own getMediaUrl+download) - branch on the URL so each
     // returns the shape that specific call expects.
     global.fetch = (async (url: string) => {
-      if (String(url).endsWith('/media')) {
-        return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+      const u = String(url);
+      if (u.endsWith('/media')) return new Response(JSON.stringify({ id: fakeMediaId }), { status: 200 });
+      if (u.endsWith('/messages')) return new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 });
+      if (u === fakeDownloadUrl) return new Response(Buffer.from(tinyPng, 'base64'), { status: 200 });
+      // getMediaUrl: GET {base}/{mediaId} - anything else falls here.
+      return new Response(JSON.stringify({ url: fakeDownloadUrl, mime_type: 'image/png' }), { status: 200 });
     }) as any;
-
-    // Smallest valid PNG (1x1, base64) - real bytes, not a placeholder string, so
-    // storeMedia/loadMedia round-trip something genuine.
-    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
     const res = await app.inject({
       method: 'POST', url: `/api/v1/inbox/${ticket.id}/send-image`,
@@ -226,12 +231,12 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       payload: { data: tinyPng, mime_type: 'image/png', caption: 'Así llegó el pedido' },
     });
     expect(res.statusCode).toBe(201);
-    // Background upload+send (see the /reply tests' comment above) - the HTTP
-    // response can't know the real Meta outcome yet.
+    // El upload a Meta SÍ se espera antes de responder (hace falta el media_id
+    // real para crear el mensaje) - solo el envío en sí queda pendiente.
     expect(res.json().wpp_status).toBe('sending');
     const msg = res.json().data;
     expect(msg.media_type).toBe('image');
-    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.png$/);
+    expect(msg.media_url).toBe(fakeMediaId);
     expect(msg.media_caption).toBe('Así llegó el pedido');
 
     await new Promise((r) => setTimeout(r, 200));
@@ -239,8 +244,9 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(stored!.wpp_message_id).toBe(fakeWamid);
     expect(stored!.failed_reason).toBeNull();
 
-    // The token never carries a real R2/public URL - just an opaque key, served
-    // exclusively through our own staff-authenticated route.
+    // media_url es el media_id de Meta, nunca una URL pública ni un token
+    // propio - servido exclusivamente vía nuestra propia ruta staff-only, que
+    // a su vez le pide los bytes a Meta EN VIVO (nada guardado de nuestro lado).
     expect(msg.media_url).not.toContain('http');
 
     const fetched = await app.inject({
@@ -293,7 +299,7 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(res.statusCode).toBe(201);
     const msg = res.json().data;
     expect(msg.media_type).toBe('audio');
-    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.ogg$/);
+    expect(msg.media_url).toBe(fakeMediaId);
 
     await new Promise((r) => setTimeout(r, 200));
     const stored = await app.prisma.ticketMessage.findUnique({ where: { id: msg.id } });
@@ -320,7 +326,7 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(res.statusCode).toBe(201);
     const msg = res.json().data;
     expect(msg.media_type).toBe('document');
-    expect(msg.media_url).toMatch(/^[0-9a-f]{40}\.pdf$/);
+    expect(msg.media_url).toBe(fakeMediaId);
     expect(msg.media_caption).toBe('factura-001.pdf');
 
     await new Promise((r) => setTimeout(r, 200));
@@ -340,7 +346,7 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('GET /media/:token rejects a malformed token and a well-formed but never-issued one', async () => {
+  it('GET /media/:token rejects a malformed id and a well-formed (numeric) but never-issued one', async () => {
     const malformed = await app.inject({
       method: 'GET', url: '/api/v1/inbox/media/not-a-real-token',
       headers: { authorization: `Bearer ${adminToken}` },
@@ -348,20 +354,20 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(malformed.statusCode).toBe(400);
 
     const neverIssued = await app.inject({
-      method: 'GET', url: `/api/v1/inbox/media/${'a'.repeat(40)}.jpg`,
+      method: 'GET', url: '/api/v1/inbox/media/99999999999999',
       headers: { authorization: `Bearer ${adminToken}` },
     });
     expect(neverIssued.statusCode).toBe(404);
   });
 
-  it('GET /media/:token refuses a real token that belongs to a DIFFERENT org, even though the token itself is well-formed and does exist', async () => {
+  it('GET /media/:token refuses a real media_id that belongs to a DIFFERENT org, even though the id itself is well-formed and does exist', async () => {
     const otherOrg = await createTestOrg(app.prisma);
     const otherAdmin = await createTestUser(app.prisma, otherOrg.id, 'admin', 'OtherOrgAdmin1!');
     const otherTicket = await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573001230005', customer_name: 'Cliente Otra Org' } });
     const otherMsg = await app.prisma.ticketMessage.create({
       data: {
         ticket_id: otherTicket.id, direction: 'in', media_type: 'image',
-        media_url: `${'b'.repeat(40)}.jpg`,
+        media_url: '22222222222222',
       },
     });
     void otherAdmin;
@@ -373,6 +379,48 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
       headers: { authorization: `Bearer ${adminToken}` },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /media/:token never serves bytes Meta returns that don\'t actually match a real image signature, even though the message row and the org both check out - the check moved here from ingest time, it did not disappear', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230010', customer_name: 'Cliente Foto Meta Rara' } });
+    const mediaId = '33333333333333';
+    const fakeDownloadUrl = 'https://fake-meta-cdn.example/download/bad-img';
+    await app.prisma.ticketMessage.create({
+      data: { ticket_id: ticket.id, direction: 'in', media_type: 'image', media_url: mediaId },
+    });
+
+    global.fetch = (async (url: string) => {
+      const u = String(url);
+      if (u === fakeDownloadUrl) {
+        // Claims to be a jpeg but isn't one - no real magic bytes at all.
+        return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
+      }
+      // getMediaUrl
+      return new Response(JSON.stringify({ url: fakeDownloadUrl, mime_type: 'image/jpeg' }), { status: 200 });
+    }) as any;
+
+    const res = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${mediaId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /media/:token returns a clear MEDIA_EXPIRED 404 when Meta no longer has the file (its own 30-day retention window, not something we control)', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230011', customer_name: 'Cliente Foto Vieja' } });
+    const mediaId = '44444444444444';
+    await app.prisma.ticketMessage.create({
+      data: { ticket_id: ticket.id, direction: 'in', media_type: 'image', media_url: mediaId },
+    });
+
+    global.fetch = (async () => new Response(JSON.stringify({ error: { message: 'Object with ID does not exist' } }), { status: 404 })) as any;
+
+    const res = await app.inject({
+      method: 'GET', url: `/api/v1/inbox/media/${mediaId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('MEDIA_EXPIRED');
   });
 });
 
