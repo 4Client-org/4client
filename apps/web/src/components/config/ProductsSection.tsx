@@ -377,7 +377,7 @@ export default function ProductsSection() {
     const isEditing = editingId === p.id;
     if (isEditing && draft) {
       return (
-        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
+        <div key={p.id} className="prod-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
           <input className="fi" style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600 }} value={draft.name}
             onChange={e => setDraft(d => d && ({ ...d, name: e.target.value }))} autoFocus />
           {renderCategoryCell()}
@@ -408,7 +408,7 @@ export default function ProductsSection() {
       );
     }
     return (
-      <div key={p.id} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--b)', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
+      <div key={p.id} className="prod-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--b)', padding: '10px 14px', gap: 10, borderTop: '1px solid var(--brd)' }}>
         <span onClick={() => openEdit(p)} style={{ fontWeight: 600, fontSize: 14, cursor: 'pointer' }} title="Clic para editar">
           {p.name}
         </span>
@@ -444,7 +444,7 @@ export default function ProductsSection() {
     if (editingId !== '__new__' || !draft) return null;
     return (
       <div style={{ border: '1.5px solid var(--v)', borderRadius: 'var(--rad)', overflowX: 'auto', marginBottom: 12 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10 }}>
+        <div className="prod-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLS, alignItems: 'center', background: 'var(--vc)', padding: '8px 14px', gap: 10 }}>
           <input className="fi" style={{ padding: '6px 8px', fontSize: 13, fontWeight: 600 }} value={draft.name}
             onChange={e => setDraft(d => d && ({ ...d, name: e.target.value }))} placeholder="Nombre del producto" autoFocus />
           {renderCategoryCell()}
@@ -537,7 +537,7 @@ export default function ProductsSection() {
           <div style={{ color: 'var(--gt)', fontSize: 14, padding: 16 }}>Sin resultados para "{search}"</div>
         ) : (
           <div style={{ border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', overflowX: 'auto' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
+            <div className="prod-row prod-row-header" style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '8px 14px', gap: 10, background: 'var(--gm)', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
               <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
             </div>
             {filteredFlat.map(renderProductRow)}
@@ -558,7 +558,7 @@ export default function ProductsSection() {
               </button>
               {!collapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', overflowX: 'auto' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '6px 14px', gap: 10, borderTop: '1px solid var(--brd)', fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
+                  <div className="prod-row prod-row-header" style={{ display: 'grid', gridTemplateColumns: GRID_COLS, padding: '6px 14px', gap: 10, borderTop: '1px solid var(--brd)', fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--gt)' }}>
                     <span>Nombre</span><span>Categoría</span><span>Precio</span><span>Unidad</span><span>Stock</span><span />
                   </div>
                   {(prods as any[]).map(renderProductRow)}
