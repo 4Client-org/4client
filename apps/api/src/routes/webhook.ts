@@ -240,7 +240,7 @@ async function ingestMessage(
   // Fire-and-forget relative to THIS webhook handler (not awaited below - Meta
   // expects a fast 200 OK, not one held open behind 3 sequential message sends),
   // but everything INSIDE this one async IIFE runs strictly in order.
-  if (isFirstMessageToday && org.welcome_message && !noWppNumber) {
+  if (isFirstMessageToday && !noWppNumber && (org.wpp_redirect_message || org.welcome_message)) {
     const provider = MetaCloudProvider.fromOrg(org);
     if (provider) {
       (async () => {
@@ -270,6 +270,19 @@ async function ingestMessage(
             message: { ...failed, direction: 'out' as const, media_type: null as MediaType | null, sent_at: failed.sent_at.toISOString(), sent_by_name: null },
           });
         };
+
+        // Un número retirado/redirigido (org.wpp_redirect_message seteado) manda
+        // SOLO ese texto y se detiene ahí - nada de link de formulario ni de
+        // invitar a hacer pedido, tendría sentido cero en un número que ya no
+        // se atiende. Tiene prioridad sobre el flujo normal de bienvenida.
+        if (org.wpp_redirect_message) {
+          try {
+            await sendAndRecord(org.wpp_redirect_message);
+          } catch (err) {
+            await recordFailed(org.wpp_redirect_message, err);
+          }
+          return;
+        }
 
         const welcomeAndNotice = `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
         try {

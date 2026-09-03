@@ -205,6 +205,47 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(updatedTicket.form_token_min_iat).not.toBeNull();
   });
 
+  it('org.wpp_redirect_message set -> sends ONLY that text, never the welcome/link/follow-up flow, even when welcome_message is also set', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: {
+        // Both set on purpose - redirect must win over the normal welcome flow.
+        welcome_message: 'Hola, bienvenido a Fruver San Gabriel',
+        wpp_redirect_message: '⚠️ Este número cambió. Escríbenos al nuevo: +57 302 4100351 para tu domicilio.',
+        wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token',
+      },
+    });
+
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: messagePayload(wppPhoneId, phone, 'Hola', `wamid.in-${randomUUID()}`),
+    });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
+
+    // Exactly ONE outbound message - never the 3-message welcome/link/follow-up.
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].text).toBe('⚠️ Este número cambió. Escríbenos al nuevo: +57 302 4100351 para tu domicilio.');
+    expect(outbound[0].text).not.toContain('bienvenido');
+    expect(outbound[0].text).not.toMatch(/https?:\/\//);
+    expect(outbound[0].wpp_message_id).toBeTruthy();
+    expect(outbound[0].failed_reason).toBeNull();
+
+    // Never generated a form link for this ticket - proves the whole form-link
+    // branch was skipped, not just that its messages happen not to show up.
+    const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(updatedTicket.form_token_min_iat).toBeNull();
+  });
+
   // Confirmed-real Meta glitch (not a hypothetical): a message arrived once with
   // msg.from empty while the rest of the payload (contacts[] profile name, text)
   // was intact - the resulting ticket was reachable by nobody (every automated
