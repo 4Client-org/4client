@@ -165,60 +165,69 @@ export default function UsersSection() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {(users as any[]).map((u: any) => (
             <div key={u.id} style={{ background: 'var(--b)', border: '1.5px solid var(--brd)', borderRadius: 10, padding: '14px', opacity: u.active ? 1 : 0.6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 38, height: 38, flexShrink: 0, borderRadius: '50%', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 15,
-                  background: u.role === 'admin' ? 'var(--vd)' : u.role === 'encargado' ? 'var(--v)' : 'var(--az)',
-                }}>
-                  {u.name[0].toUpperCase()}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</span>
-                  <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 2 }}>{u.email}</div>
-                </div>
-                {/* Fixed-width columns (not inline with the name) so every row's role/
-                    status badges land in the same spot regardless of name length. */}
-                <div style={{ width: 120, flexShrink: 0 }}>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
-                    background: u.role === 'admin' ? 'var(--vc)' : 'var(--azc)',
-                    color: u.role === 'admin' ? 'var(--vd)' : 'var(--az)',
+              {/* En celular, .user-card-head (avatar+nombre) y .user-card-meta
+                  (rol/estado/acciones) pasan de una sola fila apretada (el rol
+                  se montaba encima del nombre, sin espacio real) a 2 filas
+                  apiladas - ver .user-card-row en global.css. */}
+              <div className="user-card-row">
+                <div className="user-card-head" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 38, height: 38, flexShrink: 0, borderRadius: '50%', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 15,
+                    background: u.role === 'admin' ? 'var(--vd)' : u.role === 'encargado' ? 'var(--v)' : 'var(--az)',
                   }}>
-                    {ROLE_LABEL[u.role] ?? u.role}
-                  </span>
+                    {u.name[0].toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</span>
+                    <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 2 }}>{u.email}</div>
+                  </div>
                 </div>
-                <div style={{ width: 70, flexShrink: 0 }}>
-                  {!u.active && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'var(--rc)', color: 'var(--r)' }}>
-                      Inactivo
+                <div className="user-card-meta" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Fixed-width columns (not inline with the name) so every row's
+                      role/status badges land in the same spot regardless of name
+                      length - en celular esas anchos fijos se sueltan (ver CSS). */}
+                  <div className="user-card-role-col" style={{ width: 120, flexShrink: 0 }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+                      background: u.role === 'admin' ? 'var(--vc)' : 'var(--azc)',
+                      color: u.role === 'admin' ? 'var(--vd)' : 'var(--az)',
+                    }}>
+                      {ROLE_LABEL[u.role] ?? u.role}
                     </span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <button
-                    className="dc-btn"
-                    title="Editar usuario"
-                    onClick={() => editId === u.id ? setEditId(null) : openEdit(u)}
-                    style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
-                    <Pencil size={13} />
-                  </button>
-                  <button
-                    className="dc-btn"
-                    title="Restablecer contraseña"
-                    onClick={() => { setResetId(resetId === u.id ? null : u.id); setNewPass(''); setEditId(null); }}
-                    style={{ borderColor: 'var(--az)', color: 'var(--az)' }}>
-                    <RotateCcw size={13} />
-                  </button>
-                  <button
-                    className="dc-btn"
-                    title={u.active ? 'Desactivar usuario' : 'Reactivar usuario'}
-                    onClick={() => setConfirmToggle({ id: u.id, name: u.name, active: u.active })}
-                    style={u.active
-                      ? { borderColor: 'var(--r)', color: 'var(--r)' }
-                      : { borderColor: 'var(--v)', color: 'var(--v)' }}>
-                    {u.active ? <Trash2 size={13} /> : <Check size={13} />}
-                  </button>
+                  </div>
+                  <div className="user-card-status-col" style={{ width: 70, flexShrink: 0 }}>
+                    {!u.active && (
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'var(--rc)', color: 'var(--r)' }}>
+                        Inactivo
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
+                    <button
+                      className="dc-btn"
+                      title="Editar usuario"
+                      onClick={() => editId === u.id ? setEditId(null) : openEdit(u)}
+                      style={{ borderColor: 'var(--v)', color: 'var(--v)' }}>
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      className="dc-btn"
+                      title="Restablecer contraseña"
+                      onClick={() => { setResetId(resetId === u.id ? null : u.id); setNewPass(''); setEditId(null); }}
+                      style={{ borderColor: 'var(--az)', color: 'var(--az)' }}>
+                      <RotateCcw size={13} />
+                    </button>
+                    <button
+                      className="dc-btn"
+                      title={u.active ? 'Desactivar usuario' : 'Reactivar usuario'}
+                      onClick={() => setConfirmToggle({ id: u.id, name: u.name, active: u.active })}
+                      style={u.active
+                        ? { borderColor: 'var(--r)', color: 'var(--r)' }
+                        : { borderColor: 'var(--v)', color: 'var(--v)' }}>
+                      {u.active ? <Trash2 size={13} /> : <Check size={13} />}
+                    </button>
+                  </div>
                 </div>
               </div>
 

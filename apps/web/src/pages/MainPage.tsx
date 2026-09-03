@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, BarChart2, MessageSquare, Settings, AlertTriangle,
+  ClipboardList, BarChart2, MessageSquare, Settings, AlertTriangle, Menu,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { useOrders } from '../hooks/useOrders';
@@ -49,6 +49,24 @@ export default function MainPage() {
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
   const [openOrderPrefillItems, setOpenOrderPrefillItems] = useState<TomarListaItem[] | undefined>(undefined);
   const [fromTicket, setFromTicket] = useState<{ ticketId: string; nombre: string; phone: string; messages: any[]; prefillItems?: TomarListaItem[] } | null>(null);
+
+  // Menú hamburguesa del header en celular - reemplaza la fila horizontal de
+  // pestañas (que ahí no cabe ni en modo solo-ícono) por una lista vertical,
+  // armada del mismo `tabItems` de abajo (ver su comentario - misma fuente,
+  // mismo filtro por rol).
+  const [navOpen, setNavOpen] = useState(false);
+  const navMenuRef = useRef<HTMLDivElement>(null);
+  const navBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!navOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (navMenuRef.current?.contains(target) || navBtnRef.current?.contains(target)) return;
+      setNavOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [navOpen]);
 
   const { data: orders = [], isLoading: loadingOrders } = useOrders(fecha);
   const { data: dashboard } = useDashboard(fecha, isAdmin);
@@ -187,6 +205,20 @@ export default function MainPage() {
   const papeleraOrders: any[] = dashboard?.papeleraOrders ?? [];
   const history: any[] = dashboard?.history ?? [];
 
+  // Única fuente de verdad de qué pestañas existen y quién las ve - tanto la
+  // fila horizontal (desktop/tablet) como el menú hamburguesa de celular (ver
+  // más abajo y .nav-hamburger/.nav-menu en global.css) se arman a partir de
+  // ESTE mismo arreglo ya filtrado por rol. Un encargado/domiciliario nunca
+  // llega a ver Chats WPP/Informe/Configuración en NINGUNA de las 2
+  // presentaciones porque ninguna las arma por su cuenta - ambas simplemente
+  // recorren esta lista.
+  const tabItems: { key: typeof tab; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { key: 'swimlane', label: 'Tickets & Pedidos', icon: <ClipboardList size={15} /> },
+    ...(isAdmin ? [{ key: 'inbox' as const, label: 'Chats WPP', icon: <MessageSquare size={15} />, badge: unreadWpp }] : []),
+    ...(isAdmin ? [{ key: 'resumen' as const, label: 'Informe del día', icon: <BarChart2 size={15} /> }] : []),
+    ...(isAdmin ? [{ key: 'config' as const, label: 'Configuración', icon: <Settings size={15} /> }] : []),
+  ];
+
   return (
     <div className="al">
       <header className="ah">
@@ -196,7 +228,9 @@ export default function MainPage() {
               <img src="/fruver-san-gabriel.jpeg" alt="Fruver San Gabriel" style={{ height: 34, objectFit: 'contain' }} />
             </div>
             {isDevEnvironment() && (
-              <div style={{
+              // Tamaño/padding se achican en celular vía .dev-badge en global.css -
+              // el color/fondo se queda inline porque no cambia con el viewport.
+              <div className="dev-badge" style={{
                 background: '#DC2626', color: '#fff', fontWeight: 900, fontSize: 15,
                 padding: '4px 40px', minWidth: 140, borderRadius: 8, letterSpacing: '2px',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -204,37 +238,40 @@ export default function MainPage() {
                 DEV
               </div>
             )}
+            {/* En celular esto se reemplaza por el botón hamburguesa + menú de
+                abajo (mismo tabItems) - ver .tabs/.nav-hamburger en global.css. */}
             <div className="tabs">
-              <button className={`tab${tab === 'swimlane' ? ' on' : ''}`} onClick={() => setTab('swimlane')}>
-                <ClipboardList size={15} /> Tickets & Pedidos
-              </button>
-              {isAdmin && (
-                <button className={`tab${tab === 'inbox' ? ' on' : ''}`}
-                  onClick={() => setTab('inbox')}>
-                  <MessageSquare size={15} /> Chats WPP
-                  {unreadWpp > 0 && (
+              {tabItems.map(t => (
+                <button key={t.key} className={`tab${tab === t.key ? ' on' : ''}`} onClick={() => setTab(t.key)} title={t.label}>
+                  {t.icon} <span className="tab-label">{t.label}</span>
+                  {!!t.badge && (
                     <span style={{
                       position: 'absolute', top: 7, right: 6,
                       minWidth: 16, height: 16, background: '#DC2626', borderRadius: 10,
                       color: '#fff', fontSize: 9, fontWeight: 800,
                       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px',
                     }}>
-                      {unreadWpp > 99 ? '99+' : unreadWpp}
+                      {t.badge > 99 ? '99+' : t.badge}
                     </span>
                   )}
                 </button>
-              )}
-              {isAdmin && (
-                <button className={`tab${tab === 'resumen' ? ' on' : ''}`} onClick={() => setTab('resumen')}>
-                  <BarChart2 size={15} /> Informe del día
-                </button>
-              )}
-              {isAdmin && (
-                <button className={`tab${tab === 'config' ? ' on' : ''}`} onClick={() => setTab('config')}>
-                  <Settings size={15} /> Configuración
-                </button>
-              )}
+              ))}
             </div>
+            <button ref={navBtnRef} className="nav-hamburger" onClick={() => setNavOpen(o => !o)} title="Menú">
+              <Menu size={19} />
+              {unreadWpp > 0 && <span className="nav-hamburger-dot" />}
+            </button>
+            {navOpen && (
+              <div ref={navMenuRef} className="nav-menu">
+                {tabItems.map(t => (
+                  <button key={t.key} className={`nav-menu-item${tab === t.key ? ' on' : ''}`}
+                    onClick={() => { setTab(t.key); setNavOpen(false); }}>
+                    {t.icon} {t.label}
+                    {!!t.badge && <span className="nav-menu-badge">{t.badge > 99 ? '99+' : t.badge}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="hright">
             <div className="huser">

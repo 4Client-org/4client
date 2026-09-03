@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { todayStr } from '../../lib/format';
 
@@ -20,6 +21,7 @@ const MONTHS = [
 ];
 const MONTHS_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const WEEKDAY_SHORT = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+const POPUP_WIDTH = 260;
 
 function parseYMD(v: string): { y: number; m: number; d: number } {
   const [y, m, d] = v.split('-').map(Number);
@@ -40,7 +42,16 @@ export default function DatePickerES({ value, onChange, className, placeholder =
   const { y, m } = parseYMD(value || todayStr());
   const [viewY, setViewY] = useState(y);
   const [viewM, setViewM] = useState(m); // 1-12
-  const boxRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  // Portal a document.body + position:fixed (mismo patrón que CategoryPicker/
+  // EnviarCatalogoMenu) - un `position:absolute;left:0` relativo al botón
+  // (lo que había antes) manda el calendario fuera de la pantalla apenas el
+  // botón no está pegado al borde izquierdo (reportado en celular: en
+  // "Informe del día" - apretado entre Cerrar caja/Bloquear todos - y en la
+  // barra de búsqueda de Chats WPP). `left` se calcula clamped al ancho de
+  // la ventana, nunca fijo en 0.
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -51,15 +62,34 @@ export default function DatePickerES({ value, onChange, className, placeholder =
 
   useEffect(() => {
     if (!open) return;
+    const reposition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - POPUP_WIDTH - 8);
+      setCoords({ top: r.bottom + 6, left });
+    };
+    reposition();
+
     function onDocClick(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (btnRef.current?.contains(target) || popupRef.current?.contains(target)) return;
+      setOpen(false);
     }
     function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false); }
+    // Reposiciona en vez de cerrar en scroll/resize - mismo motivo que
+    // CategoryPicker/EnviarCatalogoMenu: abrir con clic enfoca el botón, y el
+    // navegador puede hacer scroll-into-view solo, cerrando el popup en el
+    // mismo gesto que lo abrió si se cerrara en cualquier scroll.
+    function onScrollOrResize() { reposition(); }
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onEsc);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onEsc);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onScrollOrResize);
     };
   }, [open]);
 
@@ -91,20 +121,20 @@ export default function DatePickerES({ value, onChange, className, placeholder =
   const today = todayStr();
 
   return (
-    <div ref={boxRef} style={{ position: 'relative', display: 'inline-block' }}>
-      <button type="button" className={className ?? 'fsel'} onClick={() => setOpen((o) => !o)}
+    <>
+      <button ref={btnRef} type="button" className={className ?? 'fsel'} onClick={() => setOpen((o) => !o)}
         style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
         <Calendar size={14} />
         {label}
       </button>
 
-      {open && (
-        <div style={{
+      {open && coords && createPortal(
+        <div ref={popupRef} style={{
           // Above .ah (200) and the swimlane's sticky bars (zona roja 160, status
           // header 150) - this popup used to render behind all of them once open.
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 250,
+          position: 'fixed', top: coords.top, left: coords.left, zIndex: 250,
           background: 'var(--b)', border: '1px solid var(--brd)', borderRadius: 'var(--rad)',
-          boxShadow: 'var(--shf)', padding: 12, width: 260,
+          boxShadow: 'var(--shf)', padding: 12, width: POPUP_WIDTH,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <button type="button" onClick={() => shiftMonth(-1)} title="Mes anterior"
@@ -150,8 +180,9 @@ export default function DatePickerES({ value, onChange, className, placeholder =
               Hoy
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }

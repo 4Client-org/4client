@@ -60,7 +60,7 @@ input,select,textarea{font-family:var(--f);}
 .al{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
 .ah{background:var(--b);border-bottom:2px solid var(--brd);padding:0 20px;position:sticky;top:0;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,.05);flex-shrink:0;}
 .ht{display:flex;align-items:stretch;justify-content:space-between;min-height:54px;}
-.hleft{display:flex;align-items:stretch;}
+.hleft{display:flex;align-items:stretch;min-width:0;}
 .hlogo{display:flex;align-items:center;gap:10px;padding:0 16px 0 0;border-right:2px solid var(--brd);margin-right:4px;flex-shrink:0;}
 .hlogo-t{font-size:20px;font-weight:900;color:var(--vd);}
 .hright{display:flex;align-items:center;gap:9px;padding:0 0 0 12px;}
@@ -69,10 +69,20 @@ input,select,textarea{font-family:var(--f);}
 .uav.adm{background:var(--vd);}
 .un{font-size:13px;font-weight:700;color:var(--n);}
 .ur2{font-size:11px;color:var(--gt);}
-.tabs{display:flex;gap:0;padding:0;align-items:stretch;}
+.tabs{display:flex;gap:0;padding:0;align-items:stretch;min-width:0;}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
+/* Menú hamburguesa del header - reemplaza .tabs en celular (ver el media
+   query más abajo). Mismo tabItems que arma .tabs, mismo filtro de rol -
+   MainPage.tsx nunca duplica la lógica de qué pestañas mostrar. */
+.nav-hamburger{display:none;position:relative;background:none;border:none;color:var(--n);cursor:pointer;padding:6px;align-items:center;flex-shrink:0;}
+.nav-hamburger-dot{position:absolute;top:4px;right:4px;width:9px;height:9px;border-radius:50%;background:#DC2626;border:1.5px solid var(--b);}
+.nav-menu{position:fixed;top:56px;left:10px;z-index:1000;background:var(--b);border:1px solid var(--brd);border-radius:var(--rad);box-shadow:var(--shf);padding:6px;width:220px;display:flex;flex-direction:column;gap:2px;}
+.nav-menu-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;padding:10px 12px;font-size:14px;font-weight:600;color:var(--n);border-radius:8px;cursor:pointer;position:relative;}
+.nav-menu-item:hover{background:var(--vc);}
+.nav-menu-item.on{color:var(--v);background:var(--vc);font-weight:700;}
+.nav-menu-badge{margin-left:auto;min-width:18px;height:18px;background:#DC2626;border-radius:10px;color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px;}
 /* No top padding here on purpose - the swimlane's sticky bars (zona roja, the
    status header row) need `top:0` to mean truly flush against .ac's visible top
    edge (right under .ah), with zero built-in gap. Each tab's own first child adds
@@ -165,6 +175,13 @@ input,select,textarea{font-family:var(--f);}
 .moverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;align-items:center;justify-content:center;padding:16px;overflow-y:auto;}
 .moverlay.on{display:flex;}
 .mwin{background:var(--b);border-radius:var(--radb);width:100%;max-width:640px;box-shadow:var(--shf);animation:mup .2s ease;margin:auto;max-height:90vh;display:flex;flex-direction:column;}
+
+/* TicketModal - caja completa (chat + pedidos lado a lado en desktop/tablet).
+   En celular (ver el media query más abajo) se vuelve un carrusel de 2
+   páginas con scroll-snap en vez de 2 columnas - las medidas de escritorio
+   quedan exactamente igual que antes de este cambio. */
+.tk-modal-shell{display:flex;flex-direction:row;width:100%;max-width:1110px;margin:auto;border-radius:var(--radb);overflow:hidden;box-shadow:var(--shf);animation:mup .2s ease;max-height:90vh;}
+.tk-modal-chat{width:560px;flex-shrink:0;}
 @keyframes mup{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 .mhead{padding:20px 22px 14px;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:2px solid var(--brd);background:var(--b);z-index:10;border-radius:var(--radb) var(--radb) 0 0;flex-shrink:0;}
 .mtit{font-size:18px;font-weight:800;color:var(--n);}
@@ -214,8 +231,30 @@ input,select,textarea{font-family:var(--f);}
 .no-spin{-moz-appearance:textfield;}
 .hdr-ic-btn{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:8px;color:#fff;cursor:pointer;min-width:74px;flex-shrink:0;padding:5px 6px;font-size:10px;font-weight:700;line-height:1.15;text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;}
 .hdr-ic-btn:disabled{opacity:.6;cursor:not-allowed;}
+
+/* TicketModal/NuevoPedidoModal/DetallePedidoModal - fila de acciones del chat
+   (Formulario/Bloquear Link/Catálogo/Tomar lista). En celular se convierte en
+   un menú hamburguesa (mismos botones .hdr-ic-btn, mismos handlers - ver el
+   media query más abajo) en vez de ocultar/recortar la fila. */
+.tk-actions{display:flex;flex-wrap:wrap;gap:5px;flex-shrink:0;justify-content:flex-end;}
+.tk-hamburger{display:none;background:none;border:none;color:#fff;cursor:pointer;padding:4px;align-items:center;flex-shrink:0;}
+.tk-swipe-hint{display:none;}
+/* El × de siempre (.mclose) vive en el panel de pedido/formulario a la
+   derecha - inalcanzable en celular sin ese ancho. Este es su equivalente
+   para la cabecera del chat (fondo oscuro var(--vd), por eso blanco/
+   translúcido en vez del estilo claro de .mclose), oculto salvo en celular. */
+.tk-chat-close{display:none;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center;flex-shrink:0;}
+.tk-chat-close:hover{background:rgba(255,255,255,.3);}
 .idel{background:var(--rc);border:none;color:var(--r);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;}
 .idel:hover{background:var(--r);color:#fff;}
+
+/* UsersSection - tarjeta de usuario. En escritorio, .user-card-head (avatar+
+   nombre) y .user-card-meta (rol/estado/acciones) van lado a lado en una
+   sola fila (igual que antes) - en celular (ver el media query más abajo)
+   se apilan en 2 filas, porque los anchos fijos de rol/estado no dejaban
+   espacio real al nombre (se veían montados encima). */
+.user-card-row{display:flex;align-items:center;gap:10px;}
+.user-card-head{flex:1;min-width:0;}
 
 /* FACTURA */
 .factbox{background:var(--bg);border-radius:var(--rad);padding:14px 16px;border:2px solid var(--brd);}
@@ -379,7 +418,10 @@ input,select,textarea{font-family:var(--f);}
 .inbox-item-preview{font-size:12px;color:var(--gt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .inbox-unread{background:var(--v);color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;min-width:20px;text-align:center;flex-shrink:0;}
 .inbox-chat{flex:1;display:flex;flex-direction:column;overflow:hidden;}
-.inbox-chat-head{padding:14px 18px;border-bottom:2px solid var(--brd);background:var(--b);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.inbox-chat-head{padding:14px 18px;border-bottom:2px solid var(--brd);background:var(--b);display:flex;align-items:center;gap:10px;justify-content:space-between;flex-shrink:0;}
+/* Solo aparece en celular (ver el media query max-width:768px más abajo) - en
+   desktop las 2 columnas están visibles a la vez, no hace falta "volver". */
+.inbox-back{display:none;background:none;border:none;cursor:pointer;color:var(--n);padding:4px;flex-shrink:0;align-items:center;}
 .inbox-messages{flex:1;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:6px;background:#ECE5DD;}
 .chat-bub{max-width:70%;width:fit-content;padding:9px 13px;font-size:14px;line-height:1.45;word-break:break-word;position:relative;}
 .chat-bub.in{background:#fff;border-radius:0 12px 12px 12px;align-self:flex-start;box-shadow:0 1px 2px rgba(0,0,0,.1);}
@@ -429,6 +471,8 @@ input,select,textarea{font-family:var(--f);}
   .slane-scell{padding:7px;min-height:100px;gap:6px;}
   .tk-name{font-size:13px;}
   .tk-preview{font-size:11px;}
+  .tk-num{font-size:10px;}
+  .tk-urg{font-size:10px;padding:1px 5px;gap:2px;}
   .tk-ver-btn{padding:8px 10px;min-height:32px;}
   .tk-crear-btn{min-height:32px;padding:7px 10px;}
   .dc-card{padding:8px 9px;}
@@ -451,6 +495,11 @@ input,select,textarea{font-family:var(--f);}
   .tk-preview{font-size:10px;}
   .tk-phone{font-size:9px;}
   .tk-badge{font-size:9px;padding:2px 6px;}
+  .tk-num{font-size:9px;}
+  /* T-01 apretado contra el reloj de tiempo transcurrido a este ancho - el
+     texto de minutos se esconde, dejando solo el ícono de alerta (el color
+     rojo/naranja ya avisa que hay urgencia, no hace falta el número acá). */
+  .tk-urg{font-size:0;padding:2px 4px;gap:0;}
   .dc-card{padding:6px 7px;}
   .dc-num{font-size:10px;}
   .dc-prod{font-size:10px;}
@@ -468,6 +517,69 @@ input,select,textarea{font-family:var(--f);}
   .ac{padding:0 12px 12px;--ac-pad:12px;}
   .khead{margin-bottom:12px;}
   .ktit{font-size:17px;}
+}
+
+/* CHAT ON PHONE (<=768px): the 2-column WhatsApp-style layout (sidebar list +
+   conversation, both always visible) doesn't fit side by side on a phone -
+   collapse to ONE column at a time, driven purely by .has-selection (added by
+   InboxPanel.tsx from its existing `selectedId` state, no new width-detection
+   JS needed). List shows by default; picking a chat swaps to the conversation
+   full-width with a "volver" button (.inbox-back, hidden everywhere else). */
+@media (max-width:768px){
+  .inbox-wrap{flex-direction:column;}
+  /* flex:1;min-height:0 es lo que faltaba - en fila (desktop) el sidebar ya
+     estira a la altura completa de .inbox-wrap por defecto (cross-axis), pero
+     en columna (celular) un flex-item sin esto se dimensiona por su
+     CONTENIDO en el eje principal - crecía tan alto como todos los chats
+     juntos en vez de quedar acotado, y su propio .inbox-sidebar-list (que
+     scrollea internamente con flex:1) nunca tenía una altura real contra la
+     cual medirse. Resultado real reportado: no dejaba bajar con scroll para
+     ver todos los chats - la lista se cortaba, no era que no scrolleara. */
+  .inbox-sidebar{width:100%;border-right:none;flex:1;min-height:0;}
+  .inbox-wrap.has-selection .inbox-sidebar{display:none;}
+  .inbox-chat{display:none;}
+  .inbox-wrap.has-selection .inbox-chat{display:flex;}
+  .inbox-back{display:flex;}
+}
+
+/* TicketModal EN CELULAR (<=680px): 2 columnas fijas (chat 560px + pedidos)
+   nunca cupieron en un celular - se convierte en un carrusel de 2 páginas de
+   ancho completo con scroll-snap nativo (sin JS de gestos: el navegador ya
+   maneja touch/mouse-drag/teclado). "Deslizo hacia la derecha y veo los
+   pedidos" - a pedido explícito del usuario, en vez de mostrar chat+pedido
+   apretados a la vez. El botón hamburguesa reemplaza la fila de acciones
+   (Formulario/Bloquear Link/Catálogo/Tomar lista) - mismos botones, mismos
+   handlers, solo cambian de fila horizontal a lista vertical en un menú. */
+@media (max-width:680px){
+  .tk-modal-shell{
+    overflow-x:auto; overflow-y:hidden;
+    scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch;
+    max-width:480px;
+  }
+  .tk-modal-chat{width:100%;flex:0 0 100%;scroll-snap-align:start;}
+  /* !important necesario: .tk-modal-orders también tiene .mwin + un style
+     inline con flex:1 (para el layout de escritorio) - sin esto, flex:1
+     "gana" contra esta regla de clase y el panel de pedidos queda angosto
+     (encontrado en pruebas reales: el carrusel solo alcanzaba a scrollear
+     ~100px en vez de una página completa). */
+  .tk-modal-orders{flex:0 0 100% !important;width:100% !important;scroll-snap-align:start;}
+  .tk-swipe-hint{
+    display:block;flex-shrink:0;text-align:center;padding:5px 8px;font-size:11px;
+    font-weight:700;color:var(--vd);background:var(--vc);border-bottom:1px solid var(--vm);
+  }
+  .tk-hamburger{display:flex;}
+  .tk-chat-close{display:flex;}
+  .tk-actions{display:none;}
+  .tk-actions.open{
+    display:flex;flex-direction:column;position:fixed;top:64px;right:12px;z-index:1000;
+    background:var(--b);border:1px solid var(--brd);border-radius:var(--rad);box-shadow:var(--shf);
+    padding:6px;width:210px;gap:2px;
+  }
+  .tk-actions.open .hdr-ic-btn{
+    width:100%;flex-direction:row;justify-content:flex-start;text-align:left;
+    background:none;border:none;color:var(--n);min-width:0;padding:9px 10px;font-size:13px;
+  }
+  .tk-actions.open .hdr-ic-btn:hover{background:var(--vc);}
 }
 
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
@@ -495,5 +607,23 @@ input,select,textarea{font-family:var(--f);}
   .ur2{display:none;}
   .uav{width:26px;height:26px;font-size:11px;}
   .hlogo-t{font-size:15px;}
-  .tab{padding:0 8px;font-size:11px;}
+  /* La fila de tabs (aunque fuera solo-ícono) seguía sin caber bien a este
+     ancho junto al logo/badge/usuario - se reemplaza por un menú hamburguesa
+     (mismo tabItems, mismo filtro de rol - ver MainPage.tsx/.nav-menu de
+     arriba) a pedido explícito del usuario. */
+  .tabs{display:none;}
+  .nav-hamburger{display:flex;}
+  /* Colores/fondo se quedan inline (no cambian con el viewport) - !important
+     hace falta solo para ganarle al padding/minWidth/fontSize inline, mismo
+     recurso ya usado una vez en este archivo para el mismo tipo de choque. */
+  .dev-badge{padding:4px 10px !important;min-width:0 !important;font-size:11px !important;letter-spacing:1px !important;}
+  .user-card-row{flex-direction:column;align-items:stretch;gap:8px;}
+  .user-card-meta{flex-wrap:wrap;}
+  .user-card-role-col,.user-card-status-col{width:auto !important;}
 }
+
+/* Se probó un cap de ancho acá para pantallas >=1600px (TV/ultrawide) - se
+   quitó: en un monitor normal de esa medida se veía como que la app "se
+   angostó" en vez de mejorar nada, justo lo que el usuario pidió explícitamente
+   NO tocar ("en tamaño PC normal como estaba antes, sin dañar nada"). PC de
+   cualquier tamaño queda exactamente igual que antes de esta sesión. */

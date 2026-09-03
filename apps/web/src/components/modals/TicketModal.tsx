@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
@@ -55,6 +55,25 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [forwardMsg, setForwardMsg] = useState<any | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+
+  // Solo importa en celular (ver .tk-actions/.tk-actions-btn en global.css) -
+  // en desktop/tablet los botones (Formulario/Bloquear Link/Catálogo/Tomar
+  // lista) siguen siendo la fila de siempre, sin este menú. Se cierra solo al
+  // usar una acción "terminal" (Formulario, Bloquear Link, Tomar lista) - NO
+  // al abrir Catálogo, que despliega su propio submenú encima de este.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (actionsRef.current?.contains(target) || hamburgerRef.current?.contains(target)) return;
+      setActionsOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [actionsOpen]);
 
   // Orders shown here must be scoped to the day currently being viewed on the board
   // (fecha), not every order this ticket ever had - opening today's chat for a
@@ -151,6 +170,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   });
 
   async function sendFormLink() {
+    setActionsOpen(false);
     let url: string;
     try {
       const res = await api.get<{ data: { url: string } }>(`/inbox/${ticketId}/form-link`);
@@ -233,18 +253,17 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
 
   return (
     <div className="moverlay on" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={{
-        display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: 1110,
-        margin: 'auto', borderRadius: 'var(--radb)',
-        overflow: 'hidden', boxShadow: 'var(--shf)',
-        animation: 'mup .2s ease', maxHeight: '90vh',
-      }}>
+      {/* En celular esta caja se convierte en un carrusel de 2 páginas con
+          scroll-snap (chat / pedidos) en vez de las 2 columnas lado a lado -
+          "arrastro hacia la derecha y veo los pedidos", sin JS de gestos,
+          nada más que overflow-x + scroll-snap (ver .tk-modal-shell en
+          global.css). */}
+      <div className="tk-modal-shell">
 
-        {/* ===== LEFT: CHAT ===== */}
-        <div style={{
-          width: 560, background: '#ECE5DD', display: 'flex',
-          flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
+        {/* ===== CHAT (página 1 en celular) ===== */}
+        <div className="tk-modal-chat" style={{
+          background: '#ECE5DD', display: 'flex',
+          flexDirection: 'column', minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
           <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -257,7 +276,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 {ticket?.messages?.length != null && ` · ${ticket.messages.length} mensajes`}
               </div>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flexShrink: 0, justifyContent: 'flex-end' }}>
+            {/* En celular esta fila se convierte en un menú hamburguesa (mismos
+                botones, mismos handlers - ver .tk-actions/.tk-hamburger en
+                global.css) para que quepan sin desbordar el header. */}
+            <button ref={hamburgerRef} className="tk-hamburger" title="Más acciones"
+              onClick={() => setActionsOpen(o => !o)}>
+              <Menu size={18} />
+            </button>
+            {/* Solo celular - el × de siempre vive en el panel de pedidos
+                (página 2 del carrusel), inalcanzable mientras se ve el chat
+                (página 1) sin deslizar primero. Mismo onClose. */}
+            <button className="tk-chat-close" title="Cerrar" onClick={onClose}>×</button>
+            <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
               <button
                 className="hdr-ic-btn"
                 title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
@@ -270,7 +300,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
               <button
                 className="hdr-ic-btn"
                 title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Bloquear el link de formulario enviado a este cliente'}
-                onClick={() => setShowBlockConfirm(true)}
+                onClick={() => { setActionsOpen(false); setShowBlockConfirm(true); }}
                 disabled={blockLinkMut.isPending || isPastDay}
               >
                 <Ban size={13} />
@@ -281,7 +311,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <button
                   className="hdr-ic-btn"
                   title="Seleccionar mensajes del cliente para armar el pedido"
-                  onClick={() => tomarLista.toggle()}
+                  onClick={() => { setActionsOpen(false); tomarLista.toggle(); }}
                   disabled={isPastDay}
                 >
                   <ListChecks size={13} />
@@ -296,6 +326,12 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
               <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
             </div>
           )}
+
+          {/* Solo celular - pista de que hay una 2da página deslizando (ver
+              .tk-swipe-hint en global.css, oculto en desktop/tablet). */}
+          <div className="tk-swipe-hint">
+            {hasOrders ? `${activeOrders.length} pedido${activeOrders.length !== 1 ? 's' : ''}` : 'Sin pedidos'} · desliza ›
+          </div>
 
           {/* Messages - scrollable */}
           <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
@@ -437,8 +473,8 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           )}
         </div>
 
-        {/* ===== RIGHT: ORDERS ===== */}
-        <div className="mwin" style={{
+        {/* ===== ORDERS (página 2 en celular) ===== */}
+        <div className="mwin tk-modal-orders" style={{
           margin: 0, flex: 1, minWidth: 0,
           borderRadius: '0 var(--radb) var(--radb) 0',
           boxShadow: 'none', maxHeight: '90vh',
