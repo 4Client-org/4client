@@ -1,13 +1,15 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { storage } from '../services/storage.js';
 
-// Same R2-primary/local-fallback split as files.ts's invoice PDFs, and the same
-// unbounded-token-as-the-only-gate model formLink.ts uses for form links - a chat
-// photo is only ever looked up by staff who already have this exact token (came
-// from a TicketMessage row they're allowed to see), so there's nothing extra to
-// check beyond "does this token exist" once past the route's own staff-auth check.
+// SIEMPRE disco local, nunca R2 - a diferencia de files.ts's invoice PDFs
+// (que sí van a R2 si está configurado). Decisión explícita del negocio: R2
+// es solo para las facturas de pedido que genera 4Client, no para imágenes/
+// audios/videos/documentos que pasan por el chat de WhatsApp. Mismo modelo
+// de "el token opaco es el único gate" que formLink.ts usa para form links -
+// una foto de chat solo la busca staff que ya tiene este token exacto (vino
+// de una fila de TicketMessage que puede ver), no hay nada más que chequear
+// más allá de "existe este token" una vez pasado el propio auth de la ruta.
 const UPLOADS_MEDIA_DIR = path.join(process.cwd(), 'uploads', 'media');
 const MEDIA_TOKEN_BYTES = 20;
 
@@ -109,17 +111,12 @@ export function detectMediaMime(buffer: Buffer, declaredMime: string): string | 
 export async function storeMedia(buffer: Buffer, mimeType: string): Promise<string> {
   const ext = MIME_EXT[normalizeMime(mimeType)] ?? 'bin';
   const token = `${crypto.randomBytes(MEDIA_TOKEN_BYTES).toString('hex')}.${ext}`;
-  if (storage.isConfigured()) {
-    await storage.upload(`media/${token}`, buffer, mimeType);
-  } else {
-    if (!fs.existsSync(UPLOADS_MEDIA_DIR)) fs.mkdirSync(UPLOADS_MEDIA_DIR, { recursive: true });
-    fs.writeFileSync(path.join(UPLOADS_MEDIA_DIR, token), buffer);
-  }
+  if (!fs.existsSync(UPLOADS_MEDIA_DIR)) fs.mkdirSync(UPLOADS_MEDIA_DIR, { recursive: true });
+  fs.writeFileSync(path.join(UPLOADS_MEDIA_DIR, token), buffer);
   return token;
 }
 
 export async function loadMedia(token: string): Promise<Buffer> {
-  if (storage.isConfigured()) return storage.download(`media/${token}`);
   return fs.promises.readFile(path.join(UPLOADS_MEDIA_DIR, token));
 }
 
