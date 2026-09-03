@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { audit } from '../lib/audit.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { generateFormLinkUrl } from '../lib/formLink.js';
 import {
@@ -717,6 +719,92 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       data: { form_links_blocked_at: new Date() },
     });
     return reply.send({ data: { ok: true } });
+  });
+
+  // POST /api/v1/inbox/:ticketId/erase-data - derecho de supresión (Ley 1581 de
+  // 2012): un cliente pide que se elimine su información. Admin-only, una sola
+  // acción sobre el ticket que ya se tiene abierto (por teléfono O por el
+  // username/BSUID nuevo de WhatsApp - da igual cuál identificó a este ticket,
+  // la lógica es la misma desde acá porque ambos ya viven en la misma fila).
+  //
+  // No es un DELETE liso y llano de la fila: hay una tensión real entre "borrar
+  // todo" y la obligación de conservar el soporte de una venta ya facturada
+  // (ver la política publicada). TODOS los pedidos del ticket se ANONIMIZAN
+  // (nombre/contacto/teléfono/dirección reemplazados, número/productos/precios
+  // intactos - sigue sirviendo como soporte, ya no identifica a nadie) en vez
+  // de borrarse - ninguno se borra de verdad, ni siquiera los que nunca se
+  // facturaron. No es una preferencia: order_history tiene reglas de Postgres
+  // (no_update_order_history / no_delete_order_history) que hacen ese historial
+  // deliberadamente INMUTABLE incluso para esta acción - un pedido con aunque
+  // sea una fila de historial no se puede borrar (FK ON DELETE RESTRICT), así
+  // que la única operación que siempre funciona, sea cual sea el estado del
+  // pedido, es anonimizar la fila de `orders` en sí (eso no tiene ninguna regla
+  // de inmutabilidad, solo `order_history` la tiene).
+  // El ticket en sí NUNCA se borra (los pedidos anonimizados lo siguen
+  // referenciando por ticket_id) - se anonimiza igual que ellos.
+  // Los mensajes de chat, sesiones de formulario y revocaciones sí se borran
+  // del todo (contenido de conversación puro, sin obligación de conservarlos,
+  // y sin ninguna regla de inmutabilidad sobre esas tablas).
+  //
+  // Límites conocidos, documentados a propósito en vez de resueltos acá:
+  //   - order_history.value_before/value_after de un cambio anterior de
+  //     nombre/teléfono/dirección queda ahí para siempre, sin poder redactarse -
+  //     es justo lo que esas reglas de Postgres impiden, a propósito (integridad
+  //     del historial de auditoría). Tensión real entre "borrar todo" e
+  //     "historial a prueba de manipulación" que esta acción no puede resolver
+  //     por sí sola - si hace falta resolverla, es una decisión de negocio
+  //     (¿se relaja la inmutabilidad para este caso?), no algo para decidir acá.
+  //   - Una nota interna de staff (OrderObservation) podría igual mencionar al
+  //     cliente en texto libre - eso no se escanea/redacta, es contenido
+  //     escrito por el propio staff, no el dato del cliente en sí.
+  fastify.post('/:ticketId/erase-data', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    const anonymized = await fastify.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { ticket_id: ticketId, org_id: req.user.orgId },
+        data: {
+          customer_name: 'Cliente eliminado', client_contact_name: null,
+          customer_phone: null, address: '[eliminado a solicitud del cliente]',
+        },
+      });
+
+      await tx.ticketMessage.deleteMany({ where: { ticket_id: ticketId } });
+      await tx.revokedFormToken.deleteMany({ where: { ticket_id: ticketId } });
+      await tx.formLinkSession.deleteMany({ where: { ticket_id: ticketId } });
+      // Sin relación FK propia hacia Ticket (ver comentario del modelo) - se
+      // revocan igual, para que ninguna factura vieja de este cliente siga
+      // siendo abrible desde afuera. El PDF en sí (R2) no se borra acá.
+      await tx.invoiceLink.updateMany({ where: { ticket_id: ticketId, revoked_at: null }, data: { revoked_at: new Date() } });
+
+      // El ticket queda anonimizado, nunca borrado - lo siguen referenciando
+      // los pedidos que se anonimizaron arriba. consent_given_at se deja
+      // intacto a propósito: es la prueba de que hubo consentimiento antes de
+      // que pidiera esto, no un dato personal en sí mismo.
+      await tx.ticket.update({
+        where: { id: ticketId },
+        data: {
+          customer_name: 'Cliente eliminado',
+          phone: `eliminado-${crypto.randomBytes(8).toString('hex')}`,
+          bsuid: null,
+          raw_payload: Prisma.DbNull,
+          unread_count: 0,
+          form_link_token: null, form_link_sent_by: null, form_token_min_iat: null, form_link_opened_at: null,
+          link_failed_attempts: 0, link_failed_total: 0, link_blocked_until: null,
+        },
+      });
+
+      return count;
+    });
+
+    await audit(fastify.prisma, {
+      orgId: req.user.orgId, actorId: req.user.userId, action: 'ticket.erase_customer_data',
+      targetId: ticketId, metadata: { ordersAnonymized: anonymized },
+    });
+
+    return reply.send({ data: { ok: true, ordersAnonymized: anonymized } });
   });
 
   // POST /api/v1/inbox/:ticketId/parse-messages - "Tomar lista": staff selects

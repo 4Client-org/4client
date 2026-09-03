@@ -375,3 +375,148 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('POST /:ticketId/erase-data - derecho de supresión (Ley 1581 de 2012)', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminId: string;
+  let adminToken: string;
+  let encargadoToken: string;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    const admin = await createTestUser(app.prisma, orgId, 'admin', 'EraseDataAdmin1!');
+    adminId = admin.id;
+    adminToken = await login(app, admin.email, 'EraseDataAdmin1!');
+    const encargado = await createTestUser(app.prisma, orgId, 'encargado', 'EraseDataEncargado1!');
+    encargadoToken = await login(app, encargado.email, 'EraseDataEncargado1!');
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('rejects a non-admin (encargado) with 403', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573005550001', customer_name: 'Cliente Rechazo' } });
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/erase-data`,
+      headers: { authorization: `Bearer ${encargadoToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('404s for a ticket that does not exist or belongs to another org', async () => {
+    const otherOrg = await createTestOrg(app.prisma);
+    const otherTicket = await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573005550002', customer_name: 'Cliente Otra Org' } });
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${otherTicket.id}/erase-data`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('anonimiza TODOS los pedidos del ticket (sea cual sea su estado) sin borrar ninguno, borra el chat, y anonimiza el ticket - identificado por bsuid (username de WhatsApp), no solo por teléfono', async () => {
+    const bsuid = 'CO.919210307886999';
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: 'no-abc123', bsuid, customer_name: 'Cliente A Borrar', raw_payload: { some: 'payload' } },
+    });
+
+    await app.prisma.ticketMessage.create({ data: { ticket_id: ticket.id, direction: 'in', text: 'Hola quiero un pedido' } });
+    await app.prisma.ticketMessage.create({ data: { ticket_id: ticket.id, direction: 'out', text: 'Bienvenido' } });
+
+    // Pedido YA facturado.
+    const closedOrder = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '901', customer_name: 'Cliente A Borrar',
+        client_contact_name: 'Cliente A Borrar', customer_phone: 'no-abc123',
+        address: 'Calle Real 123', payment_method: 'cash', status: 'cerrado', source: 'form',
+        registered_by: adminId, fecha: new Date(),
+        items: { create: [{ product_name: 'Mango', quantity_label: '2 kg', price: 3000, sort_order: 0 }] },
+      },
+    });
+    // order_history es deliberadamente inmutable (reglas de Postgres
+    // no_update_order_history/no_delete_order_history) - esta fila sigue
+    // existiendo TAL CUAL después de la acción, a propósito (ver el comentario
+    // de la ruta). No se afirma lo contrario en este test.
+    await app.prisma.orderHistory.create({
+      data: {
+        org_id: orgId, order_id: closedOrder.id, actor_id: adminId, action_type: 'update',
+        field: 'address', value_before: 'Calle Vieja 1', value_after: 'Calle Real 123',
+      },
+    });
+
+    // Pedido que nunca llegó a facturarse - también debe sobrevivir (no se
+    // puede borrar de forma confiable: cualquier fila de historial que
+    // tuviera lo impediría vía FK), solo anonimizado igual que el de arriba.
+    const openOrder = await app.prisma.order.create({
+      data: {
+        org_id: orgId, ticket_id: ticket.id, num: '902', customer_name: 'Cliente A Borrar',
+        address: 'Calle Real 123', payment_method: 'cash', status: 'nuevo', source: 'form',
+        registered_by: adminId, fecha: new Date(),
+        items: { create: [{ product_name: 'Piña', quantity_label: '1 kg', price: 4000, sort_order: 0 }] },
+      },
+    });
+
+    await app.prisma.revokedFormToken.create({
+      data: { org_id: orgId, ticket_id: ticket.id, revoked_by: adminId, reason: 'test' },
+    });
+    const invoice = await app.prisma.invoiceLink.create({
+      data: { org_id: orgId, ticket_id: ticket.id, order_id: closedOrder.id, filename: `factura-erase-${Date.now()}.pdf`, phone_last4: '1234' },
+    });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/erase-data`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({ ok: true, ordersAnonymized: 2 });
+
+    // Ambos pedidos siguen existiendo, solo sin datos del cliente - el
+    // producto/precio (el soporte en sí) queda intacto en los dos.
+    const closedAfter = await app.prisma.order.findUniqueOrThrow({ where: { id: closedOrder.id }, include: { items: true } });
+    expect(closedAfter.customer_name).toBe('Cliente eliminado');
+    expect(closedAfter.client_contact_name).toBeNull();
+    expect(closedAfter.customer_phone).toBeNull();
+    expect(closedAfter.address).toBe('[eliminado a solicitud del cliente]');
+    expect(closedAfter.items).toHaveLength(1);
+    expect(closedAfter.items[0].product_name).toBe('Mango');
+    expect(Number(closedAfter.items[0].price)).toBe(3000);
+
+    const openAfter = await app.prisma.order.findUniqueOrThrow({ where: { id: openOrder.id }, include: { items: true } });
+    expect(openAfter.customer_name).toBe('Cliente eliminado');
+    expect(openAfter.address).toBe('[eliminado a solicitud del cliente]');
+    expect(openAfter.items).toHaveLength(1);
+
+    // El historial del pedido cerrado sigue intacto - no se toca, no se puede
+    // tocar (inmutable a propósito, ver comentario arriba).
+    const addressHistory = await app.prisma.orderHistory.findFirstOrThrow({ where: { order_id: closedOrder.id, field: 'address' } });
+    expect(addressHistory.value_before).toBe('Calle Vieja 1');
+    expect(addressHistory.value_after).toBe('Calle Real 123');
+
+    // Todo el chat, borrado.
+    const messagesAfter = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id } });
+    expect(messagesAfter).toHaveLength(0);
+
+    // La revocación de link, borrada; la factura, revocada (no borrada - el
+    // archivo en R2 no se toca desde acá).
+    const revokedAfter = await app.prisma.revokedFormToken.findUnique({ where: { ticket_id: ticket.id } });
+    expect(revokedAfter).toBeNull();
+    const invoiceAfter = await app.prisma.invoiceLink.findUniqueOrThrow({ where: { id: invoice.id } });
+    expect(invoiceAfter.revoked_at).not.toBeNull();
+
+    // El ticket sigue existiendo (el pedido cerrado todavía le apunta por
+    // ticket_id) pero ya no identifica a nadie - ni por teléfono ni por bsuid.
+    const ticketAfter = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(ticketAfter.customer_name).toBe('Cliente eliminado');
+    expect(ticketAfter.phone).not.toBe('no-abc123');
+    expect(ticketAfter.phone).toMatch(/^eliminado-/);
+    expect(ticketAfter.bsuid).toBeNull();
+    expect(ticketAfter.raw_payload).toBeNull();
+
+    // Queda registrado en el log de auditoría.
+    const auditLog = await app.prisma.auditLog.findFirst({ where: { org_id: orgId, action: 'ticket.erase_customer_data', target_id: ticket.id } });
+    expect(auditLog).not.toBeNull();
+  });
+});
