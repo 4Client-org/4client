@@ -73,6 +73,16 @@ input,select,textarea{font-family:var(--f);}
 .tab{padding:0 18px;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;border:none;background:none;color:var(--gt);border-bottom:3px solid transparent;display:flex;align-items:center;gap:7px;white-space:nowrap;position:relative;}
 .tab:hover{color:var(--v);background:var(--vc);}
 .tab.on{color:var(--v);font-weight:700;border-bottom:3px solid var(--v);}
+/* Menú hamburguesa del header - reemplaza .tabs en celular (ver el media
+   query más abajo). Mismo tabItems que arma .tabs, mismo filtro de rol -
+   MainPage.tsx nunca duplica la lógica de qué pestañas mostrar. */
+.nav-hamburger{display:none;position:relative;background:none;border:none;color:var(--n);cursor:pointer;padding:6px;align-items:center;flex-shrink:0;}
+.nav-hamburger-dot{position:absolute;top:4px;right:4px;width:9px;height:9px;border-radius:50%;background:#DC2626;border:1.5px solid var(--b);}
+.nav-menu{position:fixed;top:56px;left:10px;z-index:1000;background:var(--b);border:1px solid var(--brd);border-radius:var(--rad);box-shadow:var(--shf);padding:6px;width:220px;display:flex;flex-direction:column;gap:2px;}
+.nav-menu-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;border:none;padding:10px 12px;font-size:14px;font-weight:600;color:var(--n);border-radius:8px;cursor:pointer;position:relative;}
+.nav-menu-item:hover{background:var(--vc);}
+.nav-menu-item.on{color:var(--v);background:var(--vc);font-weight:700;}
+.nav-menu-badge{margin-left:auto;min-width:18px;height:18px;background:#DC2626;border-radius:10px;color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px;}
 /* No top padding here on purpose - the swimlane's sticky bars (zona roja, the
    status header row) need `top:0` to mean truly flush against .ac's visible top
    edge (right under .ah), with zero built-in gap. Each tab's own first child adds
@@ -165,6 +175,13 @@ input,select,textarea{font-family:var(--f);}
 .moverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:600;align-items:center;justify-content:center;padding:16px;overflow-y:auto;}
 .moverlay.on{display:flex;}
 .mwin{background:var(--b);border-radius:var(--radb);width:100%;max-width:640px;box-shadow:var(--shf);animation:mup .2s ease;margin:auto;max-height:90vh;display:flex;flex-direction:column;}
+
+/* TicketModal - caja completa (chat + pedidos lado a lado en desktop/tablet).
+   En celular (ver el media query más abajo) se vuelve un carrusel de 2
+   páginas con scroll-snap en vez de 2 columnas - las medidas de escritorio
+   quedan exactamente igual que antes de este cambio. */
+.tk-modal-shell{display:flex;flex-direction:row;width:100%;max-width:1110px;margin:auto;border-radius:var(--radb);overflow:hidden;box-shadow:var(--shf);animation:mup .2s ease;max-height:90vh;}
+.tk-modal-chat{width:560px;flex-shrink:0;}
 @keyframes mup{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 .mhead{padding:20px 22px 14px;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:2px solid var(--brd);background:var(--b);z-index:10;border-radius:var(--radb) var(--radb) 0 0;flex-shrink:0;}
 .mtit{font-size:18px;font-weight:800;color:var(--n);}
@@ -214,6 +231,14 @@ input,select,textarea{font-family:var(--f);}
 .no-spin{-moz-appearance:textfield;}
 .hdr-ic-btn{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:8px;color:#fff;cursor:pointer;min-width:74px;flex-shrink:0;padding:5px 6px;font-size:10px;font-weight:700;line-height:1.15;text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;}
 .hdr-ic-btn:disabled{opacity:.6;cursor:not-allowed;}
+
+/* TicketModal/NuevoPedidoModal/DetallePedidoModal - fila de acciones del chat
+   (Formulario/Bloquear Link/Catálogo/Tomar lista). En celular se convierte en
+   un menú hamburguesa (mismos botones .hdr-ic-btn, mismos handlers - ver el
+   media query más abajo) en vez de ocultar/recortar la fila. */
+.tk-actions{display:flex;flex-wrap:wrap;gap:5px;flex-shrink:0;justify-content:flex-end;}
+.tk-hamburger{display:none;background:none;border:none;color:#fff;cursor:pointer;padding:4px;align-items:center;flex-shrink:0;}
+.tk-swipe-hint{display:none;}
 .idel{background:var(--rc);border:none;color:var(--r);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;}
 .idel:hover{background:var(--r);color:#fff;}
 
@@ -488,6 +513,45 @@ input,select,textarea{font-family:var(--f);}
   .inbox-back{display:flex;}
 }
 
+/* TicketModal EN CELULAR (<=680px): 2 columnas fijas (chat 560px + pedidos)
+   nunca cupieron en un celular - se convierte en un carrusel de 2 páginas de
+   ancho completo con scroll-snap nativo (sin JS de gestos: el navegador ya
+   maneja touch/mouse-drag/teclado). "Deslizo hacia la derecha y veo los
+   pedidos" - a pedido explícito del usuario, en vez de mostrar chat+pedido
+   apretados a la vez. El botón hamburguesa reemplaza la fila de acciones
+   (Formulario/Bloquear Link/Catálogo/Tomar lista) - mismos botones, mismos
+   handlers, solo cambian de fila horizontal a lista vertical en un menú. */
+@media (max-width:680px){
+  .tk-modal-shell{
+    overflow-x:auto; overflow-y:hidden;
+    scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch;
+    max-width:480px;
+  }
+  .tk-modal-chat{width:100%;flex:0 0 100%;scroll-snap-align:start;}
+  /* !important necesario: .tk-modal-orders también tiene .mwin + un style
+     inline con flex:1 (para el layout de escritorio) - sin esto, flex:1
+     "gana" contra esta regla de clase y el panel de pedidos queda angosto
+     (encontrado en pruebas reales: el carrusel solo alcanzaba a scrollear
+     ~100px en vez de una página completa). */
+  .tk-modal-orders{flex:0 0 100% !important;width:100% !important;scroll-snap-align:start;}
+  .tk-swipe-hint{
+    display:block;flex-shrink:0;text-align:center;padding:5px 8px;font-size:11px;
+    font-weight:700;color:var(--vd);background:var(--vc);border-bottom:1px solid var(--vm);
+  }
+  .tk-hamburger{display:flex;}
+  .tk-actions{display:none;}
+  .tk-actions.open{
+    display:flex;flex-direction:column;position:fixed;top:64px;right:12px;z-index:1000;
+    background:var(--b);border:1px solid var(--brd);border-radius:var(--rad);box-shadow:var(--shf);
+    padding:6px;width:210px;gap:2px;
+  }
+  .tk-actions.open .hdr-ic-btn{
+    width:100%;flex-direction:row;justify-content:flex-start;text-align:left;
+    background:none;border:none;color:var(--n);min-width:0;padding:9px 10px;font-size:13px;
+  }
+  .tk-actions.open .hdr-ic-btn:hover{background:var(--vc);}
+}
+
 /* PHONE PORTRAIT (<560px): swimlane itself stays out of scope (relies on the rules above + overflow-x:auto),
    but guard against page-level breakage and keep modals usable single-column */
 @media (max-width:560px){
@@ -513,13 +577,12 @@ input,select,textarea{font-family:var(--f);}
   .ur2{display:none;}
   .uav{width:26px;height:26px;font-size:11px;}
   .hlogo-t{font-size:15px;}
-  /* Los 4 tabs en icono-solo (patrón bottom-nav): a este ancho el label de texto
-     no cabe junto al ícono sin forzar scroll horizontal en .tabs, y un tab activo
-     con texto largo ("Tickets & Pedidos") dejaba los demás casi invisibles fuera
-     de pantalla. Cada botón conserva su `title` (tooltip/accesibilidad) - solo se
-     oculta el <span class="tab-label"> visualmente. */
-  .tab-label{display:none;}
-  .tab{padding:0 10px;font-size:11px;gap:0;}
+  /* La fila de tabs (aunque fuera solo-ícono) seguía sin caber bien a este
+     ancho junto al logo/badge/usuario - se reemplaza por un menú hamburguesa
+     (mismo tabItems, mismo filtro de rol - ver MainPage.tsx/.nav-menu de
+     arriba) a pedido explícito del usuario. */
+  .tabs{display:none;}
+  .nav-hamburger{display:flex;}
   /* Colores/fondo se quedan inline (no cambian con el viewport) - !important
      hace falta solo para ganarle al padding/minWidth/fontSize inline, mismo
      recurso ya usado una vez en este archivo para el mismo tipo de choque. */
