@@ -301,6 +301,18 @@ model Ticket {
   // cliente vuelva a escribir y complete el formulario de nuevo (Decreto 1377
   // de 2013, art. 10 - no se borra ni se asume nada retroactivamente).
   consent_given_at   DateTime? @db.Timestamptz
+  // Momento en que este ticket recibió el aviso de privacidad DENTRO del
+  // chat de WhatsApp (webhook.ts, mensaje de bienvenida - buildPrivacyNoticeMessage).
+  // Null = todavía no se le avisó. A diferencia del welcome_message/link de
+  // formulario (que SÍ se repiten cada día en el primer mensaje del día,
+  // isFirstMessageToday), este aviso se manda UNA sola vez por ticket, para
+  // siempre - un ticket que ya lo vio no lo vuelve a ver en un día posterior,
+  // para no molestar. Se estampa solo tras un envío exitoso a Meta (un envío
+  // fallido no cuenta como "avisado"). Todo ticket existente antes de esta
+  // columna (creada tras implementar esto) queda en null - su próximo mensaje,
+  // sea el día que sea, lo trata igual que a un cliente nuevo: se le avisa esa
+  // vez y nunca más.
+  privacy_notice_sent_at DateTime? @db.Timestamptz
 
   org                Organization      @relation(fields: [org_id], references: [id])
   messages           TicketMessage[]

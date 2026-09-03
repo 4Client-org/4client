@@ -285,9 +285,26 @@ async function ingestMessage(
         // pedido explícito: "el primer mensaje automático... diga al final, en
         // cursiva", para que quede como prueba de que se avisó antes de mandar
         // el link del formulario donde el cliente entrega sus datos.
-        const welcomeAndNotice = `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}\n\n${buildPrivacyNoticeMessage()}`;
+        //
+        // A diferencia del resto de este mensaje (que sí se repite cada día en
+        // el primer mensaje del día, isFirstMessageToday), el aviso en sí se
+        // manda UNA sola vez por ticket, para siempre - ticket.privacy_notice_sent_at
+        // es lo que lo recuerda. Todo ticket ya existente antes de esta columna
+        // queda en null, así que su próximo mensaje - sea el día que sea - lo
+        // trata igual que a un cliente nuevo: se le avisa esa vez y nunca más
+        // (pedido explícito, para no repetirlo a diario y molestar).
+        const needsPrivacyNotice = !ticket.privacy_notice_sent_at;
+        const welcomeAndNotice = needsPrivacyNotice
+          ? `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}\n\n${buildPrivacyNoticeMessage()}`
+          : `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
         try {
           await sendAndRecord(welcomeAndNotice);
+          // Estampado solo tras un envío exitoso a Meta - un envío fallido no
+          // cuenta como "avisado", el próximo mensaje del cliente lo vuelve a
+          // intentar en vez de darlo por hecho silenciosamente.
+          if (needsPrivacyNotice) {
+            await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { privacy_notice_sent_at: new Date() } });
+          }
         } catch (err) {
           await recordFailed(welcomeAndNotice, err);
         }
