@@ -18,6 +18,13 @@ model Organization {
   wpp_meta_token        String?
   wpp_meta_app_secret   String?
   welcome_message       String?
+  // Cuando está seteado, REEMPLAZA por completo el flujo normal de bienvenida
+  // (welcome_message + aviso + link de formulario + seguimiento) - se manda
+  // SOLO este texto, en cada primer mensaje del día, sin generar ningún link
+  // ni invitar a hacer pedido. Pensado para un número retirado/redirigido a
+  // otro (ej. "este número cambió, escríbenos al nuevo") donde mandar un
+  // link de pedido real sería confuso/incorrecto - ver webhook.ts.
+  wpp_redirect_message  String?
   // Org-wide kill switch for form links - "block ALL active links right now"
   // (e.g. the store closes early one day). Same mechanism as Ticket.form_token_min_iat
   // (public.ts's supersede check), just scoped to the whole org instead of one ticket:

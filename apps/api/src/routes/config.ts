@@ -13,7 +13,7 @@ export default async function configRoutes(fastify: FastifyInstance) {
         id: true, name: true, slug: true, plan: true,
         wpp_provider: true, wpp_phone: true,
         wpp_meta_phone_id: true,
-        welcome_message: true,
+        welcome_message: true, wpp_redirect_message: true,
         active: true, created_at: true,
       },
     });
@@ -27,6 +27,10 @@ export default async function configRoutes(fastify: FastifyInstance) {
       wpp_meta_token:    z.string().min(1).optional(),
       wpp_phone:         z.string().optional(),
       welcome_message:   z.string().max(1000).optional().nullable(),
+      // Ver comentario en schema.prisma - cuando está seteado, reemplaza por
+      // completo el flujo de bienvenida+formulario (pensado para un número
+      // retirado/redirigido a otro).
+      wpp_redirect_message: z.string().max(1000).optional().nullable(),
     }).safeParse(req.body);
 
     if (!body.success) {
@@ -44,7 +48,7 @@ export default async function configRoutes(fastify: FastifyInstance) {
         ...(wpp_meta_token !== undefined ? { wpp_meta_token: encryptSecret(wpp_meta_token) } : {}),
       },
       select: {
-        wpp_meta_phone_id: true, wpp_phone: true, welcome_message: true,
+        wpp_meta_phone_id: true, wpp_phone: true, welcome_message: true, wpp_redirect_message: true,
       },
     });
 
