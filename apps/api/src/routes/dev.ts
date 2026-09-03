@@ -82,7 +82,23 @@ async function queryTable(
       };
     case 'tickets':
       return {
-        rows: await prisma.ticket.findMany({ where: { org_id: orgId }, take: lim, skip: off, orderBy: { created_at: 'desc' } }),
+        // select explícito, no findMany() a secas - excluye lo sensible
+        // (raw_payload trae PII cruda de WhatsApp, form_link_token da acceso
+        // directo a ese cliente sin login) sin depender de `omit` (esta
+        // versión de Prisma Client no lo soporta - probado, tira TS2322).
+        // Encontrado en una auditoría de seguridad: este visor las devolvía
+        // sin filtrar, a cualquier organización, vía requireRole('dev') nomás.
+        rows: await prisma.ticket.findMany({
+          where: { org_id: orgId }, take: lim, skip: off, orderBy: { created_at: 'desc' },
+          select: {
+            id: true, org_id: true, phone: true, no_wpp_number: true, bsuid: true,
+            customer_name: true, wpp_thread_id: true, unread_count: true,
+            last_message_at: true, first_message_today_at: true, last_activity_at: true,
+            fecha: true, deferred_to: true, created_at: true,
+            form_link_sent_by: true, form_token_min_iat: true, form_link_opened_at: true,
+            link_failed_attempts: true, link_failed_total: true, link_blocked_until: true,
+          },
+        }),
         total: await prisma.ticket.count({ where: { org_id: orgId } }),
       };
     case 'ticket_messages':
@@ -90,6 +106,12 @@ async function queryTable(
         rows: await prisma.ticketMessage.findMany({
           where: { ticket: { org_id: orgId } },
           take: lim, skip: off, orderBy: { created_at: 'desc' },
+          select: {
+            id: true, ticket_id: true, direction: true, text: true,
+            media_url: true, media_type: true, media_caption: true, sent_by: true,
+            wpp_message_id: true, sent_at: true, created_at: true,
+            delivered: true, read_by_client: true, failed_reason: true,
+          },
         }),
         total: await prisma.ticketMessage.count({ where: { ticket: { org_id: orgId } } }),
       };
@@ -138,6 +160,16 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
     const { rows, total } = await queryTable(fastify.prisma, table as AllowedTable, targetOrgId, lim, off);
 
+    // Sin esto, un dev podía leer los datos de CUALQUIER organización (tickets,
+    // mensajes, usuarios...) sin dejar rastro alguno - a diferencia de cada
+    // escritura en este mismo archivo, que ya llama audit(). No bloquea ni
+    // reduce el límite de nada, solo deja constancia de quién miró qué y de qué
+    // organización, para poder revisar el uso de este visor si hiciera falta.
+    await audit(fastify.prisma, {
+      orgId: targetOrgId, actorId: req.user.userId, action: 'dev.db_read',
+      metadata: { table, limit: lim, offset: off },
+    });
+
     return reply.send({ data: rows, total, limit: lim, offset: off });
   });
 
@@ -148,6 +180,17 @@ export default async function devRoutes(fastify: FastifyInstance) {
     // even though it's exactly the environment this is meant for.
     if (config.RAILWAY_ENVIRONMENT_NAME === 'production') {
       return reply.status(403).send({ error: 'Seed deshabilitado en producción', code: 'FORBIDDEN' });
+    }
+    // Exigidas acá explícitamente (config.ts las deja opcionales para no
+    // romper un server que nunca corre /seed) - sin esto, un ambiente real
+    // sin estas 2 variables configuradas crearía/resetearía la cuenta admin y
+    // la cuenta dev (superusuario) con contraseñas conocidas de antemano por
+    // cualquiera con acceso al repo.
+    if (!config.SEED_ADMIN_PASS || !config.SEED_DEV_PASS) {
+      return reply.status(500).send({
+        error: 'SEED_ADMIN_PASS y SEED_DEV_PASS deben estar configuradas para poder sembrar datos - no hay un valor por defecto.',
+        code: 'MISSING_SEED_CREDENTIALS',
+      });
     }
 
     const logs: string[] = [];

@@ -61,6 +61,14 @@ model User {
   active        Boolean   @default(true)
   last_login    DateTime? @db.Timestamptz
   created_at    DateTime  @default(now()) @db.Timestamptz
+  // Bloqueo temporal por fuerza bruta - independiente del rate-limit HTTP (que
+  // por sí solo no alcanza a proteger una cuenta específica contra intentos
+  // repartidos entre varias IPs). Se resetean ambos en un login exitoso;
+  // failed_login_attempts sube en cada contraseña incorrecta contra un email
+  // que sí existe (ver routes/auth.ts) y determina cuánto dura el bloqueo la
+  // próxima vez que se cruce el umbral.
+  failed_login_attempts Int       @default(0)
+  locked_until           DateTime? @db.Timestamptz
 
   org                 Organization       @relation(fields: [org_id], references: [id])
   refresh_tokens      RefreshToken[]

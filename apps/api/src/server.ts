@@ -2,6 +2,7 @@ import 'dotenv/config';
 import * as Sentry from '@sentry/node';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
@@ -73,6 +74,14 @@ async function start() {
   const allowedOrigins = config.FRONTEND_URL.split(',').map((o) => o.trim());
   await fastify.register(cookie);
 
+  // Este API es puro JSON (nunca sirve HTML/estáticos) - los defaults de helmet
+  // (nosniff, X-Frame-Options: DENY, sin CSP problemático para requests que
+  // devuelven JSON) no rompen ningún cliente y agregan una capa defensiva de
+  // más para las rutas de files.ts que sí devuelven archivos subidos (facturas,
+  // catálogos) - si alguno tuviera contenido HTML/JS embebido, esto evita que
+  // el navegador lo ejecute como si fuera una página del propio origen del API.
+  await fastify.register(helmet);
+
   await fastify.register(cors, {
     origin: (origin, cb) => {
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
@@ -101,19 +110,35 @@ async function start() {
     max: 300,
     timeWindow: '1 minute',
     // Per-user instead of per-IP - an office/shared connection shouldn't have every
-    // user drawing from the same bucket. This global hook runs before the per-route
-    // `authenticate` preHandler, so req.user isn't populated yet; decode (not verify -
-    // this is just a bucketing key, not an auth decision) the bearer token directly.
-    // Falls back to IP for unauthenticated requests (public form, login - those have
-    // their own tighter per-route limits already).
-    keyGenerator: (req) => {
+    // user drawing from the same bucket. Falls back to IP for unauthenticated
+    // requests (public form, login - those have their own tighter per-route
+    // limits already).
+    //
+    // SECURITY: this MUST verify the token's signature, not just decode its
+    // payload - a previous version called `fastify.jwt.decode()` (no signature
+    // check) here, which let anyone pick their own rate-limit bucket by sending
+    // `Authorization: Bearer <header>.{"userId":"<random>"}.<garbage-signature>`
+    // on every request - a well-formed-but-forged token decodes fine, so a
+    // *different* fake userId each time meant a fresh bucket every time,
+    // completely defeating both this global limit AND the tighter per-route
+    // limits on /login, /login/verify-code and /refresh (found in a security
+    // audit, confirmed exploitable). `req.jwtVerify()` is the same verified
+    // decorator `authenticate` (middleware/auth.ts) uses - an invalid/expired/
+    // forged token throws and falls through to the IP bucket below, same as no
+    // Authorization header at all. Verifying twice (once here, once again in
+    // `authenticate` for routes that need it) costs one extra HMAC check per
+    // request - cheap, and the only way to make this bucket key trustworthy.
+    keyGenerator: async (req) => {
       const auth = req.headers.authorization;
       if (auth?.startsWith('Bearer ')) {
         try {
-          const decoded = fastify.jwt.decode(auth.slice(7)) as { userId?: string } | null;
-          if (decoded?.userId) return decoded.userId;
+          await req.jwtVerify();
+          // Form-link tokens (routes/public.ts) verify fine (same JWT_SECRET)
+          // but carry no userId - treat them like any other unauthenticated
+          // request rather than handing them a free per-"user" bucket.
+          if (req.user?.userId) return req.user.userId;
         } catch {
-          /* fall through to IP */
+          /* invalid/expired/forged token - fall through to IP */
         }
       }
       return req.ip;

@@ -336,7 +336,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        keyGenerator: (req) => (req.body as { token?: string } | undefined)?.token || req.ip,
+        // IP + token combined, not token alone - a per-route rateLimit config
+        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
+        // `token` let an attacker get a fresh 15-request budget on every call
+        // just by varying it (even to garbage) - confirmed in a security audit.
+        // Combining both means varying the token no longer helps: the same IP
+        // still shares one budget across however many tokens it tries.
+        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
       },
     },
   }, async (req, reply) => {
@@ -884,7 +890,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        keyGenerator: (req) => (req.body as { token?: string } | undefined)?.token || req.ip,
+        // IP + token combined, not token alone - a per-route rateLimit config
+        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
+        // `token` let an attacker get a fresh 15-request budget on every call
+        // just by varying it (even to garbage) - confirmed in a security audit.
+        // Combining both means varying the token no longer helps: the same IP
+        // still shares one budget across however many tokens it tries.
+        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
       },
     },
   }, async (req, reply) => {
@@ -952,16 +964,5 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updatedWithFlags as any);
 
     return reply.send({ data: { ok: true } });
-  });
-
-  // Legacy: GET /api/v1/public/org/:slug - kept for backward compat
-  fastify.get('/org/:slug', async (req, reply) => {
-    const { slug } = req.params as { slug: string };
-    const org = await fastify.prisma.organization.findFirst({
-      where: { slug, active: true },
-      select: { id: true, name: true, slug: true },
-    });
-    if (!org) return reply.status(404).send({ error: 'Organización no encontrada', code: 'NOT_FOUND' });
-    return reply.send({ data: org });
   });
 }

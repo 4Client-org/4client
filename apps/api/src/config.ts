@@ -25,8 +25,15 @@ const envSchema = z.object({
   R2_BUCKET_NAME:            z.string().optional(),
   R2_PUBLIC_URL:             z.string().optional(),
   SENTRY_DSN:                z.string().optional(),
-  SEED_ADMIN_PASS:           z.string().min(8).default('admin123'),
-  SEED_DEV_PASS:             z.string().min(8).default('josejose'),
+  // Sin default a propósito (antes 'admin123'/'josejose' - literales en este
+  // mismo archivo, público). Quedan OPCIONALES acá (no se exigen al arrancar
+  // el servidor entero - romperías un dev local o CI que nunca las necesitó)
+  // pero routes/dev.ts's POST /dev/seed las exige explícitamente y rechaza la
+  // request si faltan, en vez de caer a un valor conocido de antemano por
+  // cualquiera con acceso al repo - mismo criterio que ya usa scripts/seed.ts
+  // de forma independiente.
+  SEED_ADMIN_PASS:           z.string().min(8).optional(),
+  SEED_DEV_PASS:             z.string().min(8).optional(),
   RESEND_API_KEY:            z.string().optional(),
   // Explicit opt-in, not derived from RAILWAY_ENVIRONMENT_NAME - this scopes the
   // login verification-code step to dev only for now (per the original ask),
@@ -53,3 +60,16 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+// SECURITY: without this key, lib/crypto.ts's encryptSecret() silently becomes
+// a no-op (returns the plaintext unchanged) - every organization's WhatsApp
+// access token would get written to `organizations.wpp_meta_token` in clear
+// text instead of AES-256-GCM ciphertext, with no error or warning anywhere.
+// Same RAILWAY_ENVIRONMENT_NAME-gated fail-closed pattern already used for
+// META_APP_SECRET (webhook.ts) - a dev/staging deploy with no key configured
+// yet is expected and shouldn't crash-loop, but the real production
+// environment must never silently downgrade to storing these in plaintext.
+if (!config.WPP_TOKEN_ENC_KEY && config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+  console.error('❌ WPP_TOKEN_ENC_KEY es obligatorio en producción - sin él, los tokens de WhatsApp de cada organización se guardarían sin cifrar. Configúralo antes de desplegar (64 hex chars = 32 bytes).');
+  process.exit(1);
+}

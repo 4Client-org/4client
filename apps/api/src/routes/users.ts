@@ -112,6 +112,16 @@ export default async function userRoutes(fastify: FastifyInstance) {
       data: { password_hash },
     });
     if (result.count === 0) return reply.status(404).send({ error: 'Usuario no encontrado', code: 'NOT_FOUND' });
+    // Un reseteo de contraseña es casi siempre por sospecha de cuenta
+    // comprometida - sin esto, una sesión ya robada seguía siendo válida
+    // hasta por 7 días más (la vida del refresh token), pese a que el admin
+    // ya "arregló" el problema cambiando la clave. Cierra todos los
+    // dispositivos de una vez; el usuario tiene que volver a iniciar sesión
+    // con la contraseña nueva en cada uno.
+    await fastify.prisma.refreshToken.updateMany({
+      where: { user_id: id, revoked: false },
+      data: { revoked: true },
+    });
     await audit(fastify.prisma, {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'user.reset_password', targetId: id,
     });
