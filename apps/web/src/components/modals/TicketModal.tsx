@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu, Trash2 } from 'lucide-react';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
@@ -52,6 +52,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
   const [reply, setReply] = useState('');
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [showEraseConfirm, setShowEraseConfirm] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [forwardMsg, setForwardMsg] = useState<any | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -197,6 +198,18 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     onError: (e: any) => toast(e.message ?? 'No se pudo bloquear el link', true),
   });
 
+  // Ley 1581 de 2012 - derecho de supresión. Admin-only (mismo gate que el
+  // backend) - se cierra el chat después, no queda nada más que ver acá.
+  const eraseMut = useMutation({
+    mutationFn: () => api.post<{ data: { ordersAnonymized: number } }>(`/inbox/${ticketId}/erase-data`, {}),
+    onSuccess: (res) => {
+      const { ordersAnonymized } = res.data;
+      toast(`Datos del cliente eliminados (${ordersAnonymized} pedido${ordersAnonymized === 1 ? '' : 's'} anonimizado${ordersAnonymized === 1 ? '' : 's'})`);
+      onClose();
+    },
+    onError: (e: any) => toast(e.message ?? 'No se pudo eliminar la información del cliente', true),
+  });
+
   const activeOrders = (ticket?.orders ?? []).filter((o: any) => o.status !== 'papelera');
   const hasOrders = activeOrders.length > 0;
 
@@ -306,6 +319,17 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
               </button>
+              {user?.role === 'admin' && (
+                <button
+                  className="hdr-ic-btn"
+                  title="Eliminar la información de este cliente (a solicitud suya) - Ley 1581 de 2012"
+                  onClick={() => setShowEraseConfirm(true)}
+                  disabled={eraseMut.isPending}
+                >
+                  <Trash2 size={13} />
+                  <span>Eliminar<br />datos</span>
+                </button>
+              )}
               <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />
               {canTomarLista && (
                 <button
@@ -552,6 +576,16 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           danger
           onConfirm={() => { blockLinkMut.mutate(); setShowBlockConfirm(false); }}
           onCancel={() => setShowBlockConfirm(false)}
+        />
+      )}
+
+      {showEraseConfirm && (
+        <ConfirmModal
+          message="Esto borra todos los mensajes del chat. Los pedidos de este cliente NO se borran (quedan como soporte) pero quedan sin nombre, teléfono ni dirección. Esta acción no se puede deshacer. ¿Eliminar la información de este cliente?"
+          confirmLabel="Eliminar datos"
+          danger
+          onConfirm={() => { eraseMut.mutate(); setShowEraseConfirm(false); }}
+          onCancel={() => setShowEraseConfirm(false)}
         />
       )}
 

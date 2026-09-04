@@ -55,12 +55,27 @@ model User {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   org_id        String    @db.Uuid
   email         String    @db.VarChar(200)
+  // Preparación para pasar el login de email a nombre de usuario (pedido
+  // explícito, no implementado todavía - /login sigue pidiendo email por
+  // ahora). Nullable porque las cuentas existentes no tienen uno todavía y se
+  // van a ir completando desde Configuración > Usuarios; único en toda la
+  // plataforma igual que email (mismo razonamiento que la migración
+  // unique_user_email de arriba).
+  username      String?   @unique @db.VarChar(30)
   password_hash String    @db.VarChar(100)
   name          String    @db.VarChar(200)
   role          String    @db.VarChar(20)
   active        Boolean   @default(true)
   last_login    DateTime? @db.Timestamptz
   created_at    DateTime  @default(now()) @db.Timestamptz
+  // Bloqueo temporal por fuerza bruta - independiente del rate-limit HTTP (que
+  // por sí solo no alcanza a proteger una cuenta específica contra intentos
+  // repartidos entre varias IPs). Se resetean ambos en un login exitoso;
+  // failed_login_attempts sube en cada contraseña incorrecta contra un email
+  // que sí existe (ver routes/auth.ts) y determina cuánto dura el bloqueo la
+  // próxima vez que se cruce el umbral.
+  failed_login_attempts Int       @default(0)
+  locked_until           DateTime? @db.Timestamptz
 
   org                 Organization       @relation(fields: [org_id], references: [id])
   refresh_tokens      RefreshToken[]
@@ -77,6 +92,16 @@ model User {
   platform_charges_created PlatformCharge[]
 
   @@unique([org_id, email])
+  // Login único global (routes/auth.ts busca por email SIN filtrar por
+  // org_id - un mismo email en dos organizaciones distintas hacía que
+  // findFirst() devolviera una fila arbitraria, y la cuenta "perdedora" nunca
+  // podía loguearse). El compound de arriba se deja intacto porque seed.ts/
+  // dev.ts ya lo usan como key de upsert - este es un constraint aparte, no
+  // un reemplazo. Decisión explícita del negocio: un mismo correo no puede
+  // administrar dos organizaciones distintas en la plataforma (si hiciera
+  // falta alguna vez, un alias tipo admin+otronegocio@gmail.com lo resuelve
+  // sin costo).
+  @@unique([email])
   @@map("users")
 }
 
@@ -267,6 +292,27 @@ model Ticket {
   // + all invoices) for this ticket until this timestamp, self-expiring with no
   // staff action needed (unlike the manual org-wide "bloquear todos los links").
   link_blocked_until   DateTime? @db.Timestamptz
+  // Ley 1581 de 2012 (protección de datos, Colombia) - momento en que este
+  // cliente aceptó la Política de Tratamiento de Datos en el formulario de
+  // pedido (routes/public.ts, POST /submit). Null = todavía no aceptó (se le
+  // exige antes de dejar enviar el pedido). Se guarda UNA sola vez por ticket
+  // - un pedido posterior del mismo cliente no vuelve a pedirlo. Un ticket ya
+  // existente antes de que esta política existiera queda en null hasta que el
+  // cliente vuelva a escribir y complete el formulario de nuevo (Decreto 1377
+  // de 2013, art. 10 - no se borra ni se asume nada retroactivamente).
+  consent_given_at   DateTime? @db.Timestamptz
+  // Momento en que este ticket recibió el aviso de privacidad DENTRO del
+  // chat de WhatsApp (webhook.ts, mensaje de bienvenida - buildPrivacyNoticeMessage).
+  // Null = todavía no se le avisó. A diferencia del welcome_message/link de
+  // formulario (que SÍ se repiten cada día en el primer mensaje del día,
+  // isFirstMessageToday), este aviso se manda UNA sola vez por ticket, para
+  // siempre - un ticket que ya lo vio no lo vuelve a ver en un día posterior,
+  // para no molestar. Se estampa solo tras un envío exitoso a Meta (un envío
+  // fallido no cuenta como "avisado"). Todo ticket existente antes de esta
+  // columna (creada tras implementar esto) queda en null - su próximo mensaje,
+  // sea el día que sea, lo trata igual que a un cliente nuevo: se le avisa esa
+  // vez y nunca más.
+  privacy_notice_sent_at DateTime? @db.Timestamptz
 
   org                Organization      @relation(fields: [org_id], references: [id])
   messages           TicketMessage[]
@@ -413,6 +459,17 @@ model Order {
   papelera_reason        String?  @db.VarChar(500)
   papelera_by            String?  @db.Uuid
   status_before_papelera String?  @db.VarChar(20)
+  // Ley 1581 de 2012 - momento en que el cliente marcó el checkbox de
+  // consentimiento AL ENVIAR ESTE PEDIDO puntual, vía el formulario público
+  // (routes/public.ts, POST /submit). A diferencia de Ticket.consent_given_at
+  // (que solo guarda la PRIMERA vez, como huella histórica), este campo se
+  // exige y se estampa en CADA envío del formulario - a diferencia del chat de
+  // WhatsApp (donde el número de teléfono ya identifica a quien escribe), acá
+  // no hay forma de probar legalmente quién está detrás de cada envío web, así
+  // que cada pedido lleva su propia prueba de aceptación. Null en un pedido
+  // creado por staff (canal 'call'/'encargado', no source:'form') - esa
+  // exigencia es exclusiva del formulario público.
+  consent_confirmed_at DateTime? @db.Timestamptz
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 

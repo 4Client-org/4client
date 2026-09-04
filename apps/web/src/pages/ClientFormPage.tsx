@@ -17,6 +17,11 @@ interface DayOrder {
 const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta', 'Pesos $'];
 const DEFAULT_UNIT = 'Kilo';
 
+// Fijo por ahora - una sola organización real hoy. Cuando haya un segundo
+// cliente en la plataforma, esto pasa a ser un campo de Organization (URL de
+// política propia por negocio) en vez de una constante compartida acá.
+const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web/politica-privacidad.html';
+
 const STATUS_LABEL_CLIENT: Record<string, string> = {
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo para entrega',
   camino: 'En camino', cerrado: 'Entregado',
@@ -66,6 +71,13 @@ export default function ClientFormPage() {
   // products) but never auto-applied to `selected`. Null until loaded, then
   // either an item list or an empty array (nothing to repeat).
   const [lastOrder, setLastOrder] = useState<LastOrderItem[] | null>(null);
+  // Ley 1581 de 2012 - se exige en CADA pedido, no solo el primero (a
+  // diferencia del aviso por WhatsApp, que sí es una sola vez - acá no hay
+  // forma de probar legalmente quién está detrás de cada envío web, así que
+  // cada pedido necesita su propia prueba de aceptación). Se resetea a false
+  // después de cada envío exitoso - el próximo pedido tiene que volver a
+  // marcarlo, no queda "recordado" entre pedidos.
+  const [consentChecked, setConsentChecked] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   // null = not decided yet; 'new' = a separate order; any other value = the id of
   // the existing order being edited. There's no "choose which order" menu
@@ -536,6 +548,10 @@ export default function ClientFormPage() {
       summaryRef.current?.scrollIntoView({ behavior: 'smooth' });
       return;
     }
+    if (!consentChecked) {
+      setSubmitError('Debes aceptar la Política de Privacidad para continuar');
+      return;
+    }
     submittingRef.current = true;
     setSubmitError('');
     setSubmitting(true);
@@ -549,6 +565,9 @@ export default function ClientFormPage() {
           address: address.trim(),
           payment_method: paymentMethod || undefined,
           merge_order_id: mergeTarget && mergeTarget !== 'new' ? mergeTarget : undefined,
+          // Se manda en CADA pedido, no solo el primero - el backend lo exige
+          // siempre y lo guarda por separado en cada pedido (Order.consent_confirmed_at).
+          consent: consentChecked,
           items: selected.map(i => ({ product_name: i.product_name, quantity_label: i.quantity_label, ...(i.isManual ? { is_manual: true } : {}) })),
         }),
       });
@@ -576,6 +595,9 @@ export default function ClientFormPage() {
         setSubmitError(err.error ?? 'Hubo un problema. Intenta de nuevo.');
         return;
       }
+      // Se resetea para el próximo pedido - cada envío necesita su propia
+      // marca explícita, no se reutiliza de un pedido a otro.
+      setConsentChecked(false);
       setState('done');
       try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     } catch {
@@ -660,6 +682,47 @@ export default function ClientFormPage() {
           Si quieres hacer un pedido nuevo, puedes seguir usando este mismo link.
         </div>
         <button onClick={continueToForm} style={btnPrimary}>Hacer un pedido</button>
+      </div>
+    </div>
+  );
+
+  // Ley 1581 de 2012 - pantalla propia, ANTES del catálogo: si acepta, pasa
+  // al pedido; si no, no ve nada más. No hay botón "Continuar" aparte -
+  // marcar el checkbox YA es la confirmación, revela el formulario de una vez
+  // (no queda forma de desmarcarlo después, el checkbox solo vive acá). Se
+  // exige por CADA pedido - vuelve a aparecer cuando consentChecked se resetea
+  // tras cada envío (ver handleSubmit), incluso para editar un pedido ya
+  // hecho (continueToForm también entra por 'catalog').
+  if (state === 'catalog' && !consentChecked) return (
+    <div style={page}>
+      <div style={header}>
+        <ShoppingCart size={22} color="#fff" />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>{orgName}</div>
+          {clientName && <div style={{ fontSize: 12, opacity: 0.85 }}>Hola, {clientName}</div>}
+        </div>
+      </div>
+      <div style={{ background: '#fff', borderRadius: 18, margin: '24px 16px', padding: '28px 20px', boxShadow: '0 2px 12px rgba(0,0,0,.1)' }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: GREEN, marginBottom: 10 }}>Antes de continuar</div>
+        <div style={{ fontSize: 14, color: '#555', lineHeight: 1.6, marginBottom: 22 }}>
+          Para hacer tu pedido necesitamos tu confirmación:
+        </div>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 14, color: '#333', lineHeight: 1.5, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={consentChecked}
+            onChange={e => setConsentChecked(e.target.checked)}
+            style={{ marginTop: 3, flexShrink: 0, width: 18, height: 18 }}
+            autoFocus
+          />
+          <span>
+            Leí y acepto la{' '}
+            <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" style={{ color: GREEN, fontWeight: 700, textDecoration: 'underline' }}>
+              Política de Privacidad
+            </a>
+            {' '}de {orgName || 'este negocio'}.
+          </span>
+        </label>
       </div>
     </div>
   );
@@ -977,6 +1040,10 @@ export default function ClientFormPage() {
             Debe haber al menos un producto
           </div>
         )}
+        {/* El checkbox de consentimiento ya no vive acá - se movió a su propia
+            pantalla ANTES del catálogo (ver el bloque `state === 'catalog' &&
+            !consentChecked` más arriba). Para llegar hasta este botón ya tuvo
+            que aceptarla, así que no hace falta repetirla acá. */}
         {submitError && <div style={{ color: '#DC2626', fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{submitError}</div>}
         <div style={{ display: 'flex', gap: 10 }}>
           {selectedCount > 0 && (

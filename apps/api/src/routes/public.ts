@@ -336,7 +336,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        keyGenerator: (req) => (req.body as { token?: string } | undefined)?.token || req.ip,
+        // IP + token combined, not token alone - a per-route rateLimit config
+        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
+        // `token` let an attacker get a fresh 15-request budget on every call
+        // just by varying it (even to garbage) - confirmed in a security audit.
+        // Combining both means varying the token no longer helps: the same IP
+        // still shares one budget across however many tokens it tries.
+        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
       },
     },
   }, async (req, reply) => {
@@ -352,6 +358,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // closed it while the client was filling the form) this just falls through to
       // creating a new order instead of blocking the submission.
       merge_order_id: z.string().uuid().optional(),
+      // Optional a nivel de zod a propósito (así el chequeo de abajo puede
+      // devolver el mensaje específico CONSENT_REQUIRED en vez del genérico
+      // VALIDATION_ERROR si falta) - pero se exige en CADA envío, no solo el
+      // primero. A diferencia del chat de WhatsApp (donde el número de
+      // teléfono ya identifica a quien escribe), en la web no hay forma de
+      // probar legalmente quién está detrás de cada envío, así que cada
+      // pedido necesita su propia prueba de aceptación (Order.consent_confirmed_at).
+      consent: z.boolean().optional(),
       items: z.array(z.object({
         product_name:   z.string().min(1).max(200),
         quantity_label: z.string().max(100),
@@ -368,6 +382,24 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       ticket = await loadTicketByFormToken(body.data.token);
     } catch (err) {
       return sendInvalidToken(err, reply);
+    }
+
+    // Ley 1581 de 2012 - consentimiento informado antes de procesar el pedido.
+    // Se exige en CADA envío (ver comentario del schema de arriba) - la fecha
+    // exacta de ESTA aceptación queda en Order.consent_confirmed_at más abajo,
+    // en el mismo objeto `data` que crea/actualiza el pedido en sí.
+    if (body.data.consent !== true) {
+      return reply.status(400).send({
+        error: 'Debes aceptar la Política de Privacidad para poder enviar tu pedido.',
+        code: 'CONSENT_REQUIRED',
+      });
+    }
+    const consentConfirmedAt = new Date();
+    // Ticket.consent_given_at solo guarda la PRIMERA vez, como huella histórica -
+    // no gatea nada (ya no hace falta, se exige siempre) y nunca se pisa una
+    // vez seteada.
+    if (!ticket.consent_given_at) {
+      await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { consent_given_at: consentConfirmedAt } });
     }
 
     const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);
@@ -485,6 +517,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             ...(addressChanged ? { address: body.data.address } : {}),
             ...(paymentChanged ? { payment_method: body.data.payment_method } : {}),
             client_modified: true,
+            consent_confirmed_at: consentConfirmedAt,
             items: { deleteMany: {}, create: mergedItemsData },
           },
           include: {
@@ -728,6 +761,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           source: 'form',
           registered_by: actorUser.id,
           fecha: todayLocal,
+          consent_confirmed_at: consentConfirmedAt,
           items: { create: orderItems },
         },
         include: {
@@ -884,7 +918,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        keyGenerator: (req) => (req.body as { token?: string } | undefined)?.token || req.ip,
+        // IP + token combined, not token alone - a per-route rateLimit config
+        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
+        // `token` let an attacker get a fresh 15-request budget on every call
+        // just by varying it (even to garbage) - confirmed in a security audit.
+        // Combining both means varying the token no longer helps: the same IP
+        // still shares one budget across however many tokens it tries.
+        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
       },
     },
   }, async (req, reply) => {
@@ -952,16 +992,5 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     fastify.io.to(`org:${ticket.org_id}`).emit('order:updated', updatedWithFlags as any);
 
     return reply.send({ data: { ok: true } });
-  });
-
-  // Legacy: GET /api/v1/public/org/:slug - kept for backward compat
-  fastify.get('/org/:slug', async (req, reply) => {
-    const { slug } = req.params as { slug: string };
-    const org = await fastify.prisma.organization.findFirst({
-      where: { slug, active: true },
-      select: { id: true, name: true, slug: true },
-    });
-    if (!org) return reply.status(404).send({ error: 'Organización no encontrada', code: 'NOT_FOUND' });
-    return reply.send({ data: org });
   });
 }

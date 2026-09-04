@@ -17,6 +17,19 @@ const loginSchema = z.object({
 const CODE_TTL_MS = 5 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
 
+// Bloqueo por cuenta tras fuerza bruta - independiente del rate-limit HTTP
+// (que solo limita por IP/bucket, no por cuenta - un ataque repartido entre
+// varias IPs lo esquiva por completo). Escalonado: se bloquea cada vez que
+// los intentos fallidos cruzan un múltiplo de LOCKOUT_THRESHOLD, por cada vez
+// más tiempo.
+const LOCKOUT_THRESHOLD = 5;
+function lockoutDurationMs(failedAttempts: number): number {
+  const cycles = Math.floor(failedAttempts / LOCKOUT_THRESHOLD);
+  if (cycles <= 1) return 5 * 60 * 1000;   // primeros 5 fallos -> 5 min
+  if (cycles === 2) return 15 * 60 * 1000; // otros 5 más -> 15 min
+  return 60 * 60 * 1000;                   // de ahí en adelante -> 1 hora
+}
+
 type UserWithOrg = {
   id: string; org_id: string; email: string; name: string; role: string;
   active: boolean; last_login: Date | null; created_at: Date;
@@ -104,17 +117,68 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     const { email, password } = body.data;
 
+    // Sin org_id a propósito - el login no pregunta a qué organización se
+    // entra, solo email+password. Esto SOLO es seguro porque email tiene
+    // @@unique([email]) en schema.prisma (a nivel de toda la plataforma, no
+    // por organización) - antes de ese constraint, dos organizaciones podían
+    // tener cada una un usuario con el mismo email y esta consulta devolvía
+    // una fila arbitraria, dejando a una de las dos cuentas sin poder
+    // loguearse nunca (encontrado en una auditoría de seguridad).
     const user = await fastify.prisma.user.findFirst({
       where: { email: email.toLowerCase(), active: true },
       include: { org: true },
     });
+
+    // Cuenta bloqueada por intentos fallidos previos - corta ANTES de gastar el
+    // bcrypt.compare de abajo (no hay razón para seguir intentando validar la
+    // contraseña de una cuenta que ya está en cooldown). Mensaje explícito (no
+    // el genérico "credenciales incorrectas") porque acá sí vale más que el
+    // dueño legítimo sepa por qué no puede entrar - es el mismo trade-off que
+    // hace cualquier banco/Gmail al mostrar "demasiados intentos".
+    if (user?.locked_until && user.locked_until > new Date()) {
+      const minutesLeft = Math.ceil((user.locked_until.getTime() - Date.now()) / 60000);
+      return reply.status(429).send({
+        error: `Demasiados intentos fallidos. Intenta de nuevo en ${minutesLeft} minuto${minutesLeft === 1 ? '' : 's'}.`,
+        code: 'ACCOUNT_LOCKED',
+      });
+    }
 
     // Always run bcrypt to prevent timing-based user enumeration
     const hashToCheck = user?.password_hash ?? DUMMY_HASH;
     const valid = await bcrypt.compare(password, hashToCheck);
 
     if (!user || !user.org.active || !valid) {
+      // Solo se cuenta/bloquea contra una cuenta REAL - una contraseña
+      // incorrecta contra un email que no existe no escribe nada (no hay fila
+      // que actualizar, y tampoco aportaría ninguna protección real).
+      if (user) {
+        // { increment: 1 } es un UPDATE atómico en la DB (SET x = x + 1), no
+        // "leer, sumar en JS, escribir" - varios logins fallidos en paralelo
+        // contra la misma cuenta no pueden pisarse el contador entre sí (misma
+        // razón que el claim atómico de /login/verify-code más abajo, aunque
+        // acá la explotabilidad es menor: bcrypt.compare ya frena el throughput
+        // por sí solo).
+        const { failed_login_attempts: attempts } = await fastify.prisma.user.update({
+          where: { id: user.id },
+          data: { failed_login_attempts: { increment: 1 } },
+          select: { failed_login_attempts: true },
+        });
+        if (attempts % LOCKOUT_THRESHOLD === 0) {
+          await fastify.prisma.user.update({
+            where: { id: user.id },
+            data: { locked_until: new Date(Date.now() + lockoutDurationMs(attempts)) },
+          });
+        }
+      }
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
+    }
+
+    // Login correcto - limpia cualquier racha de fallos previa.
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { failed_login_attempts: 0, locked_until: null },
+      });
     }
 
     // Two gates, both must pass: config.REQUIRE_2FA (per-environment master
@@ -162,13 +226,25 @@ export default async function authRoutes(fastify: FastifyInstance) {
     if (!stored || stored.expires_at <= new Date()) {
       return reply.status(401).send({ error: 'Código inválido o expirado, inicia sesión de nuevo', code: 'CODE_EXPIRED' });
     }
-    if (stored.attempts >= MAX_CODE_ATTEMPTS) {
+
+    // Atomic claim-an-attempt-slot, not "read attempts, decide, then increment
+    // on failure" (the old shape) - that had a check-then-act race: N requests
+    // fired in parallel (the rate limit alone allows 20/min) could all read the
+    // same pre-increment `attempts` value and all slip in under MAX_CODE_ATTEMPTS
+    // before any of their increments committed, turning a "5 guesses" limit on a
+    // 6-digit code into something much weaker. Folding the bound INTO the UPDATE's
+    // WHERE means Postgres's own row-level locking serializes concurrent attempts
+    // on this row - at most MAX_CODE_ATTEMPTS ever win the claim, full stop.
+    const claim = await fastify.prisma.loginVerificationCode.updateMany({
+      where: { id: stored.id, attempts: { lt: MAX_CODE_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    if (claim.count === 0) {
       return reply.status(401).send({ error: 'Demasiados intentos, inicia sesión de nuevo', code: 'CODE_LOCKED' });
     }
 
     const codeHash = crypto.createHash('sha256').update(body.data.code).digest('hex');
     if (codeHash !== stored.code_hash) {
-      await fastify.prisma.loginVerificationCode.update({ where: { id: stored.id }, data: { attempts: { increment: 1 } } });
       return reply.status(401).send({ error: 'Código incorrecto', code: 'INVALID_CODE' });
     }
 

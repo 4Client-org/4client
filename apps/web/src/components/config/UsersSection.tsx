@@ -20,8 +20,8 @@ export default function UsersSection() {
   const [showCreate, setShowCreate] = useState(false);
   const [resetId, setResetId] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', email: '', role: '' });
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'encargado' as string });
+  const [editForm, setEditForm] = useState({ name: '', email: '', username: '', role: '' });
+  const [form, setForm] = useState({ name: '', email: '', username: '', password: '', role: 'encargado' as string });
   const [newPass, setNewPass] = useState('');
   const [confirmToggle, setConfirmToggle] = useState<{ id: string; name: string; active: boolean } | null>(null);
 
@@ -36,7 +36,7 @@ export default function UsersSection() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users-admin'] });
       setShowCreate(false);
-      setForm({ name: '', email: '', password: '', role: 'encargado' });
+      setForm({ name: '', email: '', username: '', password: '', role: 'encargado' });
       toast('Usuario creado exitosamente');
     },
     onError: (e: any) => toast(e.message, true),
@@ -54,7 +54,7 @@ export default function UsersSection() {
   });
 
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; name: string; email: string; role: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; name: string; email: string; username?: string; role: string }) =>
       api.patch(`/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users-admin'] });
@@ -81,19 +81,29 @@ export default function UsersSection() {
     if (!form.email.trim()) return toast('El correo es obligatorio', true);
     if (!form.password) return toast('La contraseña es obligatoria', true);
     if (form.password.length < 6) return toast('La contraseña debe tener al menos 6 caracteres', true);
-    create.mutate({ name: form.name.trim(), email: form.email.trim().toLowerCase(), password: form.password, role: form.role });
+    if (form.username.trim() && form.username.trim().length < 3) return toast('El nombre de usuario debe tener mínimo 3 caracteres', true);
+    create.mutate({
+      name: form.name.trim(), email: form.email.trim().toLowerCase(), password: form.password, role: form.role,
+      // Se omite del todo si quedó vacío - el backend lo trata como "todavía
+      // sin asignar" (columna nullable), no como un valor real que validar.
+      ...(form.username.trim() ? { username: form.username.trim().toLowerCase() } : {}),
+    });
   }
 
   function openEdit(u: any) {
     setEditId(u.id);
-    setEditForm({ name: u.name, email: u.email, role: u.role });
+    setEditForm({ name: u.name, email: u.email, username: u.username ?? '', role: u.role });
     setResetId(null);
   }
 
   function handleUpdate() {
     if (!editForm.name.trim()) return toast('El nombre es obligatorio', true);
     if (!editForm.email.trim()) return toast('El correo es obligatorio', true);
-    update.mutate({ id: editId!, name: editForm.name.trim(), email: editForm.email.trim(), role: editForm.role });
+    if (editForm.username.trim() && editForm.username.trim().length < 3) return toast('El nombre de usuario debe tener mínimo 3 caracteres', true);
+    update.mutate({
+      id: editId!, name: editForm.name.trim(), email: editForm.email.trim(), role: editForm.role,
+      ...(editForm.username.trim() ? { username: editForm.username.trim().toLowerCase() } : {}),
+    });
   }
 
   return (
@@ -130,6 +140,12 @@ export default function UsersSection() {
               <input className="fi" type="email" value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                 placeholder="correo@empresa.com" />
+            </div>
+            <div>
+              <label className="fl">Nombre de usuario</label>
+              <input className="fi" value={form.username}
+                onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                placeholder="ej: jperez (opcional por ahora)" />
             </div>
             <div>
               <label className="fl">Contraseña (mín. 6 caracteres) *</label>
@@ -180,7 +196,9 @@ export default function UsersSection() {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</span>
-                    <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 2 }}>{u.email}</div>
+                    <div style={{ fontSize: 12, color: 'var(--gt)', marginTop: 2 }}>
+                      {u.email}{u.username ? ` · @${u.username}` : ''}
+                    </div>
                   </div>
                 </div>
                 <div className="user-card-meta" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -237,7 +255,7 @@ export default function UsersSection() {
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--v)', marginBottom: 10 }}>
                     Editar datos de {u.name}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginBottom: 10 }}>
                     <div>
                       <label className="fl" style={{ fontSize: 11 }}>Nombre *</label>
                       <input className="fi" value={editForm.name}
@@ -248,6 +266,13 @@ export default function UsersSection() {
                       <label className="fl" style={{ fontSize: 11 }}>Correo *</label>
                       <input className="fi" type="email" value={editForm.email}
                         onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))}
+                        style={{ padding: '8px 11px', fontSize: 13 }} />
+                    </div>
+                    <div>
+                      <label className="fl" style={{ fontSize: 11 }}>Nombre de usuario</label>
+                      <input className="fi" value={editForm.username}
+                        onChange={e => setEditForm(f => ({ ...f, username: e.target.value }))}
+                        placeholder="opcional por ahora"
                         style={{ padding: '8px 11px', fontSize: 13 }} />
                     </div>
                     <div>

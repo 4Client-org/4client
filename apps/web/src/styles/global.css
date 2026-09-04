@@ -620,6 +620,18 @@ input,select,textarea{font-family:var(--f);}
   .user-card-row{flex-direction:column;align-items:stretch;gap:8px;}
   .user-card-meta{flex-wrap:wrap;}
   .user-card-role-col,.user-card-status-col{width:auto !important;}
+  /* ProductsSection - la fila de 6 columnas de ancho fijo (GRID_COLS) nunca
+     iba a caber en un celular por más overflow-x que tuviera (probado: el
+     scroll horizontal técnicamente funcionaba pero era poco descubrible, el
+     usuario seguía viéndolo como "no se ajusta"). Se apila en una sola
+     columna - cada celda (nombre/categoría/precio/unidad/interruptor de
+     stock/acciones) pasa a su propia línea completa, nada queda oculto ni
+     hay que deslizar de lado. El renglón de encabezado (Nombre/Categoría/...)
+     se oculta - repetido una sola vez arriba de muchas filas apiladas no
+     ayuda, cada campo ya se distingue solo (nombre en negrita, precio con
+     su insignia $, el interruptor, etc). */
+  .prod-row{grid-template-columns:1fr !important;gap:6px !important;}
+  .prod-row-header{display:none !important;}
 }
 
 /* Se probó un cap de ancho acá para pantallas >=1600px (TV/ultrawide) - se

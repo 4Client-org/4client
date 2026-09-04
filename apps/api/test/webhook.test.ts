@@ -189,10 +189,18 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound[0].text).toContain('bienvenido');
     expect(outbound[0].text).toContain('solo para hacer tu pedido');
     expect(outbound[0].text).toContain('Ahorros Bancolombia');
-    expect(outbound[0].text).not.toContain('http');
+    // Ley 1581 de 2012 - el aviso de privacidad va pegado al final de ESTE mismo
+    // mensaje (buildPrivacyNoticeMessage), no del link del pedido - por eso SÍ
+    // lleva una URL (la de la política, no la del formulario) y eso es a propósito.
+    expect(outbound[0].text).toContain('Política de Privacidad');
+    expect(outbound[0].text).toContain('politica-privacidad.html');
     expect(outbound[0].wpp_message_id).toBeTruthy();
     expect(outbound[0].failed_reason).toBeNull();
+    // El link del PEDIDO sigue siendo el único contenido de este segundo mensaje -
+    // nada del aviso de privacidad se mezcla acá, para que el cliente pueda
+    // reenviar/copiar solo el link.
     expect(outbound[1].text).toMatch(/^https?:\/\//);
+    expect(outbound[1].text).not.toContain('politica-privacidad');
     expect(outbound[1].wpp_message_id).toBeTruthy();
     expect(outbound[1].failed_reason).toBeNull();
     expect(outbound[2].text).toContain('Diligencia por favor el pedido');
@@ -203,6 +211,48 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     // static text blob that happens to contain the right words.
     const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
     expect(updatedTicket.form_token_min_iat).not.toBeNull();
+    // El aviso ya quedó registrado - el próximo mensaje de este mismo cliente,
+    // sea el día que sea, no lo vuelve a mandar (ver el test siguiente).
+    expect(updatedTicket.privacy_notice_sent_at).not.toBeNull();
+  });
+
+  it('a SECOND message from the same ticket (even on a later day, isFirstMessageToday again) does NOT repeat the privacy notice - it already got it once, for good - but still gets the welcome+link flow normally', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-repeat-${randomUUID()}`;
+    await app.prisma.organization.update({
+      where: { id: org.id },
+      data: { welcome_message: 'Hola, bienvenido a Fruver San Gabriel', wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
+    });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
+    // Ticket ya existente, ya avisado en el pasado (simula un cliente que
+    // escribió ayer o hace un mes, no el primer contacto de este test).
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: org.id, phone, customer_name: 'Cliente Repite', privacy_notice_sent_at: new Date(Date.now() - 86400000) },
+    });
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/webhook',
+      headers: { 'content-type': 'application/json' },
+      payload: messagePayload(wppPhoneId, phone, 'Hola de nuevo', `wamid.in2-${randomUUID()}`),
+    });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+
+    const outbound = await app.prisma.ticketMessage.findMany({ where: { ticket_id: ticket.id, direction: 'out' }, orderBy: { sent_at: 'asc' } });
+    expect(outbound).toHaveLength(3);
+    // Bienvenida + link de formulario siguen mandándose normalmente cada día...
+    expect(outbound[0].text).toContain('bienvenido');
+    expect(outbound[0].text).toContain('solo para hacer tu pedido');
+    // ...pero el aviso de privacidad NO se repite - ya se le avisó antes.
+    expect(outbound[0].text).not.toContain('Política de Privacidad');
+    expect(outbound[0].text).not.toContain('politica-privacidad.html');
+
+    // La marca de "ya avisado" queda exactamente igual - no se pisa con un
+    // timestamp nuevo por seguir mandando el resto del mensaje cada día.
+    const unchanged = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(unchanged.privacy_notice_sent_at?.getTime()).toBe(ticket.privacy_notice_sent_at?.getTime());
   });
 
   it('org.wpp_redirect_message set -> sends ONLY that text, never the welcome/link/follow-up flow, even when welcome_message is also set', async () => {
@@ -396,9 +446,9 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     }
   });
 
-  it('an inbound image message is resolved (media id -> temp URL -> bytes) and stored with media_type/media_url set, never Meta\'s own temp URL', async () => {
+  it('an inbound image message stores Meta\'s own media_id directly as media_url - nothing is downloaded from Meta at ingest time anymore (moved to inbox.ts\'s GET /media/:id, at view time - see that file\'s own tests for the byte-signature check)', async () => {
     // No welcome_message on this org - keeps the auto-reply/form-link send paths
-    // out of the way so only the image-ingestion fetch calls happen below.
+    // out of the way so only the image-ingestion path runs below.
     const org = await createTestOrg(app.prisma);
     const wppPhoneId = `test-phone-img-${randomUUID()}`;
     await app.prisma.organization.update({
@@ -407,27 +457,10 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     });
 
     const mediaId = `media-${randomUUID()}`;
-    // Deliberately NOT ending in `/${mediaId}` - it used to (matching the real
-    // shape of a WhatsApp CDN URL), which made it collide with the media-info
-    // mock branch below (that one also matches on a URL ending in the media id),
-    // so downloadMedia was silently "downloading" the media-INFO JSON response
-    // instead of the actual fake bytes - passed anyway before detectImageMime
-    // existed to notice, since nothing validated the byte content back then.
-    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
-    // Real JPEG magic bytes (FF D8 FF...) - webhook.ts now verifies the actual file
-    // signature before storing/serving anything, regardless of what mime_type Meta
-    // itself reported, so arbitrary bytes here would fail that check and fall
-    // through to the "no se pudo descargar" path instead of the happy path below.
-    const fakeBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
-
+    // Ningún fetch debería dispararse al ingresar el mensaje - si el ingest
+    // todavía intentara resolver/descargar la imagen, este mock lo notaría.
     global.fetch = (async (url: string) => {
-      if (String(url).endsWith(`/${mediaId}`)) {
-        return new Response(JSON.stringify({ url: tempUrl, mime_type: 'image/jpeg' }), { status: 200 });
-      }
-      if (url === tempUrl) {
-        return new Response(fakeBytes, { status: 200 });
-      }
-      throw new Error(`unexpected fetch in test: ${url}`);
+      throw new Error(`unexpected fetch in test - una imagen entrante ya no se descarga al ingresar: ${url}`);
     }) as any;
 
     const phone = `573001129${Math.floor(Math.random() * 1000)}`;
@@ -463,77 +496,12 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
 
     expect(inbound.media_type).toBe('image');
-    expect(inbound.media_url).toMatch(/^[0-9a-f]{40}\.jpg$/);
+    expect(inbound.media_url).toBe(mediaId);
     expect(inbound.media_url).not.toContain('http');
     expect(inbound.text).toBe('Aquí está mi dirección');
   });
 
-  it('an inbound "image" whose downloaded bytes don\'t actually match any real image signature is never stored as one - falls back to a visible "no se pudo descargar" note instead, same as a genuine download failure', async () => {
-    const org = await createTestOrg(app.prisma);
-    const wppPhoneId = `test-phone-badimg-${randomUUID()}`;
-    await app.prisma.organization.update({
-      where: { id: org.id },
-      data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' },
-    });
-
-    const mediaId = `media-bad-${randomUUID()}`;
-    // Deliberately NOT ending in `/${mediaId}` - it used to (matching the real
-    // shape of a WhatsApp CDN URL), which made it collide with the media-info
-    // mock branch below (that one also matches on a URL ending in the media id),
-    // so downloadMedia was silently "downloading" the media-INFO JSON response
-    // instead of the actual fake bytes - passed anyway before detectImageMime
-    // existed to notice, since nothing validated the byte content back then.
-    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
-
-    global.fetch = (async (url: string) => {
-      if (String(url).endsWith(`/${mediaId}`)) {
-        return new Response(JSON.stringify({ url: tempUrl, mime_type: 'image/jpeg' }), { status: 200 });
-      }
-      if (url === tempUrl) {
-        // Claims to be a jpeg but isn't one - no real magic bytes at all.
-        return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
-      }
-      throw new Error(`unexpected fetch in test: ${url}`);
-    }) as any;
-
-    const phone = `573001129${Math.floor(Math.random() * 1000)}`;
-    const payload = {
-      object: 'whatsapp_business_account',
-      entry: [{
-        id: 'entry-badimg',
-        changes: [{
-          field: 'messages',
-          value: {
-            messaging_product: 'whatsapp',
-            metadata: { phone_number_id: wppPhoneId, display_phone_number: '' },
-            contacts: [{ profile: { name: 'Cliente Foto Falsa' }, wa_id: phone }],
-            messages: [{
-              from: phone, id: `wamid.badimg-${randomUUID()}`, timestamp: String(Math.floor(Date.now() / 1000)),
-              type: 'image', image: { id: mediaId, mime_type: 'image/jpeg' },
-            }],
-          },
-        }],
-      }],
-    };
-
-    const res = await app.inject({
-      method: 'POST', url: '/api/v1/webhook',
-      headers: { 'content-type': 'application/json' },
-      payload,
-    });
-    expect(res.statusCode).toBe(200);
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
-    const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
-
-    expect(inbound.media_type).toBeNull();
-    expect(inbound.media_url).toBeNull();
-    expect(inbound.text).toContain('no se pudo descargar');
-  });
-
-  it('an inbound voice note (audio/ogg) is resolved and stored with media_type "audio", same resolve-then-download shape as an image', async () => {
+  it('an inbound voice note (audio/ogg) stores Meta\'s own media_id directly as media_url - nothing downloaded at ingest time, same as image', async () => {
     const org = await createTestOrg(app.prisma);
     const wppPhoneId = `test-phone-audio-${randomUUID()}`;
     await app.prisma.organization.update({
@@ -542,16 +510,8 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     });
 
     const mediaId = `media-audio-${randomUUID()}`;
-    const tempUrl = `https://mmg.whatsapp.net/cdn-bytes/${mediaId}-download`;
-    // Real OGG magic bytes ("OggS") - WhatsApp voice notes are audio/ogg;codecs=opus.
-    const fakeBytes = new TextEncoder().encode('OggS' + '\x00'.repeat(10));
-
     global.fetch = (async (url: string) => {
-      if (String(url).endsWith(`/${mediaId}`)) {
-        return new Response(JSON.stringify({ url: tempUrl, mime_type: 'audio/ogg; codecs=opus' }), { status: 200 });
-      }
-      if (url === tempUrl) return new Response(fakeBytes, { status: 200 });
-      throw new Error(`unexpected fetch in test: ${url}`);
+      throw new Error(`unexpected fetch in test - un audio entrante ya no se descarga al ingresar: ${url}`);
     }) as any;
 
     const phone = `573001129${Math.floor(Math.random() * 1000)}`;
@@ -581,7 +541,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
     const inbound = await app.prisma.ticketMessage.findFirstOrThrow({ where: { ticket_id: ticket.id, direction: 'in' } });
     expect(inbound.media_type).toBe('audio');
-    expect(inbound.media_url).toMatch(/^[0-9a-f]{40}\.ogg$/);
+    expect(inbound.media_url).toBe(mediaId);
   });
 
   it('an inbound location never touches Meta\'s media API at all - stored directly from the coordinates in the webhook payload', async () => {
