@@ -665,7 +665,6 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.get('/media/:token', { preHandler: [authenticate] }, async (req, reply) => {
     const { token: mediaId } = req.params as { token: string };
     if (!isValidMetaMediaId(mediaId)) {
-      req.log.warn({ mediaId }, 'WPP: [DIAG] media_id con formato inválido');
       return reply.status(400).send({ error: 'Identificador inválido' });
     }
 
@@ -677,13 +676,11 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       select: { media_type: true, ticket: { select: { org: { select: { wpp_meta_phone_id: true, wpp_meta_token: true } } } } },
     });
     if (!msg) {
-      req.log.warn({ mediaId, orgId: req.user.orgId }, 'WPP: [DIAG] no se encontró mensaje con ese media_id en esta organización');
       return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
     }
 
     const provider = MetaCloudProvider.fromOrg(msg.ticket.org);
     if (!provider) {
-      req.log.warn({ mediaId, orgId: req.user.orgId }, 'WPP: [DIAG] organización sin credenciales de Meta configuradas');
       return reply.status(404).send({ error: 'Organización sin credenciales de WhatsApp', code: 'NOT_FOUND' });
     }
 
@@ -704,16 +701,6 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // DIAGNÓSTICO TEMPORAL - se quita en cuanto se confirme la causa real del
-    // bug reportado (imágenes/audios que no cargan en prod). No expone nada
-    // sensible: solo tamaño y los primeros bytes (firma de archivo) del
-    // buffer, y el mime que reportó Meta.
-    req.log.warn({
-      mediaId, declaredMime, mediaType: msg.media_type,
-      bufferLength: buffer.length,
-      first16BytesHex: buffer.subarray(0, 16).toString('hex'),
-    }, 'WPP: [DIAG] media descargado de Meta');
-
     // Nunca confiar en el mime_type que reporta Meta a secas - se revalida la
     // firma real de los bytes acá, en CADA vista (antes se hacía una sola vez
     // al ingresar el mensaje; ahora, al no guardar nada, este es el único
@@ -724,10 +711,6 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       req.log.error({ mediaId, declaredMime }, 'WPP: el archivo que devolvió Meta no coincide con ningún tipo soportado');
       return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
     }
-
-    // DIAGNÓSTICO TEMPORAL - confirma qué Content-Type se está mandando de
-    // verdad en la respuesta exitosa.
-    req.log.warn({ mediaId, realMime, bufferLength: buffer.length }, 'WPP: [DIAG] sirviendo media al staff');
 
     reply.header('Content-Type', realMime);
     reply.header('Cache-Control', 'private, max-age=86400');
