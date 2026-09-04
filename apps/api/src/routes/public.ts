@@ -225,10 +225,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           clientName: ticket.customer_name ?? '',
           orgName: ticket.org.name,
           orgId: ticket.org_id,
-          // false = el formulario debe mostrar el checkbox de consentimiento antes
-          // de dejar enviar - true = ya se aceptó en un pedido anterior, no se
-          // vuelve a preguntar (ver POST /submit).
-          hasConsent: !!ticket.consent_given_at,
           orders: todaysOrders.map(o => ({
             id: o.id,
             num: o.num,
@@ -362,9 +358,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // closed it while the client was filling the form) this just falls through to
       // creating a new order instead of blocking the submission.
       merge_order_id: z.string().uuid().optional(),
-      // Solo se exige/lee la PRIMERA vez (mientras ticket.consent_given_at sea
-      // null) - una vez aceptado queda guardado en el ticket, un cliente que
-      // ya aceptó no vuelve a ver el checkbox en su próximo pedido.
+      // Optional a nivel de zod a propósito (así el chequeo de abajo puede
+      // devolver el mensaje específico CONSENT_REQUIRED en vez del genérico
+      // VALIDATION_ERROR si falta) - pero se exige en CADA envío, no solo el
+      // primero. A diferencia del chat de WhatsApp (donde el número de
+      // teléfono ya identifica a quien escribe), en la web no hay forma de
+      // probar legalmente quién está detrás de cada envío, así que cada
+      // pedido necesita su propia prueba de aceptación (Order.consent_confirmed_at).
       consent: z.boolean().optional(),
       items: z.array(z.object({
         product_name:   z.string().min(1).max(200),
@@ -385,15 +385,21 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
 
     // Ley 1581 de 2012 - consentimiento informado antes de procesar el pedido.
-    // Solo se exige la primera vez por ticket (ver comentario del schema arriba).
+    // Se exige en CADA envío (ver comentario del schema de arriba) - la fecha
+    // exacta de ESTA aceptación queda en Order.consent_confirmed_at más abajo,
+    // en el mismo objeto `data` que crea/actualiza el pedido en sí.
+    if (body.data.consent !== true) {
+      return reply.status(400).send({
+        error: 'Debes aceptar la Política de Privacidad para poder enviar tu pedido.',
+        code: 'CONSENT_REQUIRED',
+      });
+    }
+    const consentConfirmedAt = new Date();
+    // Ticket.consent_given_at solo guarda la PRIMERA vez, como huella histórica -
+    // no gatea nada (ya no hace falta, se exige siempre) y nunca se pisa una
+    // vez seteada.
     if (!ticket.consent_given_at) {
-      if (body.data.consent !== true) {
-        return reply.status(400).send({
-          error: 'Debes aceptar la Política de Tratamiento de Datos para poder enviar tu pedido.',
-          code: 'CONSENT_REQUIRED',
-        });
-      }
-      await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { consent_given_at: new Date() } });
+      await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { consent_given_at: consentConfirmedAt } });
     }
 
     const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);
@@ -511,6 +517,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             ...(addressChanged ? { address: body.data.address } : {}),
             ...(paymentChanged ? { payment_method: body.data.payment_method } : {}),
             client_modified: true,
+            consent_confirmed_at: consentConfirmedAt,
             items: { deleteMany: {}, create: mergedItemsData },
           },
           include: {
@@ -754,6 +761,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           source: 'form',
           registered_by: actorUser.id,
           fecha: todayLocal,
+          consent_confirmed_at: consentConfirmedAt,
           items: { create: orderItems },
         },
         include: {

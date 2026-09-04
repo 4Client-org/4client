@@ -71,10 +71,12 @@ export default function ClientFormPage() {
   // products) but never auto-applied to `selected`. Null until loaded, then
   // either an item list or an empty array (nothing to repeat).
   const [lastOrder, setLastOrder] = useState<LastOrderItem[] | null>(null);
-  // Ley 1581 de 2012 - true hasta que sepamos lo contrario, para no parpadear
-  // el checkbox de consentimiento antes de que cargue form-info (la mayoría de
-  // los links son de clientes que ya aceptaron en un pedido anterior).
-  const [hasConsent, setHasConsent] = useState(true);
+  // Ley 1581 de 2012 - se exige en CADA pedido, no solo el primero (a
+  // diferencia del aviso por WhatsApp, que sí es una sola vez - acá no hay
+  // forma de probar legalmente quién está detrás de cada envío web, así que
+  // cada pedido necesita su propia prueba de aceptación). Se resetea a false
+  // después de cada envío exitoso - el próximo pedido tiene que volver a
+  // marcarlo, no queda "recordado" entre pedidos.
   const [consentChecked, setConsentChecked] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   // null = not decided yet; 'new' = a separate order; any other value = the id of
@@ -154,7 +156,6 @@ export default function ClientFormPage() {
       }
       setClientName(info.data.clientName);
       setOrgName(info.data.orgName ?? '');
-      setHasConsent(!!info.data.hasConsent);
       const prodList: Product[] = prods.data ?? [];
       setProducts(prodList);
       const orders: DayOrder[] = info.data.orders ?? [];
@@ -547,8 +548,8 @@ export default function ClientFormPage() {
       summaryRef.current?.scrollIntoView({ behavior: 'smooth' });
       return;
     }
-    if (!hasConsent && !consentChecked) {
-      setSubmitError('Debes aceptar la Política de Tratamiento de Datos para continuar');
+    if (!consentChecked) {
+      setSubmitError('Debes aceptar la Política de Privacidad para continuar');
       return;
     }
     submittingRef.current = true;
@@ -564,9 +565,9 @@ export default function ClientFormPage() {
           address: address.trim(),
           payment_method: paymentMethod || undefined,
           merge_order_id: mergeTarget && mergeTarget !== 'new' ? mergeTarget : undefined,
-          // Solo se manda la primera vez (mientras hasConsent sea false) - el
-          // backend lo guarda una vez y no lo vuelve a pedir en un pedido posterior.
-          ...(!hasConsent ? { consent: consentChecked } : {}),
+          // Se manda en CADA pedido, no solo el primero - el backend lo exige
+          // siempre y lo guarda por separado en cada pedido (Order.consent_confirmed_at).
+          consent: consentChecked,
           items: selected.map(i => ({ product_name: i.product_name, quantity_label: i.quantity_label, ...(i.isManual ? { is_manual: true } : {}) })),
         }),
       });
@@ -594,7 +595,9 @@ export default function ClientFormPage() {
         setSubmitError(err.error ?? 'Hubo un problema. Intenta de nuevo.');
         return;
       }
-      if (!hasConsent) setHasConsent(true); // ya quedó guardado en el ticket, no volver a pedirlo en este mismo tab
+      // Se resetea para el próximo pedido - cada envío necesita su propia
+      // marca explícita, no se reutiliza de un pedido a otro.
+      setConsentChecked(false);
       setState('done');
       try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     } catch {
@@ -996,26 +999,26 @@ export default function ClientFormPage() {
             Debe haber al menos un producto
           </div>
         )}
-        {/* Ley 1581 de 2012 - solo se muestra la primera vez por ticket (ver
-            hasConsent, cargado desde form-info). Un cliente que ya aceptó en un
-            pedido anterior no lo vuelve a ver. */}
-        {!hasConsent && (
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, fontSize: 12.5, color: '#444', lineHeight: 1.4, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={consentChecked}
-              onChange={e => { setConsentChecked(e.target.checked); if (submitError) setSubmitError(''); }}
-              style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16 }}
-            />
-            <span>
-              Leí y acepto la{' '}
-              <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" style={{ color: GREEN, fontWeight: 700, textDecoration: 'underline' }}>
-                Política de Tratamiento de Datos
-              </a>
-              {' '}de {orgName || 'este negocio'}.
-            </span>
-          </label>
-        )}
+        {/* Ley 1581 de 2012 - se muestra y se exige en CADA pedido, no solo el
+            primero. A diferencia del aviso por WhatsApp (una sola vez, el
+            teléfono ya identifica a quien escribe), acá no hay forma de probar
+            legalmente quién está detrás de cada envío web - cada pedido
+            necesita su propia marca explícita (se resetea tras cada envío). */}
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, fontSize: 12.5, color: '#444', lineHeight: 1.4, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={consentChecked}
+            onChange={e => { setConsentChecked(e.target.checked); if (submitError) setSubmitError(''); }}
+            style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16 }}
+          />
+          <span>
+            Leí y acepto la{' '}
+            <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" style={{ color: GREEN, fontWeight: 700, textDecoration: 'underline' }}>
+              Política de Privacidad
+            </a>
+            {' '}de {orgName || 'este negocio'}.
+          </span>
+        </label>
         {submitError && <div style={{ color: '#DC2626', fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{submitError}</div>}
         <div style={{ display: 'flex', gap: 10 }}>
           {selectedCount > 0 && (

@@ -459,6 +459,17 @@ model Order {
   papelera_reason        String?  @db.VarChar(500)
   papelera_by            String?  @db.Uuid
   status_before_papelera String?  @db.VarChar(20)
+  // Ley 1581 de 2012 - momento en que el cliente marcó el checkbox de
+  // consentimiento AL ENVIAR ESTE PEDIDO puntual, vía el formulario público
+  // (routes/public.ts, POST /submit). A diferencia de Ticket.consent_given_at
+  // (que solo guarda la PRIMERA vez, como huella histórica), este campo se
+  // exige y se estampa en CADA envío del formulario - a diferencia del chat de
+  // WhatsApp (donde el número de teléfono ya identifica a quien escribe), acá
+  // no hay forma de probar legalmente quién está detrás de cada envío web, así
+  // que cada pedido lleva su propia prueba de aceptación. Null en un pedido
+  // creado por staff (canal 'call'/'encargado', no source:'form') - esa
+  // exigencia es exclusiva del formulario público.
+  consent_confirmed_at DateTime? @db.Timestamptz
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 

@@ -1111,16 +1111,10 @@ describe('public /submit - consentimiento de tratamiento de datos (Ley 1581 de 2
     await app.close();
   });
 
-  it('GET /form-info reports hasConsent:false for a ticket that never accepted', async () => {
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119940', customer_name: 'Cliente Sin Consentir' } });
-    const token = await issueFormToken(app, ticket.id, orgId);
-    const res = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=dev-consent` });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data.hasConsent).toBe(false);
-  });
-
-  it('POST /submit rejects with CONSENT_REQUIRED when the ticket never consented and consent is not sent as true', async () => {
-    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119941', customer_name: 'Cliente Rechaza' } });
+  it('POST /submit rejects with CONSENT_REQUIRED when consent is not sent as true - even on a ticket that already consented before', async () => {
+    const ticket = await app.prisma.ticket.create({
+      data: { org_id: orgId, phone: '573001119941', customer_name: 'Cliente Rechaza', consent_given_at: new Date() },
+    });
     const token = await issueFormToken(app, ticket.id, orgId);
     const res = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
@@ -1128,11 +1122,9 @@ describe('public /submit - consentimiento de tratamiento de datos (Ley 1581 de 2
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('CONSENT_REQUIRED');
-    const stillNull = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
-    expect(stillNull.consent_given_at).toBeNull();
   });
 
-  it('POST /submit with consent:true stamps consent_given_at once, and a later submit on the same ticket succeeds without resending it', async () => {
+  it('POST /submit with consent:true stamps Order.consent_confirmed_at on THAT order, and Ticket.consent_given_at only the first time (historical marker, doesn\'t skip the requirement later)', async () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119942', customer_name: 'Cliente Consiente' } });
     const token = await issueFormToken(app, ticket.id, orgId);
 
@@ -1141,25 +1133,64 @@ describe('public /submit - consentimiento de tratamiento de datos (Ley 1581 de 2
       payload: { consent: true, token, device_token: 'device-consent-1', address: 'Calle Consiente 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
     });
     expect(first.statusCode).toBe(201);
+    const firstOrder = await app.prisma.order.findUniqueOrThrow({ where: { id: first.json().data.orderId } });
+    expect(firstOrder.consent_confirmed_at).not.toBeNull();
+
     const afterFirst = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
     expect(afterFirst.consent_given_at).not.toBeNull();
-    const stampedAt = afterFirst.consent_given_at;
+    const firstEverStamp = afterFirst.consent_given_at;
 
-    // form-info now reports it as already consented - the real form won't even
-    // render the checkbox on this ticket's next load.
-    const info = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${token}&device_token=dev-consent` });
-    expect(info.json().data.hasConsent).toBe(true);
-
-    // A second order on the SAME ticket, consent omitted entirely this time -
-    // must still succeed (already on file), and the original timestamp must not
-    // get clobbered by a second stamp.
-    const second = await app.inject({
+    // Un SEGUNDO pedido del mismo ticket, sin consent - se rechaza igual, la
+    // huella histórica del ticket NO exime de volver a aceptar cada vez.
+    const rejected = await app.inject({
       method: 'POST', url: '/api/v1/public/submit',
       payload: { token, device_token: 'device-consent-1', address: 'Calle Consiente 2', items: [{ product_name: 'Piña', quantity_label: '1 kg' }] },
     });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().code).toBe('CONSENT_REQUIRED');
+
+    // Con consent:true otra vez, sí funciona - y el segundo pedido tiene SU
+    // PROPIO consent_confirmed_at, distinto del primero. El ticket-level
+    // consent_given_at (huella histórica) no se pisa con el segundo.
+    const second = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token, device_token: 'device-consent-1', address: 'Calle Consiente 2', items: [{ product_name: 'Piña', quantity_label: '1 kg' }] },
+    });
     expect(second.statusCode).toBe(201);
+    const secondOrder = await app.prisma.order.findUniqueOrThrow({ where: { id: second.json().data.orderId } });
+    expect(secondOrder.consent_confirmed_at).not.toBeNull();
+    expect(secondOrder.consent_confirmed_at?.getTime()).not.toBe(firstOrder.consent_confirmed_at?.getTime());
+
     const afterSecond = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
-    expect(afterSecond.consent_given_at?.getTime()).toBe(stampedAt?.getTime());
+    expect(afterSecond.consent_given_at?.getTime()).toBe(firstEverStamp?.getTime());
+  });
+
+  it('a merge (editing an existing order via the form) also requires consent:true and stamps consent_confirmed_at on that same order', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001119943', customer_name: 'Cliente Edita' } });
+    const token = await issueFormToken(app, ticket.id, orgId);
+
+    const created = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token, device_token: 'device-merge-1', address: 'Calle Edita 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(created.statusCode).toBe(201);
+    const orderId = created.json().data.orderId;
+
+    // Editar ese mismo pedido (merge) SIN consent - rechazado igual.
+    const rejected = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { token, device_token: 'device-merge-1', address: 'Calle Edita 2', merge_order_id: orderId, items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().code).toBe('CONSENT_REQUIRED');
+
+    const merged = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token, device_token: 'device-merge-1', address: 'Calle Edita 2', merge_order_id: orderId, items: [{ product_name: 'Mango', quantity_label: '2 kg' }] },
+    });
+    expect(merged.statusCode).toBe(200);
+    const updated = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(updated.consent_confirmed_at).not.toBeNull();
   });
 });
 
