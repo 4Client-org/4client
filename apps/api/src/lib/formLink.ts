@@ -87,5 +87,9 @@ const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web
 // (ClientFormPage.tsx) sigue siendo donde se CAPTURA el consentimiento en sí -
 // esto es la notificación temprana, en el chat, no un sustituto de ese checkbox.
 export function buildPrivacyNoticeMessage(): string {
-  return `_Al continuar usando este chat para tus pedidos, confirmas que conoces y aceptas nuestra Política de Privacidad: ${PRIVACY_POLICY_URL}_`;
+  // El _ de cierre va ANTES del link, no después - confirmado en una prueba
+  // real que un _ pegado justo al final de la URL la rompe (queda incluido
+  // como si fuera parte del link, ej. "...html_" en vez de "...html"). La
+  // URL queda sin cursiva, fuera del wrapping, a propósito.
+  return `_Al continuar usando este chat para tus pedidos, confirmas que conoces y aceptas nuestra Política de Privacidad:_ ${PRIVACY_POLICY_URL}`;
 }

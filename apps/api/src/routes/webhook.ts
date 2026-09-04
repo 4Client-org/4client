@@ -281,10 +281,8 @@ async function ingestMessage(
           return;
         }
 
-        // El aviso de privacidad va al FINAL, después del warning de seguridad -
-        // pedido explícito: "el primer mensaje automático... diga al final, en
-        // cursiva", para que quede como prueba de que se avisó antes de mandar
-        // el link del formulario donde el cliente entrega sus datos.
+        // El aviso de privacidad va justo después del saludo, ANTES del warning
+        // de seguridad - pedido explícito con ejemplo literal del texto final.
         //
         // A diferencia del resto de este mensaje (que sí se repite cada día en
         // el primer mensaje del día, isFirstMessageToday), el aviso en sí se
@@ -295,7 +293,7 @@ async function ingestMessage(
         // (pedido explícito, para no repetirlo a diario y molestar).
         const needsPrivacyNotice = !ticket.privacy_notice_sent_at;
         const welcomeAndNotice = needsPrivacyNotice
-          ? `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}\n\n${buildPrivacyNoticeMessage()}`
+          ? `${org.welcome_message}\n\n${buildPrivacyNoticeMessage()}\n\n${buildFormLinkWarningMessage()}`
           : `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
         try {
           await sendAndRecord(welcomeAndNotice);
