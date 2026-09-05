@@ -664,7 +664,9 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   // MEDIA_EXPIRED, no hay copia de respaldo que servir.
   fastify.get('/media/:token', { preHandler: [authenticate] }, async (req, reply) => {
     const { token: mediaId } = req.params as { token: string };
-    if (!isValidMetaMediaId(mediaId)) return reply.status(400).send({ error: 'Identificador inválido' });
+    if (!isValidMetaMediaId(mediaId)) {
+      return reply.status(400).send({ error: 'Identificador inválido' });
+    }
 
     // Confirma que este media_id realmente pertenece a un mensaje de la
     // organización de quien pide - el gate real (antes, y ahora también,
@@ -673,10 +675,14 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       where: { media_url: mediaId, ticket: { org_id: req.user.orgId } },
       select: { media_type: true, ticket: { select: { org: { select: { wpp_meta_phone_id: true, wpp_meta_token: true } } } } },
     });
-    if (!msg) return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+    if (!msg) {
+      return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
+    }
 
     const provider = MetaCloudProvider.fromOrg(msg.ticket.org);
-    if (!provider) return reply.status(404).send({ error: 'Organización sin credenciales de WhatsApp', code: 'NOT_FOUND' });
+    if (!provider) {
+      return reply.status(404).send({ error: 'Organización sin credenciales de WhatsApp', code: 'NOT_FOUND' });
+    }
 
     let buffer: Buffer;
     let declaredMime: string;
