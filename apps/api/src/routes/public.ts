@@ -268,8 +268,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // those), used by the opt-in "Repetir mi último pedido" button so a returning
   // customer doesn't have to retype everything. Only product_name/quantity_label
   // travel back - price is deliberately NOT carried over (the client-facing
-  // catalog never shows price at all; /submit always reprices every item from
-  // the CURRENT catalog by name, same as any new item - see priceMap below).
+  // catalog never shows price at all; every new item /submit creates starts at
+  // $0, same as staff creating a pedido by hand - see newItemsData below).
   // Address/payment_method also aren't pre-filled - those can go stale (moved,
   // changed how they pay) in a way item choices usually don't, so the client
   // re-confirms them fresh either way.
@@ -405,17 +405,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);
     if (!actorUser) return reply.status(500).send({ error: 'Organización sin usuarios activos', code: 'NO_USER' });
 
-    // Fetch product prices from catalog - needed either way (new order or merge)
-    const productNames = body.data.items.map(i => i.product_name);
-    const catalogProducts = await fastify.prisma.product.findMany({
-      where: { org_id: ticket.org_id, name: { in: productNames }, active: true },
-      select: { name: true, price_per_unit: true },
-    });
-    const priceMap = new Map(catalogProducts.map(p => [p.name, Number(p.price_per_unit ?? 0)]));
+    // El precio de catálogo YA NO se autoasigna acá - decisión explícita del
+    // negocio: tanto un pedido creado por el cliente (este formulario) como uno
+    // creado a mano por el encargado deben quedar SIEMPRE en $0 hasta que el
+    // encargado lo ponga manualmente (price_per_unit del catálogo es solo una
+    // referencia informativa, no necesariamente el precio real de ese día/pedido).
     const newItemsData = body.data.items.map(item => ({
       product_name: item.product_name,
       quantity_label: item.quantity_label,
-      price: priceMap.get(item.product_name) ?? 0,
+      price: 0,
       added_by_client: item.is_manual === true,
     }));
 
@@ -484,14 +482,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             product_name: item.product_name,
             quantity_label: item.quantity_label,
             // An item already on the order ALWAYS keeps its existing price, no
-            // matter what - staff often hand-prices an item because the catalog's
-            // price_per_unit is wrong, missing, or just doesn't apply to this
-            // specific pedido, and re-deriving it from the catalog on every resubmit
-            // (even one triggered by an unrelated one-letter address edit) silently
-            // threw that away. The catalog price only ever applies to a genuinely
-            // NEW line the client is adding right now (`prior` undefined) - it can
-            // never overwrite a price that already existed on the order.
-            price: prior ? Number(prior.price) : (priceMap.get(item.product_name) ?? 0),
+            // matter what - staff often hand-prices an item, and re-deriving it on
+            // every resubmit (even one triggered by an unrelated one-letter address
+            // edit) would silently throw that away. A genuinely NEW line the client
+            // is adding right now (`prior` undefined) starts at $0 - same as any
+            // other new item, see newItemsData above - never auto-priced.
+            price: prior ? Number(prior.price) : 0,
             sort_order: idx,
             // Sticky once true - an item the client already touched before stays
             // flagged even if this particular submission left it untouched.

@@ -216,25 +216,22 @@ const ProductSearch = forwardRef<ProductSearchHandle, Props>(function ProductSea
   // genuinely new here: if the name actually changed, try to link it to a real
   // catalog product (exact match, case/accent-insensitive - a human just made
   // a deliberate correction, this isn't the AI guessing, so no fuzzy/substring
-  // tiers here, just a real match or not). A confident match clears
-  // ai_unmatched and adopts the catalog's own price IF nothing's been typed
-  // for price yet (never overwrites a price staff already set on purpose) -
-  // added_by_client is left exactly as it was either way, matching its
-  // permanent-provenance contract.
+  // tiers here, just a real match or not). A confident match clears ai_unmatched -
+  // it never touches price (decisión explícita del negocio: ningún precio se
+  // autoasigna del catálogo, ni al crear ni al corregir el nombre de una línea -
+  // el encargado siempre lo escribe a mano). added_by_client is left exactly as
+  // it was either way, matching its permanent-provenance contract.
   function buildUpdatedItem(prior: Item, local: { qty: string; price: string; name?: string }): Item {
     const typedName = (local.name ?? prior.product_name).trim();
     let product_name = prior.product_name;
     let ai_unmatched = prior.ai_unmatched ?? false;
-    let price = local.price.trim() || '0';
+    const price = local.price.trim() || '0';
 
     if (typedName && typedName !== prior.product_name) {
       const match = products.find(p => normalizeSearch(p.name) === normalizeSearch(typedName));
       if (match) {
         product_name = match.name;
         ai_unmatched = false;
-        if (!(parseFloat(price) > 0) && match.price_per_unit != null) {
-          price = String(match.price_per_unit);
-        }
       } else {
         // No hay match en el catálogo - conserva el texto corregido, y
         // SIEMPRE marca ai_unmatched:true (sin importar si la fila ya estaba

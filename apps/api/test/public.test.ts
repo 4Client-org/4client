@@ -105,6 +105,11 @@ describe('public form routes', () => {
     // The client's OWN first submission is the original order, not a later edit -
     // never flagged red even though the client is who created it.
     expect(order.items.every(i => i.added_by_client === false)).toBe(true);
+    // Mango has a real catalog price_per_unit (3000, set in beforeAll) - it must
+    // NOT be auto-copied onto the order item. Every new item starts at $0, staff
+    // always prices it by hand, whether the order came from this form or from
+    // the encargado typing it up directly.
+    expect(Number(order.items[0].price)).toBe(0);
   });
 
   it('a manually-typed product (not picked from the catalog) is flagged added_by_client on the very first submission - the one exception to the rule above', async () => {
@@ -139,7 +144,7 @@ describe('public form routes', () => {
     expect(orders[0].id).toBe(firstOrderId);
     expect(orders[0].editable).toBe(true);
     expect(orders[0].status).toBe('nuevo');
-    expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg', price: 3000 }]);
+    expect(orders[0].items).toEqual([{ id: expect.any(String), product_name: 'Mango', quantity_label: '2 kg', price: 0 }]);
   });
 
   it('the link is not locked to whichever device opened/submitted it first - any device presenting the same token can view AND submit', async () => {
@@ -263,6 +268,9 @@ describe('public form routes', () => {
     const pina = order.items.find(i => i.product_name === 'Piña')!;
     expect(mango.added_by_client).toBe(false); // unchanged from the original submission
     expect(pina.added_by_client).toBe(true); // brand new line added via this edit
+    // Piña has a real catalog price_per_unit (4000, set in beforeAll) - a brand-new
+    // line added via merge must NOT auto-adopt it. Starts at $0 either way.
+    expect(Number(pina.price)).toBe(0);
 
     // Merging must never count against the per-link new-order cap.
     const formOrderCount = await app.prisma.order.count({ where: { ticket_id: ticketId, source: 'form' } });
@@ -289,7 +297,7 @@ describe('public form routes', () => {
     expect(pina.added_by_client).toBe(true); // provenance survives the staff save untouched
   });
 
-  it('a client resubmit NEVER overwrites an existing item\'s price with the catalog price, even when the catalog has one - only a brand-new line gets the catalog price', async () => {
+  it('a client resubmit NEVER overwrites an existing item\'s price with the catalog price, even when the catalog has one - a brand-new line starts at $0 either way', async () => {
     // Mango has a real catalog price_per_unit (3000, set in beforeAll) - staff
     // hand-overrides it on THIS specific order to something different (say, a
     // bulk discount), matching a real "encargado adjusts the price" scenario.
