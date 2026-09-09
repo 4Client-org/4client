@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { Prisma } from '@prisma/client';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
@@ -167,64 +168,94 @@ async function ingestMessage(
   // schema.prisma), so gating on "is this ticket brand new" alone meant a returning
   // customer who wrote last month would never get the welcome message again.
   let isFirstMessageToday: boolean;
+  let message: Prisma.TicketMessageGetPayload<{ include: { sender: { select: { id: true; name: true } } } }>;
 
-  if (!ticket) {
-    isFirstMessageToday = true;
-    ticket = await fastify.prisma.ticket.create({
-      data: {
-        org_id: org.id,
-        phone,
-        customer_name: name,
-        fecha: todayLocal,
-        last_message_at: sentAt,
-        first_message_today_at: sentAt,
-        unread_count: 1,
-        no_wpp_number: noWppNumber,
-        raw_payload: rawPayload as any,
-        bsuid: bsuidHint ?? null,
-      },
-    });
-  } else {
-    const priorInboundToday = await fastify.prisma.ticketMessage.count({
-      where: { ticket_id: ticket.id, direction: 'in', sent_at: { gte: dayStartUtc, lt: dayEndUtc } },
-    });
-    isFirstMessageToday = priorInboundToday === 0;
+  // Ticket touch + message insert run in ONE transaction (security-audit
+  // finding) - previously these were separate top-level calls, so two near-
+  // simultaneous webhook deliveries for the SAME Meta message (Meta retries are
+  // routine) could both pass the dedup `findUnique` above before either
+  // committed, both increment ticket.unread_count, and only then have the
+  // SECOND one's ticketMessage.create fail on the @unique wpp_message_id
+  // constraint - leaving unread_count permanently inflated by one with no
+  // matching message. Wrapping this in a transaction means that failure rolls
+  // the ticket increment back too, and the catch below treats it exactly like
+  // the dedup check already does: nothing left to do, return.
+  try {
+    const result = await fastify.prisma.$transaction(async (tx) => {
+      let t = ticket;
+      let firstToday: boolean;
 
-    // Roll it forward to today (and drop any stale "queued for a specific day" flag)
-    // so the board/informe pick it up wherever the conversation actually is now.
-    // bsuid only ever gets SET here, never overwritten with null - once learned
-    // for this ticket it stays, regardless of which identifier a later message uses.
-    ticket = await fastify.prisma.ticket.update({
-      where: { id: ticket.id },
-      data: {
-        fecha: todayLocal,
-        deferred_to: null,
-        unread_count: { increment: 1 },
-        last_message_at: sentAt,
-        // Fixed for the rest of the day on the FIRST inbound message only - a
-        // second/third message today must never move this, or the board's
-        // "first to arrive stays first" position would drift forward every
-        // time this customer writes again (the exact bug being fixed here).
-        ...(isFirstMessageToday ? { first_message_today_at: sentAt } : {}),
-        customer_name: name,
-        ...(bsuidHint && !ticket.bsuid ? { bsuid: bsuidHint } : {}),
-      },
+      if (!t) {
+        firstToday = true;
+        t = await tx.ticket.create({
+          data: {
+            org_id: org.id,
+            phone,
+            customer_name: name,
+            fecha: todayLocal,
+            last_message_at: sentAt,
+            first_message_today_at: sentAt,
+            unread_count: 1,
+            no_wpp_number: noWppNumber,
+            raw_payload: rawPayload as any,
+            bsuid: bsuidHint ?? null,
+          },
+        });
+      } else {
+        const priorInboundToday = await tx.ticketMessage.count({
+          where: { ticket_id: t.id, direction: 'in', sent_at: { gte: dayStartUtc, lt: dayEndUtc } },
+        });
+        firstToday = priorInboundToday === 0;
+
+        // Roll it forward to today (and drop any stale "queued for a specific day" flag)
+        // so the board/informe pick it up wherever the conversation actually is now.
+        // bsuid only ever gets SET here, never overwritten with null - once learned
+        // for this ticket it stays, regardless of which identifier a later message uses.
+        t = await tx.ticket.update({
+          where: { id: t.id },
+          data: {
+            fecha: todayLocal,
+            deferred_to: null,
+            unread_count: { increment: 1 },
+            last_message_at: sentAt,
+            // Fixed for the rest of the day on the FIRST inbound message only - a
+            // second/third message today must never move this, or the board's
+            // "first to arrive stays first" position would drift forward every
+            // time this customer writes again (the exact bug being fixed here).
+            ...(firstToday ? { first_message_today_at: sentAt } : {}),
+            customer_name: name,
+            ...(bsuidHint && !t.bsuid ? { bsuid: bsuidHint } : {}),
+          },
+        });
+      }
+
+      const msg = await tx.ticketMessage.create({
+        data: {
+          ticket_id: t.id,
+          direction: 'in',
+          text,
+          media_url: media?.url ?? null,
+          media_type: media?.type ?? null,
+          wpp_message_id: waMsgId,
+          sent_at: sentAt,
+          raw_payload: rawPayload as any,
+        },
+        include: { sender: { select: { id: true, name: true } } },
+      });
+
+      return { ticket: t, isFirstMessageToday: firstToday, message: msg };
     });
+    ticket = result.ticket;
+    isFirstMessageToday = result.isFirstMessageToday;
+    message = result.message;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      // Lost the race - another concurrent delivery of this exact Meta message
+      // already won, and the ticket-side increment above rolled back with it.
+      return;
+    }
+    throw err;
   }
-
-  const message = await fastify.prisma.ticketMessage.create({
-    data: {
-      ticket_id: ticket.id,
-      direction: 'in',
-      text,
-      media_url: media?.url ?? null,
-      media_type: media?.type ?? null,
-      wpp_message_id: waMsgId,
-      sent_at: sentAt,
-      raw_payload: rawPayload as any,
-    },
-    include: { sender: { select: { id: true, name: true } } },
-  });
 
   const newUnread = (ticket.unread_count ?? 0) + 1;
 
@@ -490,6 +521,14 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
     }
     fastify.log.warn('⚠️  META_APP_SECRET no configurado - webhook acepta solicitudes sin verificar firma HMAC (solo permitido fuera de producción)');
   }
+  // Same fail-closed posture as META_APP_SECRET above (security-audit finding) -
+  // without this, an unset META_WEBHOOK_VERIFY_TOKEN made the GET handshake below
+  // compare `undefined === undefined`, letting anyone complete Meta's verification
+  // challenge with no token at all. Doesn't affect message-delivery spoofing
+  // (that stays gated by the HMAC check above regardless), just the handshake.
+  if (!config.META_WEBHOOK_VERIFY_TOKEN && config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+    throw new Error('META_WEBHOOK_VERIFY_TOKEN es obligatorio en producción - configúralo antes de desplegar');
+  }
   // Capture raw body for HMAC validation before JSON parsing
   fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
     try {
@@ -504,7 +543,9 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
   // GET - Meta webhook verification handshake
   fastify.get('/', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string, string>;
-    if (q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === config.META_WEBHOOK_VERIFY_TOKEN) {
+    // `&& config.META_WEBHOOK_VERIFY_TOKEN` (security-audit finding) - without
+    // it, an unconfigured token made this `undefined === undefined`, true.
+    if (q['hub.mode'] === 'subscribe' && config.META_WEBHOOK_VERIFY_TOKEN && q['hub.verify_token'] === config.META_WEBHOOK_VERIFY_TOKEN) {
       fastify.log.info('WPP webhook verificado por Meta');
       return reply.status(200).send(q['hub.challenge']);
     }
@@ -512,8 +553,19 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
   });
 
   // POST - incoming messages from Meta
+  //
+  // This bucket keys on source IP (server.ts's global rate-limit plugin falls
+  // back to IP for any unauthenticated route) - but ALL of Meta's webhook
+  // deliveries, for EVERY organization on this platform, originate from Meta's
+  // own small set of egress IPs, not from each org's own infrastructure. A tight
+  // per-IP ceiling here doesn't meaningfully stop abuse (an unsigned/forged
+  // payload is already rejected by the mandatory HMAC check below regardless of
+  // volume) - it mainly risks throttling genuine message delivery across
+  // unrelated tenants once there's more than a handful of them sharing this
+  // route (security-audit finding). Raised well above any realistic legitimate
+  // burst; HMAC verification, not this number, is the real abuse gate.
   fastify.post('/', {
-    config: { rateLimit: { max: 300, timeWindow: '1 minute' } },
+    config: { rateLimit: { max: 2000, timeWindow: '1 minute' } },
   }, async (req: FastifyRequest, reply: FastifyReply) => {
     // HMAC-SHA256 signature validation - mandatory when META_APP_SECRET is set
     const signature = (req.headers['x-hub-signature-256'] as string) ?? '';

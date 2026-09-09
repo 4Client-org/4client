@@ -72,6 +72,11 @@ async function doRefresh(): Promise<boolean> {
       // "session closes on reload/refresh": refresh never worked, full stop, regardless
       // of the cookie's SameSite/Secure attributes being correct.
       credentials: 'include', // HttpOnly cookie sent automatically
+      // CSRF defense (security-audit finding): the backend requires this header on
+      // /refresh - a cross-site form/img/script can make the browser attach our
+      // cookie to a request, but can't set a custom header without triggering a
+      // CORS preflight, which only THIS origin ever passes.
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
     if (!res.ok) {
       // Diagnostic only - this is the one path that keeps causing "session closes

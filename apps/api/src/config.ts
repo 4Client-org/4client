@@ -3,7 +3,6 @@ import { z } from 'zod';
 const envSchema = z.object({
   DATABASE_URL:              z.string().min(1),
   JWT_SECRET:                z.string().min(32),
-  JWT_REFRESH_SECRET:        z.string().min(32),
   NODE_ENV:                  z.enum(['development', 'production', 'test']).default('development'),
   // Railway sets this per-environment (e.g. "production", "dev") - unlike NODE_ENV,
   // which is "production" on EVERY Railway environment (it controls build/runtime

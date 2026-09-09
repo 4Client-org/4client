@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../store/auth';
 import { api } from '../lib/api';
 import { disconnectSocket } from '../lib/socket';
@@ -13,6 +14,7 @@ const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scr
 // force-logs-out after IDLE_LIMIT_MS of no mouse/keyboard/touch/scroll at all.
 export function useIdleLogout() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
+  const qc = useQueryClient();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -20,6 +22,10 @@ export function useIdleLogout() {
       api.post('/auth/logout', {}).catch(() => {});
       disconnectSocket();
       clearAuth();
+      // Same cache-clear as MainPage's own handleLogout (security-audit
+      // finding) - this IS the shared-computer scenario the comment above
+      // describes, so leaving cached data behind here would defeat the point.
+      qc.clear();
     }
     function resetTimer() {
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -33,5 +39,5 @@ export function useIdleLogout() {
       if (timerRef.current) clearTimeout(timerRef.current);
       ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, resetTimer));
     };
-  }, [clearAuth]);
+  }, [clearAuth, qc]);
 }

@@ -14,7 +14,15 @@ model Organization {
   plan                  String    @default("starter") @db.VarChar(20)
   wpp_provider          String    @default("meta_api") @db.VarChar(20)
   wpp_phone             String?   @db.VarChar(20)
-  wpp_meta_phone_id     String?   @db.VarChar(100)
+  // @unique (not just indexed) - webhook.ts routes every inbound Meta message
+  // purely by this value (`organization.findFirst({where:{wpp_meta_phone_id}})`),
+  // with no cross-check against Meta that the org configuring it actually owns
+  // that phone number. Without a DB-level unique constraint, an admin of one org
+  // could set their own wpp_meta_phone_id to another org's real value and start
+  // receiving that org's customer messages - a security-audit finding. This
+  // constraint makes that impossible: the second org's PATCH just fails outright
+  // instead of silently creating an ambiguous/hijackable routing collision.
+  wpp_meta_phone_id     String?   @unique @db.VarChar(100)
   wpp_meta_token        String?
   wpp_meta_app_secret   String?
   welcome_message       String?

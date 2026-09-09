@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { encryptSecret } from '../lib/crypto.js';
 import { audit } from '../lib/audit.js';
@@ -41,16 +42,31 @@ export default async function configRoutes(fastify: FastifyInstance) {
 
     const { wpp_meta_token, ...rest } = body.data;
 
-    const updated = await fastify.prisma.organization.update({
-      where: { id: req.user.orgId },
-      data: {
-        ...rest,
-        ...(wpp_meta_token !== undefined ? { wpp_meta_token: encryptSecret(wpp_meta_token) } : {}),
-      },
-      select: {
-        wpp_meta_phone_id: true, wpp_phone: true, welcome_message: true, wpp_redirect_message: true,
-      },
-    });
+    let updated;
+    try {
+      updated = await fastify.prisma.organization.update({
+        where: { id: req.user.orgId },
+        data: {
+          ...rest,
+          ...(wpp_meta_token !== undefined ? { wpp_meta_token: encryptSecret(wpp_meta_token, req.user.orgId) } : {}),
+        },
+        select: {
+          wpp_meta_phone_id: true, wpp_phone: true, welcome_message: true, wpp_redirect_message: true,
+        },
+      });
+    } catch (err) {
+      // wpp_meta_phone_id is @unique (security-audit fix - prevents one org from
+      // hijacking another org's inbound WhatsApp traffic by claiming its phone
+      // number id) - a P2002 here means this exact number is already registered
+      // to a DIFFERENT organization, not a generic server error.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return reply.status(409).send({
+          error: 'Este número de WhatsApp ya está configurado en otra organización.',
+          code: 'PHONE_ID_ALREADY_IN_USE',
+        });
+      }
+      throw err;
+    }
 
     // Records which fields changed, never the token value itself.
     await audit(fastify.prisma, {

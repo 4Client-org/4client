@@ -16,8 +16,8 @@ async function main() {
       // Same encryptSecret() the config.ts route already uses - this script
       // used to write both of these in plain text, same bug as update-org-wpp.ts
       // (which only ever touched wpp_meta_token, not this field).
-      wpp_meta_token:      encryptSecret(config.META_ACCESS_TOKEN ?? ''),
-      wpp_meta_app_secret: encryptSecret(config.META_APP_SECRET ?? ''),
+      wpp_meta_token:      encryptSecret(config.META_ACCESS_TOKEN ?? '', org.id),
+      wpp_meta_app_secret: encryptSecret(config.META_APP_SECRET ?? '', org.id),
       wpp_phone:           '+15556590674',
     },
   });

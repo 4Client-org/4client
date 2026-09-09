@@ -142,7 +142,11 @@ export default async function userRoutes(fastify: FastifyInstance) {
     const password_hash = await bcrypt.hash(body.data.password, 12);
     const result = await fastify.prisma.user.updateMany({
       where: { id, org_id: req.user.orgId, ...(req.user.role !== 'dev' ? { role: { not: 'dev' } } : {}) },
-      data: { password_hash },
+      // Limpia también el bloqueo por intentos fallidos (security-audit finding) -
+      // sin esto, un admin "arreglando" una cuenta bloqueada cambiándole la
+      // contraseña la dejaba igual de bloqueada hasta que el timer expirara solo,
+      // sin ningún remedio real disponible para el admin.
+      data: { password_hash, failed_login_attempts: 0, locked_until: null },
     });
     if (result.count === 0) return reply.status(404).send({ error: 'Usuario no encontrado', code: 'NOT_FOUND' });
     // Un reseteo de contraseña es casi siempre por sospecha de cuenta

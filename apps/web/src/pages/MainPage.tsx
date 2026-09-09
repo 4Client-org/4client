@@ -173,6 +173,13 @@ export default function MainPage() {
     await api.post('/auth/logout', {}).catch(() => {});
     disconnectSocket();
     clearAuth();
+    // Security-audit finding: without this, cached orders/tickets/chat data
+    // (customer names, addresses, phone numbers) stayed in the QueryClient's
+    // in-memory cache after logout - a module-level singleton (main.tsx) that
+    // outlives this component. On a shared computer, a different staff member
+    // logging in right after (same tab, no reload) could briefly see the
+    // previous session's cached data flash before the refetch resolved.
+    qc.clear();
   }
 
   // Always opens a blank NuevoPedidoModal - staff clicking "crear pedido" on the

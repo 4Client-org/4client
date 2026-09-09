@@ -673,7 +673,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     // la entropía del identificador no alcanza sola como control de acceso).
     const msg = await fastify.prisma.ticketMessage.findFirst({
       where: { media_url: mediaId, ticket: { org_id: req.user.orgId } },
-      select: { media_type: true, ticket: { select: { org: { select: { wpp_meta_phone_id: true, wpp_meta_token: true } } } } },
+      select: { media_type: true, ticket: { select: { org: { select: { id: true, wpp_meta_phone_id: true, wpp_meta_token: true } } } } },
     });
     if (!msg) {
       return reply.status(404).send({ error: 'Imagen no encontrada', code: 'NOT_FOUND' });
