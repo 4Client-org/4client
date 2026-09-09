@@ -104,7 +104,7 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
     delete (config as any).GEMINI_API_KEY;
   });
 
-  it('happy path: matched item gets the catalog price, unmatched item is flagged for review, never touches the DB', async () => {
+  it('happy path: matched item is resolved to the catalog NAME but never priced from it, unmatched item is flagged for review, never touches the DB', async () => {
     (config as any).GEMINI_API_KEY = 'test-key';
     mockGeminiSuccess([
       { product_name: 'tomate', quantity_label: '1 kg' },
@@ -122,8 +122,13 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
 
     expect(res.statusCode).toBe(200);
     const { items, unmatchedNames } = res.json().data;
+    // Tomate has a real catalog price_per_unit (3000, set above) - it must NOT
+    // be auto-copied onto the drafted item (bug reported by a real customer:
+    // Tomar lista was the one path still doing this, after the public form and
+    // manual "crear pedido" flows were already fixed). Every drafted item
+    // starts at $0, matched or not - staff always prices it by hand.
     expect(items).toEqual([
-      { product_name: 'Tomate', quantity_label: '1 kg', price: 3000, added_by_client: false, ai_unmatched: false },
+      { product_name: 'Tomate', quantity_label: '1 kg', price: 0, added_by_client: false, ai_unmatched: false },
       { product_name: 'cebolla malla', quantity_label: '', price: 0, added_by_client: false, ai_unmatched: true },
     ]);
     expect(unmatchedNames).toEqual(['cebolla malla']);

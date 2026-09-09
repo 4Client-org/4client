@@ -905,9 +905,9 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     const products = await fastify.prisma.product.findMany({
       where: { org_id: req.user.orgId, active: true },
-      select: { name: true, price_per_unit: true },
+      select: { name: true },
     });
-    const catalog = products.map(p => ({ name: p.name, price_per_unit: p.price_per_unit ? Number(p.price_per_unit) : null }));
+    const catalog = products.map(p => ({ name: p.name }));
 
     let extracted;
     try {
@@ -926,7 +926,12 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       return {
         product_name: m.name,
         quantity_label: item.quantity_label ?? '',
-        price: m.price,
+        // Siempre 0, calce o no con el catálogo - mismo criterio que el
+        // formulario público y "crear pedido" manual (bug reportado por el
+        // cliente: Tomar lista era el único camino que seguía autoasignando
+        // el precio del catálogo). El encargado revisa y escribe el precio
+        // real de cada línea a mano, siempre.
+        price: 0,
         added_by_client: false,
         ai_unmatched: !m.matched,
       };
