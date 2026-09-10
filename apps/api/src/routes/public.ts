@@ -11,6 +11,12 @@ import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 // 24h, so this caps spam from a leaked/shared link.
 const MAX_FORM_ORDERS_PER_TICKET = 3;
 
+// Sentinel thrown from inside createOrderWithRetryNum's transaction when the
+// per-ticket cap above is hit - lets that generic helper's own P2002-only retry
+// logic ignore it (isCollision is false, so it rethrows immediately) while still
+// letting the call site below translate it into a normal 429 response.
+class FormOrderLimitReachedError extends Error {}
+
 // Wording for the client-facing WhatsApp confirmation messages - matches the buttons
 // shown on the form itself (ClientFormPage.tsx), not the staff-side PAYMENT_LABELS
 // used in orders.ts (which says "Efectivo" instead of "En tienda" for `cash`).
@@ -729,45 +735,62 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // form order and be permanently locked out of the link, forever, with no way to
     // recover short of staff editing the DB. Doesn't apply to the merge path above
     // since that never creates a new order.
-    const existingFormOrdersToday = await fastify.prisma.order.count({
-      where: { ticket_id: ticket.id, source: 'form', fecha: todayLocal },
-    });
-    if (existingFormOrdersToday >= MAX_FORM_ORDERS_PER_TICKET) {
-      return reply.status(429).send({ error: 'Límite de pedidos alcanzado para este link por hoy. Contáctanos directamente si necesitas hacer otro.', code: 'FORM_LIMIT_REACHED' });
-    }
-
+    //
+    // The count check and the insert both happen INSIDE createOrderWithRetryNum's
+    // transaction, behind a ticket-scoped advisory lock acquired first (security-
+    // audit finding) - previously this was a plain count-then-create outside any
+    // transaction, so two concurrent submissions for the SAME ticket could both
+    // read a count under the cap before either one's insert committed, letting the
+    // cap be exceeded. Seed `1` (vs acquireDayLock's `0`) keeps this lock's
+    // namespace independent from the org+day numbering lock - same ticket.id
+    // string could otherwise theoretically collide with an unrelated org+day key.
     const orderItems = newItemsData.map((item, idx) => ({ ...item, sort_order: idx }));
 
-    const order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, (tx, num) =>
-      tx.order.create({
-        data: {
-          org_id: ticket.org_id,
-          ticket_id: ticket.id,
-          num,
-          customer_name: ticket.customer_name ?? '',
-          // Snapshot at creation time, never touched afterward - see
-          // schema.prisma's own comment on client_contact_name. Matches
-          // orders.ts's own staff-side order creation.
-          client_contact_name: ticket.customer_name ?? '',
-          customer_phone: ticket.phone,
-          address: body.data.address,
-          channel: 'whatsapp',
-          payment_method: body.data.payment_method ?? 'sin_asignar',
-          status: 'nuevo',
-          source: 'form',
-          registered_by: actorUser.id,
-          fecha: todayLocal,
-          consent_confirmed_at: consentConfirmedAt,
-          items: { create: orderItems },
-        },
-        include: {
-          items: { orderBy: { sort_order: 'asc' } },
-          employee: { select: { id: true, name: true } },
-          registeredBy: { select: { id: true, name: true } },
-          paidBy: { select: { id: true, name: true } },
-        },
-      }),
-    );
+    let order;
+    try {
+      order = await createOrderWithRetryNum(fastify.prisma, ticket.org_id, todayLocal, async (tx, num) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${ticket.id}, 1))`;
+        const existingFormOrdersToday = await tx.order.count({
+          where: { ticket_id: ticket.id, source: 'form', fecha: todayLocal },
+        });
+        if (existingFormOrdersToday >= MAX_FORM_ORDERS_PER_TICKET) {
+          throw new FormOrderLimitReachedError();
+        }
+        return tx.order.create({
+          data: {
+            org_id: ticket.org_id,
+            ticket_id: ticket.id,
+            num,
+            customer_name: ticket.customer_name ?? '',
+            // Snapshot at creation time, never touched afterward - see
+            // schema.prisma's own comment on client_contact_name. Matches
+            // orders.ts's own staff-side order creation.
+            client_contact_name: ticket.customer_name ?? '',
+            customer_phone: ticket.phone,
+            address: body.data.address,
+            channel: 'whatsapp',
+            payment_method: body.data.payment_method ?? 'sin_asignar',
+            status: 'nuevo',
+            source: 'form',
+            registered_by: actorUser.id,
+            fecha: todayLocal,
+            consent_confirmed_at: consentConfirmedAt,
+            items: { create: orderItems },
+          },
+          include: {
+            items: { orderBy: { sort_order: 'asc' } },
+            employee: { select: { id: true, name: true } },
+            registeredBy: { select: { id: true, name: true } },
+            paidBy: { select: { id: true, name: true } },
+          },
+        });
+      });
+    } catch (err) {
+      if (err instanceof FormOrderLimitReachedError) {
+        return reply.status(429).send({ error: 'Límite de pedidos alcanzado para este link por hoy. Contáctanos directamente si necesitas hacer otro.', code: 'FORM_LIMIT_REACHED' });
+      }
+      throw err;
+    }
     const num = order.num;
 
     // Mensaje en el chat del ticket

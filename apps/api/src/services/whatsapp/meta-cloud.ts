@@ -14,6 +14,24 @@ function toOrRecipient(identifier: string): { to: string } | { recipient: string
   return /^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(identifier) ? { recipient: identifier } : { to: identifier };
 }
 
+// SSRF defense-in-depth (security-audit finding): getMediaUrl() hands back
+// whatever URL Meta's own Graph API response contains, and downloadMedia()
+// below fetches it with no verification it's actually Meta's own CDN. Not
+// exploitable today - the only caller is inbox.ts's GET /media/:id, which
+// already validates the media id is a plain numeric string and resolves it
+// against a fixed `https://graph.facebook.com/v22.0/${mediaId}` URL before
+// ever reaching this function, so an external attacker has no way to smuggle
+// an arbitrary URL into this path. This check is a second, independent gate
+// in case that ever changes - it only allows Meta's known media-CDN domains,
+// rejecting e.g. an internal/link-local address a compromised or MITM'd
+// response could otherwise redirect this server into fetching.
+const ALLOWED_MEDIA_HOSTS = ['fbcdn.net', 'fbsbx.com', 'facebook.com', 'whatsapp.net'];
+function assertMetaHostname(url: string): void {
+  const { hostname } = new URL(url);
+  const allowed = ALLOWED_MEDIA_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+  if (!allowed) throw new Error(`Media URL host no permitido: ${hostname}`);
+}
+
 export class MetaCloudProvider {
   constructor(
     private readonly phoneNumberId: string,
@@ -62,6 +80,7 @@ export class MetaCloudProvider {
   }
 
   async downloadMedia(url: string): Promise<Buffer> {
+    assertMetaHostname(url);
     const res = await fetch(url, { headers: { Authorization: `Bearer ${this.accessToken}` } });
     if (!res.ok) throw new Error(`Meta API downloadMedia failed (${res.status})`);
     return Buffer.from(await res.arrayBuffer());
@@ -226,9 +245,9 @@ export class MetaCloudProvider {
     }).catch(() => {}); // non-critical, best effort
   }
 
-  static fromOrg(org: { wpp_meta_phone_id: string | null; wpp_meta_token: string | null }): MetaCloudProvider | null {
+  static fromOrg(org: { id: string; wpp_meta_phone_id: string | null; wpp_meta_token: string | null }): MetaCloudProvider | null {
     if (!org.wpp_meta_phone_id || !org.wpp_meta_token) return null;
-    const token = decryptSecret(org.wpp_meta_token);
+    const token = decryptSecret(org.wpp_meta_token, org.id);
     if (!token) return null;
     return new MetaCloudProvider(org.wpp_meta_phone_id, token);
   }

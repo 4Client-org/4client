@@ -5,7 +5,7 @@ import { storage } from '../services/storage.js';
 import { config } from '../config.js';
 import fs from 'fs';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import { randomBytes } from 'crypto';
 import { clearSoftLinkBlock, MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
@@ -44,7 +44,11 @@ export default async function fileRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Archivo demasiado grande (máx 20 MB)' });
     }
 
-    const id = randomUUID().replace(/-/g, '').slice(0, 12);
+    // 20 random bytes (160 bits) - was 12 hex chars off a UUID (48 bits, a
+    // security-audit finding); matches formLink.ts's own token entropy now,
+    // mitigated either way by this link's TTL/revocation/rate-limit, but no
+    // reason for this one to be thinner than that pattern.
+    const id = randomBytes(20).toString('hex');
     const orgPrefix = req.user.orgId.replace(/-/g, '').slice(0, 12);
     // Hyphens, not underscores: WhatsApp's message renderer treats a pair of
     // underscores as italic-markdown delimiters, so a URL containing them gets

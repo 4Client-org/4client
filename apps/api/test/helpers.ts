@@ -25,6 +25,7 @@ import fileRoutes from '../src/routes/files.js';
 import productRoutes from '../src/routes/products.js';
 import devRoutes from '../src/routes/dev.js';
 import billingRoutes from '../src/routes/billing.js';
+import configRoutes from '../src/routes/config.js';
 
 /**
  * Builds a fully-wired Fastify instance (same plugins as server.ts) with only the
@@ -72,6 +73,7 @@ export async function buildTestServer(): Promise<FastifyInstance> {
   await fastify.register(productRoutes, { prefix: '/api/v1/products' });
   await fastify.register(devRoutes, { prefix: '/api/v1/dev' });
   await fastify.register(billingRoutes, { prefix: '/api/v1/billing' });
+  await fastify.register(configRoutes, { prefix: '/api/v1/config' });
 
   fastify.setErrorHandler((error: FastifyError, _req, reply) => {
     const status = error.statusCode ?? 500;

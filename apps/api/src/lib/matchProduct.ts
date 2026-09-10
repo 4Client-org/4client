@@ -7,7 +7,6 @@ import { normalizeSearch } from './normalize.js';
 
 export interface CatalogEntry {
   name: string;
-  price_per_unit: number | null;
 }
 
 export interface MatchResult {
@@ -16,7 +15,6 @@ export interface MatchResult {
   // product name, not whatever variant the AI/client typed); the raw AI text
   // as-is when unmatched (nothing better to show).
   name: string;
-  price: number;
 }
 
 // Scoped to this file only - NOT the same normalization used for search boxes
@@ -72,23 +70,25 @@ function similarity(a: string, b: string): number {
 const FUZZY_THRESHOLD = 0.72;
 const FUZZY_MARGIN = 0.08;
 
+// price_per_unit is NEVER read here (security-audit-style fix, same rule
+// applied to the public form and the manual "crear pedido" flow already):
+// this function only resolves a NAME against the catalog. The caller
+// (inbox.ts's /parse-messages) always starts every drafted item's price at 0,
+// matched or not - staff types the real price by hand, always, no exceptions.
 export function matchProductName(raw: string, catalog: CatalogEntry[]): MatchResult {
   const rawNorm = normalizeForMatch(raw);
   const entries = catalog.map(c => ({ ...c, norm: normalizeForMatch(c.name) }));
 
-  const priceOf = (p: number | null): number => p ?? 0;
-
   // 1. Exact normalized match.
   const exact = entries.find(e => e.norm === rawNorm);
-  if (exact) return { matched: true, name: exact.name, price: priceOf(exact.price_per_unit) };
+  if (exact) return { matched: true, name: exact.name };
 
   // 2. Substring containment, only if exactly one catalog product qualifies -
   // an ambiguous hit (e.g. "papa" matching both "Papa criolla" and "Papa
   // pastusa") must not guess, it falls through to fuzzy matching instead.
   const substringHits = entries.filter(e => e.norm.includes(rawNorm) || rawNorm.includes(e.norm));
   if (substringHits.length === 1) {
-    const e = substringHits[0];
-    return { matched: true, name: e.name, price: priceOf(e.price_per_unit) };
+    return { matched: true, name: substringHits[0].name };
   }
 
   // 3. Fuzzy match by edit-distance similarity - only if the best candidate
@@ -102,10 +102,10 @@ export function matchProductName(raw: string, catalog: CatalogEntry[]): MatchRes
     const second = scored[1];
     const marginOk = !second || best.score - second.score >= FUZZY_MARGIN;
     if (best.score >= FUZZY_THRESHOLD && marginOk) {
-      return { matched: true, name: best.e.name, price: priceOf(best.e.price_per_unit) };
+      return { matched: true, name: best.e.name };
     }
   }
 
   // 4. No confident match - surface the raw AI text as-is for staff to review.
-  return { matched: false, name: raw, price: 0 };
+  return { matched: false, name: raw };
 }

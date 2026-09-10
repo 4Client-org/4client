@@ -1,5 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+
+// sendEmail hits a real external API (Resend) - mocked so the lockout-notification
+// tests below never make a real network call (same pattern as auth-2fa.test.ts's
+// verification-code email).
+const sendEmailMock = vi.fn().mockResolvedValue(undefined);
+vi.mock('../src/services/email.js', () => ({ sendEmail: (...args: any[]) => sendEmailMock(...args) }));
+
 import { buildTestServer, createTestOrg, createTestUser, getRfCookie } from './helpers.js';
 
 describe('auth routes', () => {
@@ -79,6 +86,7 @@ describe('auth routes', () => {
       method: 'POST',
       url: '/api/v1/auth/refresh',
       cookies: { rf: cookie1 },
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
     });
 
     expect(refreshRes.statusCode).toBe(200);
@@ -115,6 +123,7 @@ describe('auth routes', () => {
       method: 'POST',
       url: '/api/v1/auth/refresh',
       cookies: { rf: cookieGen1 },
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
     });
     expect(refresh1.statusCode).toBe(200);
     const cookieGen2 = getRfCookie(refresh1)!;
@@ -125,6 +134,7 @@ describe('auth routes', () => {
       method: 'POST',
       url: '/api/v1/auth/refresh',
       cookies: { rf: cookieGen1 },
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
     });
     expect(reuseAttempt.statusCode).toBe(401);
     expect(reuseAttempt.json().code).toBe('TOKEN_REUSE_DETECTED');
@@ -135,6 +145,7 @@ describe('auth routes', () => {
       method: 'POST',
       url: '/api/v1/auth/refresh',
       cookies: { rf: cookieGen2 },
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
     });
     expect(gen2NowInvalid.statusCode).toBe(401);
   });
@@ -143,8 +154,30 @@ describe('auth routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/refresh',
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  // Security-audit finding: /refresh requires this header as a CSRF defense - a
+  // cross-site form/img/script can make the browser attach the `rf` cookie to a
+  // forged request, but can't set a custom header without triggering a CORS
+  // preflight that only the real frontend origin ever passes.
+  it('rejects refresh with no X-Requested-With header -> 403 CSRF_CHECK_FAILED, even with a valid cookie', async () => {
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email, password },
+    });
+    const cookie = getRfCookie(loginRes)!;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      cookies: { rf: cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe('CSRF_CHECK_FAILED');
   });
 
   it('GET /auth/me with a valid access token -> 200 with user data', async () => {
@@ -168,5 +201,68 @@ describe('auth routes', () => {
   it('GET /auth/me with no token -> 401', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/auth/me' });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// Own describe block with its own org/user - a lockout deliberately affects a
+// specific account for a while, so this must never share state with (or run
+// interleaved against) the tests above.
+describe('account lockout after repeated failed logins', () => {
+  let app: FastifyInstance;
+  const email = `lockout-test-${Date.now()}@example.com`;
+  const password = 'CorrectHorseBatteryStaple1!';
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    await createTestUser(app.prisma, org.id, 'encargado', password, { email });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('locks the account after 5 wrong passwords, notifies the owner by email, and rejects further attempts (even the RIGHT password) with 429 ACCOUNT_LOCKED', async () => {
+    sendEmailMock.mockClear();
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({
+        method: 'POST', url: '/api/v1/auth/login',
+        payload: { email, password: 'wrong-password' },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().code).toBe('INVALID_CREDENTIALS');
+    }
+
+    // Security-audit finding: the account owner is notified the moment a
+    // lockout actually triggers (not on every failed attempt before that).
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0]).toBe(email);
+
+    const lockedOut = await app.inject({
+      method: 'POST', url: '/api/v1/auth/login',
+      payload: { email, password }, // the CORRECT password, doesn't matter now
+    });
+    expect(lockedOut.statusCode).toBe(429);
+    expect(lockedOut.json().code).toBe('ACCOUNT_LOCKED');
+  });
+
+  it('a correct password does NOT count as a failed attempt, even when the account\'s organization is inactive', async () => {
+    const org2 = await createTestOrg(app.prisma, { active: false });
+    const email2 = `lockout-inactive-org-${Date.now()}@example.com`;
+    const user = await createTestUser(app.prisma, org2.id, 'encargado', password, { email: email2 });
+
+    // Security-audit bug fix: previously `!user.org.active` was OR'd into the
+    // same branch that increments failed_login_attempts, so a correct password
+    // against an inactive org's account still got counted as a "failed" login.
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/auth/login',
+      payload: { email: email2, password },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().code).toBe('INVALID_CREDENTIALS');
+
+    const after = await app.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(after.failed_login_attempts).toBe(0);
+    expect(after.locked_until).toBeNull();
   });
 });

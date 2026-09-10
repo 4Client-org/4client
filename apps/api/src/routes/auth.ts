@@ -147,7 +147,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const hashToCheck = user?.password_hash ?? DUMMY_HASH;
     const valid = await bcrypt.compare(password, hashToCheck);
 
-    if (!user || !user.org.active || !valid) {
+    // Solo cuenta como intento fallido una CONTRASEÑA incorrecta contra una
+    // cuenta real - antes, una organización inactiva con la contraseña
+    // CORRECTA también incrementaba failed_login_attempts (bug de seguridad-
+    // auditoría: un usuario de una org desactivada podía terminar bloqueado
+    // por su propio login legítimo, sin haber fallado nada).
+    if (!user || !valid) {
       // Solo se cuenta/bloquea contra una cuenta REAL - una contraseña
       // incorrecta contra un email que no existe no escribe nada (no hay fila
       // que actualizar, y tampoco aportaría ninguna protección real).
@@ -168,8 +173,24 @@ export default async function authRoutes(fastify: FastifyInstance) {
             where: { id: user.id },
             data: { locked_until: new Date(Date.now() + lockoutDurationMs(attempts)) },
           });
+          // Aviso al dueño real de la cuenta - un atacante que sabe el email de
+          // alguien puede bloquearle la cuenta repetidamente con 5 intentos
+          // fallidos cada vez (hallazgo de auditoría: DoS dirigido silencioso).
+          // Esto no lo evita, pero lo hace visible - la víctima real se entera
+          // de que está pasando en vez de solo encontrarse la cuenta bloqueada
+          // sin explicación. Fire-and-forget: un fallo de envío no debe romper
+          // ni retrasar la respuesta del login.
+          sendEmail(
+            user.email,
+            'Aviso de seguridad: tu cuenta fue bloqueada temporalmente',
+            `<p>Detectamos varios intentos fallidos de inicio de sesión en tu cuenta de <strong>${user.org.name}</strong> y la bloqueamos temporalmente por seguridad.</p><p>Si fuiste tú, simplemente espera a que se desbloquee sola. Si no fuiste tú, avisa a un administrador.</p>`,
+          ).catch((err) => fastify.log.warn({ err, userId: user.id }, 'No se pudo enviar el aviso de bloqueo de cuenta'));
         }
       }
+      return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
+    }
+
+    if (!user.org.active) {
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
     }
 
@@ -243,8 +264,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Demasiados intentos, inicia sesión de nuevo', code: 'CODE_LOCKED' });
     }
 
+    // Timing-safe compare (defense-in-depth, security-audit finding) - both
+    // sides are always a 64-char hex SHA-256 digest, so length always matches
+    // and this never throws.
     const codeHash = crypto.createHash('sha256').update(body.data.code).digest('hex');
-    if (codeHash !== stored.code_hash) {
+    const codesMatch = crypto.timingSafeEqual(Buffer.from(codeHash, 'hex'), Buffer.from(stored.code_hash, 'hex'));
+    if (!codesMatch) {
       return reply.status(401).send({ error: 'Código incorrecto', code: 'INVALID_CODE' });
     }
 
@@ -262,6 +287,19 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/auth/refresh - reads refresh token from HttpOnly cookie
   fastify.post('/refresh', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+    // CSRF defense (security-audit finding): SameSite=None on the `rf` cookie
+    // (required cross-domain, see cookieOpts above) means a cross-site page can
+    // make the browser attach it to a forged request here. It can't read the
+    // response (CORS) or the new cookie (httpOnly), so a forged refresh alone
+    // can't steal a session - but it could force an unwanted token rotation or
+    // (combined with reuse-detection) a full logout. A plain cross-site
+    // form/img/script can't set this custom header without triggering a CORS
+    // preflight, which only THIS frontend's origin (server.ts's allowlist)
+    // ever passes - lib/api.ts's doRefresh() sends it on every real call.
+    if (req.headers['x-requested-with'] !== 'XMLHttpRequest') {
+      return reply.status(403).send({ error: 'Solicitud rechazada', code: 'CSRF_CHECK_FAILED' });
+    }
+
     const rawRefresh = (req.cookies as Record<string, string>)?.rf;
     if (!rawRefresh) {
       return reply.status(401).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
@@ -303,8 +341,28 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Usuario inactivo', code: 'USER_INACTIVE' });
     }
 
-    // Rotate refresh token
-    await fastify.prisma.refreshToken.update({ where: { id: stored.id }, data: { revoked: true } });
+    // Rotate refresh token - atomic claim (security-audit finding), not a plain
+    // update: the previous shape (a separate `update` here, after already
+    // confirming `!stored.revoked` above) had a check-then-act race - two
+    // concurrent requests presenting the same not-yet-rotated cookie could both
+    // pass that check before either write landed, both minting a new token from
+    // the same old one. Folding "not already revoked" INTO the WHERE means
+    // Postgres's row locking lets only one request ever win this claim; a
+    // losing request is treated exactly like the reuse-detection case above
+    // (revoke the whole family) since a legitimate double-fire and an actual
+    // stolen-token race look identical from here.
+    const claim = await fastify.prisma.refreshToken.updateMany({
+      where: { id: stored.id, revoked: false },
+      data: { revoked: true },
+    });
+    if (claim.count === 0) {
+      await fastify.prisma.refreshToken.updateMany({
+        where: { user_id: stored.user_id, revoked: false },
+        data: { revoked: true },
+      });
+      reply.clearCookie('rf', { path: '/api/v1/auth' });
+      return reply.status(401).send({ error: 'Sesión inválida, inicia sesión de nuevo', code: 'TOKEN_REUSE_DETECTED' });
+    }
 
     const newRaw = crypto.randomBytes(40).toString('hex');
     const newHash = crypto.createHash('sha256').update(newRaw).digest('hex');

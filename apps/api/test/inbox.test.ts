@@ -119,7 +119,9 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     // round-trips fine here without needing real encryption for this test.
     await app.prisma.organization.update({
       where: { id: orgId },
-      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+      // org.id, not a fixed literal - wpp_meta_phone_id is @unique now (security-audit
+      // fix), so a literal shared with another test file's org would collide.
+      data: { wpp_meta_phone_id: `test-phone-${orgId}`, wpp_meta_token: 'test-token' },
     });
     const admin = await createTestUser(app.prisma, orgId, 'admin', 'InboxWppAdmin1!');
     adminToken = await login(app, admin.email, 'InboxWppAdmin1!');
@@ -206,7 +208,7 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230004', customer_name: 'Cliente Foto' } });
     const fakeMediaId = '11111111111111';
     const fakeWamid = `wamid.IMG${Date.now()}`;
-    const fakeDownloadUrl = 'https://fake-meta-cdn.example/download/img-abc';
+    const fakeDownloadUrl = 'https://fake-meta-cdn.fbcdn.net/download/img-abc';
 
     // Smallest valid PNG (1x1, base64) - real bytes, so the magic-byte check on
     // both the way in (send-image) and the way out (GET /media/:id, which
@@ -384,7 +386,7 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
   it('GET /media/:token never serves bytes Meta returns that don\'t actually match a real image signature, even though the message row and the org both check out - the check moved here from ingest time, it did not disappear', async () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230010', customer_name: 'Cliente Foto Meta Rara' } });
     const mediaId = '33333333333333';
-    const fakeDownloadUrl = 'https://fake-meta-cdn.example/download/bad-img';
+    const fakeDownloadUrl = 'https://fake-meta-cdn.fbcdn.net/download/bad-img';
     await app.prisma.ticketMessage.create({
       data: { ticket_id: ticket.id, direction: 'in', media_type: 'image', media_url: mediaId },
     });

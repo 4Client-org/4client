@@ -88,7 +88,12 @@ async function start() {
       cb(new Error('Not allowed by CORS'), false);
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    // X-Requested-With: routes/auth.ts's /refresh requires this header as a
+    // lightweight CSRF defense (security-audit finding) - a cross-site page
+    // can attach our SameSite=None cookie to a request, but can't add a custom
+    // header without triggering a CORS preflight, which this same origin
+    // allowlist would then reject for any site not in FRONTEND_URL.
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true,
   });
 

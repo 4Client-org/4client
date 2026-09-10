@@ -1004,7 +1004,9 @@ describe('public /submit - Meta WhatsApp delivery tracking on the order confirma
     // legacy plaintext, so a plain string round-trips fine without real encryption.
     await app.prisma.organization.update({
       where: { id: orgId },
-      data: { wpp_meta_phone_id: 'test-phone-id', wpp_meta_token: 'test-token' },
+      // org.id, not a fixed literal - wpp_meta_phone_id is @unique now (security-audit
+      // fix), so a literal shared with another test file's org would collide.
+      data: { wpp_meta_phone_id: `test-phone-${orgId}`, wpp_meta_token: 'test-token' },
     });
     await createTestUser(app.prisma, orgId, 'admin', 'SubmitWppAdmin1!');
     originalFetch = global.fetch;
