@@ -424,6 +424,121 @@ describe('inbox routes - Meta WhatsApp delivery tracking', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().code).toBe('MEDIA_EXPIRED');
   });
+
+  it('POST /messages/:messageId/forward sends a text message to another chat and tracks delivery normally', async () => {
+    const source = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230020', customer_name: 'Origen Reenvío' } });
+    const target = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230021', customer_name: 'Destino Reenvío' } });
+    const original = await app.prisma.ticketMessage.create({
+      data: { ticket_id: source.id, direction: 'in', text: 'Cliente pregunta por el domicilio' },
+    });
+    const fakeWamid = `wamid.FWD${Date.now()}`;
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: fakeWamid }] }), { status: 200 })) as any;
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/messages/${original.id}/forward`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { targetTicketIds: [target.id] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data).toEqual({ forwarded: 1, failed: [] });
+
+    await new Promise((r) => setTimeout(r, 200));
+    const forwarded = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: target.id, direction: 'out' } });
+    expect(forwarded!.text).toBe('Cliente pregunta por el domicilio');
+    expect(forwarded!.wpp_message_id).toBe(fakeWamid);
+    expect(forwarded!.failed_reason).toBeNull();
+  });
+
+  it('rejects forwarding a message to its own chat, even if it\'s the only target', async () => {
+    const source = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230022', customer_name: 'Autoreenvío' } });
+    const original = await app.prisma.ticketMessage.create({ data: { ticket_id: source.id, direction: 'in', text: 'hola' } });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/messages/${original.id}/forward`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { targetTicketIds: [source.id] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('reports a target ticket from another org as failed/missing, never leaking or forwarding into it', async () => {
+    const source = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230023', customer_name: 'Origen Cross-Org' } });
+    const original = await app.prisma.ticketMessage.create({ data: { ticket_id: source.id, direction: 'in', text: 'hola' } });
+    const otherOrg = await createTestOrg(app.prisma);
+    const otherOrgTicket = await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573009990001', customer_name: 'Otra Org' } });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/messages/${original.id}/forward`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { targetTicketIds: [otherOrgTicket.id] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data).toEqual({ forwarded: 0, failed: [otherOrgTicket.id] });
+
+    const leaked = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: otherOrgTicket.id } });
+    expect(leaked).toBeNull();
+  });
+
+  // Bug found investigating this feature: when a forward can't actually reach
+  // WhatsApp (no credentials, or - this test - the original media already
+  // expired on Meta's side), the row was created and `continue`d past with NO
+  // failed_reason and NO status emit ever, forever. wpp_message_id AND
+  // failed_reason both stayed null - the exact condition apps/web's
+  // DeliveryStatus is gated on (`msg.wpp_message_id || msg.failed_reason`,
+  // itself fixed alongside this) - so the message looked like a normal
+  // pending send with no way for staff to ever learn it silently failed.
+  it('marks a forwarded PHOTO failed_reason immediately when the original has expired on Meta (>30 days) - never a silent, permanently-unresolved row', async () => {
+    const source = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230024', customer_name: 'Origen Foto Vieja' } });
+    const target = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001230025', customer_name: 'Destino Foto Vieja' } });
+    const original = await app.prisma.ticketMessage.create({
+      data: { ticket_id: source.id, direction: 'in', media_type: 'image', media_url: '55555555555555' },
+    });
+    // getMediaUrl itself 404s - Meta no longer has this media at all.
+    global.fetch = (async () => new Response(JSON.stringify({ error: { message: 'Object with ID does not exist' } }), { status: 404 })) as any;
+
+    const emitSpy = vi.fn();
+    const toSpy = vi.spyOn(app.io, 'to').mockReturnValue({ emit: emitSpy } as any);
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/messages/${original.id}/forward`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { targetTicketIds: [target.id] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().data).toEqual({ forwarded: 1, failed: [] }); // the row itself IS created - "forwarded" tracks that, not delivery
+
+    const forwarded = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: target.id, direction: 'out' } });
+    expect(forwarded!.wpp_message_id).toBeNull();
+    expect(forwarded!.failed_reason).toContain('30 días');
+
+    const statusEmitCall = emitSpy.mock.calls.find(call => call[0] === 'ticket:message-status');
+    expect(statusEmitCall).toBeDefined();
+    expect(statusEmitCall![1]).toMatchObject({ ticketId: target.id, messageId: forwarded!.id, failed_reason: forwarded!.failed_reason });
+
+    toSpy.mockRestore();
+  });
+
+  it('marks a forward failed_reason immediately when the organization has no WhatsApp credentials configured', async () => {
+    // A separate org with no wpp_meta_phone_id/wpp_meta_token at all - never
+    // mutates the shared `orgId` org other tests in this file depend on.
+    const noWppOrg = await createTestOrg(app.prisma);
+    const noWppAdmin = await createTestUser(app.prisma, noWppOrg.id, 'admin', ADMIN_PASS);
+    const noWppAdminToken = await login(app, noWppAdmin.email, ADMIN_PASS);
+    const source = await app.prisma.ticket.create({ data: { org_id: noWppOrg.id, phone: '573001230026', customer_name: 'Origen Sin Credenciales' } });
+    const target = await app.prisma.ticket.create({ data: { org_id: noWppOrg.id, phone: '573001230027', customer_name: 'Destino Sin Credenciales' } });
+    const original = await app.prisma.ticketMessage.create({ data: { ticket_id: source.id, direction: 'in', text: 'hola' } });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/messages/${original.id}/forward`,
+      headers: { authorization: `Bearer ${noWppAdminToken}` },
+      payload: { targetTicketIds: [target.id] },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const forwarded = await app.prisma.ticketMessage.findFirst({ where: { ticket_id: target.id, direction: 'out' } });
+    expect(forwarded!.wpp_message_id).toBeNull();
+    expect(forwarded!.failed_reason).toContain('credenciales');
+  });
 });
 
 describe('POST /:ticketId/erase-data - derecho de supresión (Ley 1581 de 2012)', () => {
