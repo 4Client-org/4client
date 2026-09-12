@@ -104,6 +104,65 @@ describe('inbox routes', () => {
   });
 });
 
+// Bug reported by a real customer: ForwardMessageModal.tsx used to call GET
+// /inbox (admin/dev-only) for its chat-picker list, but the forward BUTTON
+// itself (and POST /messages/:messageId/forward) has always been open to
+// every authenticated role - an encargado clicking "Reenviar" got the search
+// box with a permanently empty list underneath, no error shown, looking like
+// "just a text box with no way to pick anyone". /forward-targets is the fix:
+// a minimal endpoint open to any authenticated staff, same as replying.
+describe('GET /inbox/forward-targets', () => {
+  let app: FastifyInstance;
+  let orgId: string;
+  let adminToken: string;
+  let encargadoToken: string;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+    const org = await createTestOrg(app.prisma);
+    orgId = org.id;
+    const admin = await createTestUser(app.prisma, orgId, 'admin', ADMIN_PASS);
+    adminToken = await login(app, admin.email, ADMIN_PASS);
+    const encargado = await createTestUser(app.prisma, orgId, 'encargado', ADMIN_PASS);
+    encargadoToken = await login(app, encargado.email, ADMIN_PASS);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('an encargado (not just admin) gets the real chat list, unlike GET /inbox which is admin-only', async () => {
+    await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573008880001', customer_name: 'Cliente Forward Target' } });
+
+    // GET /inbox itself stays admin-only, unchanged - confirms this test is
+    // exercising the actual gap, not a role check that was already open.
+    const fullInbox = await app.inject({
+      method: 'GET', url: '/api/v1/inbox',
+      headers: { authorization: `Bearer ${encargadoToken}` },
+    });
+    expect(fullInbox.statusCode).toBe(403);
+
+    const targets = await app.inject({
+      method: 'GET', url: '/api/v1/inbox/forward-targets',
+      headers: { authorization: `Bearer ${encargadoToken}` },
+    });
+    expect(targets.statusCode).toBe(200);
+    expect(targets.json().data.some((t: any) => t.customer_name === 'Cliente Forward Target')).toBe(true);
+  });
+
+  it('never returns another organization\'s chats', async () => {
+    const otherOrg = await createTestOrg(app.prisma);
+    await app.prisma.ticket.create({ data: { org_id: otherOrg.id, phone: '573008880099', customer_name: 'Otra Org Forward' } });
+
+    const res = await app.inject({
+      method: 'GET', url: '/api/v1/inbox/forward-targets',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.some((t: any) => t.customer_name === 'Otra Org Forward')).toBe(false);
+  });
+});
+
 describe('inbox routes - Meta WhatsApp delivery tracking', () => {
   let app: FastifyInstance;
   let orgId: string;

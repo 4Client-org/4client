@@ -58,6 +58,35 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     return reply.send({ data: tickets });
   });
 
+  // GET /api/v1/inbox/forward-targets - lista mínima de chats (id, nombre,
+  // teléfono) para el selector de ForwardMessageModal.tsx. Deliberadamente
+  // SIN requireRole('admin') a diferencia de GET / de arriba - "reenviar a
+  // otro chat" (POST /messages/:messageId/forward, unas líneas más abajo) ya
+  // era usable por cualquier rol autenticado desde siempre (mismo criterio
+  // que /:ticketId/reply), pero el selector de destinos llamaba a GET /,
+  // así que un encargado (sin acceso a esa ruta) veía el modal de reenviar
+  // con el buscador pero la lista de chats siempre vacía - el botón
+  // "Reenviar" parecía "solo un cuadro de texto sin poder elegir a quién"
+  // (reportado por un cliente real). Esta ruta expone lo mínimo indispensable
+  // para elegir un destino, no el dashboard completo de GET / (sin preview de
+  // mensajes, sin pedidos, sin contador de no leídos) - el resto del inbox
+  // administrativo sigue siendo admin/dev-only, sin cambios.
+  fastify.get('/forward-targets', { preHandler: [authenticate] }, async (req, reply) => {
+    const allTickets = await fastify.prisma.ticket.findMany({
+      where: { org_id: req.user.orgId },
+      select: { id: true, customer_name: true, phone: true },
+      orderBy: { last_activity_at: 'desc' },
+      take: 500,
+    });
+    const seenPhones = new Set<string>();
+    const tickets = allTickets.filter(t => {
+      if (seenPhones.has(t.phone)) return false;
+      seenPhones.add(t.phone);
+      return true;
+    });
+    return reply.send({ data: tickets });
+  });
+
   // GET /api/v1/inbox/search?q=TEXT&fecha=YYYY-MM-DD - busca en TODO el
   // historial (no solo los 500 tickets más recientes que GET / carga), como la
   // búsqueda real de WhatsApp: por nombre, teléfono, o contenido de cualquier

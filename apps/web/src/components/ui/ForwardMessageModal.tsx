@@ -14,18 +14,25 @@ interface Props {
 
 // Shared by every chat view that can show a message (InboxPanel's own
 // conversation, TicketModal "Ver conversación", DetallePedidoModal's embedded
-// chat) - one modal instead of duplicating this three times. Always fetches
-// the ['inbox'] ticket list itself (same query key InboxPanel/MainPage use,
-// so React Query just reuses whatever's already cached there instead of a
-// fresh network call in the common case).
+// chat) - one modal instead of duplicating this three times.
+//
+// Uses its OWN query (['inbox-forward-targets'], /inbox/forward-targets), not
+// the ['inbox'] dashboard query InboxPanel/MainPage use - that one is admin/
+// dev-only server-side, while forwarding a message is open to every
+// authenticated role (same as replying). Reusing ['inbox'] here meant an
+// encargado opening this modal got a search box with a permanently EMPTY chat
+// list (the fetch 403ed silently, `data` just defaulted to []) - looked like
+// "a text box with no way to actually pick anyone" (reported by a real
+// customer). This dedicated endpoint returns only id/name/phone, open to
+// whoever can already forward at all.
 export default function ForwardMessageModal({ message, currentTicketId, onClose }: Props) {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const { data: tickets = [] } = useQuery({
-    queryKey: ['inbox'],
-    queryFn: () => api.get<{ data: any[] }>('/inbox').then((r) => r.data),
+    queryKey: ['inbox-forward-targets'],
+    queryFn: () => api.get<{ data: any[] }>('/inbox/forward-targets').then((r) => r.data),
   });
 
   const forwardMut = useMutation({
@@ -33,6 +40,7 @@ export default function ForwardMessageModal({ message, currentTicketId, onClose 
       api.post<{ data: { forwarded: number; failed: string[] } }>(`/inbox/messages/${message.id}/forward`, { targetTicketIds }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['inbox'] });
+      qc.invalidateQueries({ queryKey: ['inbox-forward-targets'] });
       toast(`Reenviado a ${res.data.forwarded} chat${res.data.forwarded === 1 ? '' : 's'}`);
       onClose();
     },
