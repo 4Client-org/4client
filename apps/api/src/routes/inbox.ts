@@ -58,6 +58,35 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     return reply.send({ data: tickets });
   });
 
+  // GET /api/v1/inbox/forward-targets - lista mínima de chats (id, nombre,
+  // teléfono) para el selector de ForwardMessageModal.tsx. Deliberadamente
+  // SIN requireRole('admin') a diferencia de GET / de arriba - "reenviar a
+  // otro chat" (POST /messages/:messageId/forward, unas líneas más abajo) ya
+  // era usable por cualquier rol autenticado desde siempre (mismo criterio
+  // que /:ticketId/reply), pero el selector de destinos llamaba a GET /,
+  // así que un encargado (sin acceso a esa ruta) veía el modal de reenviar
+  // con el buscador pero la lista de chats siempre vacía - el botón
+  // "Reenviar" parecía "solo un cuadro de texto sin poder elegir a quién"
+  // (reportado por un cliente real). Esta ruta expone lo mínimo indispensable
+  // para elegir un destino, no el dashboard completo de GET / (sin preview de
+  // mensajes, sin pedidos, sin contador de no leídos) - el resto del inbox
+  // administrativo sigue siendo admin/dev-only, sin cambios.
+  fastify.get('/forward-targets', { preHandler: [authenticate] }, async (req, reply) => {
+    const allTickets = await fastify.prisma.ticket.findMany({
+      where: { org_id: req.user.orgId },
+      select: { id: true, customer_name: true, phone: true },
+      orderBy: { last_activity_at: 'desc' },
+      take: 500,
+    });
+    const seenPhones = new Set<string>();
+    const tickets = allTickets.filter(t => {
+      if (seenPhones.has(t.phone)) return false;
+      seenPhones.add(t.phone);
+      return true;
+    });
+    return reply.send({ data: tickets });
+  });
+
   // GET /api/v1/inbox/search?q=TEXT&fecha=YYYY-MM-DD - busca en TODO el
   // historial (no solo los 500 tickets más recientes que GET / carga), como la
   // búsqueda real de WhatsApp: por nombre, teléfono, o contenido de cualquier
@@ -327,8 +356,30 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       }
 
       const provider = MetaCloudProvider.fromOrg(target.org);
+      // Every "can't even attempt to send" case below marks the row failed and
+      // emits the status update right away, instead of just logging and moving
+      // on - found while investigating this feature: `continue`ing silently
+      // left wpp_message_id AND failed_reason both null forever, and the
+      // frontend's own delivery-status icon only ever renders when one of
+      // those two is set - so staff saw a message that looked identical to
+      // a real pending send, with genuinely no way to tell it never went out.
       if (!provider) {
         fastify.log.warn({ ticketId: target.id }, 'WPP: org sin credenciales Meta, reenvío solo guardado en BD');
+        await markForwardFailed(fastify, req.user.orgId, target.id, message.id, 'Organización sin credenciales de WhatsApp configuradas');
+        continue;
+      }
+      if (isLocation && !locationMatch) {
+        // Defensive - webhook.ts's ingestLocationMessage is the only place that
+        // ever creates a location message, and it always uses this exact
+        // format, so this is currently unreachable in practice.
+        await markForwardFailed(fastify, req.user.orgId, target.id, message.id, 'No se pudo leer la ubicación original');
+        continue;
+      }
+      if (hasUploadableMedia && (!buffer || !mimeType)) {
+        // Same wording GET /media/:id already uses for the identical
+        // underlying condition (Meta only retains media 30 days) - staff
+        // already knows what this means from viewing media elsewhere.
+        await markForwardFailed(fastify, req.user.orgId, target.id, message.id, 'Este archivo ya no está disponible - WhatsApp solo lo retiene 30 días');
         continue;
       }
 
@@ -455,6 +506,21 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     return reply.status(201).send({ data: message, wpp_status: 'sending' });
   });
+
+  // For a send that's already known to be impossible BEFORE ever calling Meta
+  // (no credentials, expired media, malformed data) - marks the row failed and
+  // notifies staff immediately, the same end state trackOutboundMediaSend's own
+  // `.catch()` reaches for a send that started but failed partway through.
+  async function markForwardFailed(
+    fastify: FastifyInstance, orgId: string, ticketId: string, messageId: string, reason: string,
+  ) {
+    const failed = await fastify.prisma.ticketMessage.update({
+      where: { id: messageId },
+      data: { failed_reason: reason },
+      select: { delivered: true, read_by_client: true, failed_reason: true },
+    });
+    fastify.io.to(`org:${orgId}`).emit('ticket:message-status', { ticketId, messageId, ...failed });
+  }
 
   // Shared tail for every outbound-media route below (audio/video/document) -
   // upload bytes to Meta, send referencing the resulting media id, then update
