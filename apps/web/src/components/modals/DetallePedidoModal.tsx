@@ -1243,7 +1243,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                       {!msg.media_type && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderText(msg.text)}</div>}
                       <div style={{ fontSize: 10, color: '#999', textAlign: 'right', marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {formatChatTimestamp(msg.sent_at)}
-                        {isOut && msg.wpp_message_id && (
+                        {isOut && (msg.wpp_message_id || msg.failed_reason) && (
                           <DeliveryStatus delivered={msg.delivered} read_by_client={msg.read_by_client} failed_reason={msg.failed_reason} />
                         )}
                       </div>

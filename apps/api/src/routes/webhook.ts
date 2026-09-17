@@ -143,14 +143,13 @@ async function ingestMessage(
   const localDateStr = new Date(localMs).toISOString().split('T')[0];
   const todayLocal = new Date(localDateStr);
 
-  // Real Bogota (UTC-5, no DST) calendar-day boundaries, in actual UTC instants - used
-  // to find how many INBOUND messages this ticket already got today, so the welcome
-  // message can fire once per day rather than only using `todayLocal` (a date-only
-  // value with no time-of-day meaning, fine for ticket.fecha but not for a sent_at
-  // range query).
+  // Real Bogota (UTC-5, no DST) calendar-day start, in an actual UTC instant - used
+  // to decide whether this ticket's first_message_today_at is stale (from a
+  // previous day) or already claimed for today, so the welcome message fires once
+  // per day rather than only using `todayLocal` (a date-only value with no
+  // time-of-day meaning, fine for ticket.fecha but not for this comparison).
   const [y, m, d] = localDateStr.split('-').map(Number);
   const dayStartUtc = new Date(Date.UTC(y, m - 1, d, 5, 0, 0));
-  const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
 
   // One ticket per (org, phone), forever - not per day. A customer who wrote a month
   // ago and writes again today continues the exact same ticket. Also matches on
@@ -202,10 +201,21 @@ async function ingestMessage(
           },
         });
       } else {
-        const priorInboundToday = await tx.ticketMessage.count({
-          where: { ticket_id: t.id, direction: 'in', sent_at: { gte: dayStartUtc, lt: dayEndUtc } },
+        // Reclamo atómico de "primer mensaje del día" (security-audit finding) -
+        // antes esto era un COUNT de solo lectura sin ningún lock, así que dos
+        // mensajes realmente-primeros-del-día en el mismo ticket podían leerlo en
+        // paralelo, los dos ver cero, y los dos disparar el envío de bienvenida/
+        // aviso/link de más abajo - y como el link de formulario es de un solo
+        // token vivo por ticket, el segundo disparo invalidaba el que el primero
+        // recién había mandado. Convertir esto en un updateMany con el propio
+        // first_message_today_at en el WHERE hace que Postgres serialice el
+        // reclamo: como mucho UNA transacción concurrente gana "hoy" para este
+        // ticket, sin importar cuántas corran en paralelo.
+        const claim = await tx.ticket.updateMany({
+          where: { id: t.id, OR: [{ first_message_today_at: null }, { first_message_today_at: { lt: dayStartUtc } }] },
+          data: { first_message_today_at: sentAt },
         });
-        firstToday = priorInboundToday === 0;
+        firstToday = claim.count === 1;
 
         // Roll it forward to today (and drop any stale "queued for a specific day" flag)
         // so the board/informe pick it up wherever the conversation actually is now.
@@ -218,11 +228,6 @@ async function ingestMessage(
             deferred_to: null,
             unread_count: { increment: 1 },
             last_message_at: sentAt,
-            // Fixed for the rest of the day on the FIRST inbound message only - a
-            // second/third message today must never move this, or the board's
-            // "first to arrive stays first" position would drift forward every
-            // time this customer writes again (the exact bug being fixed here).
-            ...(firstToday ? { first_message_today_at: sentAt } : {}),
             customer_name: name,
             ...(bsuidHint && !t.bsuid ? { bsuid: bsuidHint } : {}),
           },
@@ -250,9 +255,55 @@ async function ingestMessage(
     message = result.message;
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      // Lost the race - another concurrent delivery of this exact Meta message
-      // already won, and the ticket-side increment above rolled back with it.
-      return;
+      // Security-audit finding: un P2002 acá puede venir de TRES constraints
+      // distintos - wpp_message_id (el caso que este catch fue pensado para
+      // manejar: otra entrega concurrente de este MISMO mensaje de Meta ya ganó,
+      // y el increment del ticket se revirtió con ella, nada que hacer) - o de
+      // Ticket.@@unique([org_id, phone])/bsuid, cuando dos mensajes DISTINTOS de
+      // un número sin ticket previo corren en paralelo (el loop de despacho de
+      // abajo no espera cada ingest antes de lanzar el siguiente). Sin este check,
+      // ese segundo caso se descartaba en silencio - un mensaje real de un
+      // cliente nuevo, perdido sin ningún rastro.
+      const target = Array.isArray((err.meta as any)?.target) ? ((err.meta as any).target as string[]) : [];
+      if (target.includes('wpp_message_id')) {
+        return;
+      }
+
+      // Perdimos la carrera en el constraint del Ticket, no en el del mensaje -
+      // el ticket ya existe (lo acaba de crear la transacción que ganó), así que
+      // lo resolvemos de nuevo y reintentamos insertar ESTE mensaje contra él en
+      // vez de perderlo.
+      const winner = await fastify.prisma.ticket.findFirst({
+        where: { org_id: org.id, OR: [{ phone }, { bsuid: phone }] },
+      });
+      if (winner) {
+        const retryMsg = await fastify.prisma.ticketMessage.create({
+          data: {
+            ticket_id: winner.id, direction: 'in', text,
+            media_url: media?.url ?? null, media_type: media?.type ?? null,
+            wpp_message_id: waMsgId, sent_at: sentAt, raw_payload: rawPayload as any,
+          },
+          include: { sender: { select: { id: true, name: true } } },
+        });
+        const winnerUpdated = await fastify.prisma.ticket.update({
+          where: { id: winner.id },
+          data: { unread_count: { increment: 1 }, last_message_at: sentAt },
+        });
+        fastify.io.to(`org:${org.id}`).emit('ticket:message', {
+          ticketId: winner.id,
+          message: {
+            ...retryMsg,
+            direction: 'in' as const,
+            media_type: retryMsg.media_type as MediaType | null,
+            sent_at: retryMsg.sent_at.toISOString(),
+            sent_by_name: retryMsg.sender?.name ?? null,
+          },
+        });
+        fastify.io.to(`org:${org.id}`).emit('ticket:unread', { ticketId: winner.id, count: winnerUpdated.unread_count ?? 0 });
+        fastify.log.warn({ phone, ticketId: winner.id }, 'WPP: mensaje ingresado tras colisión de ticket concurrente (no era duplicado real)');
+        return;
+      }
+      throw err;
     }
     throw err;
   }

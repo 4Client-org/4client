@@ -428,6 +428,13 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.post('/:ticketId/send-image', {
     preHandler: [authenticate],
     bodyLimit: Math.ceil(MAX_IMAGE_BYTES * 1.4) + 100_000, // base64 overhead + JSON framing
+    // Security-audit finding: sin límite propio caía en el default global
+    // (300/min), y esta ruta hace una llamada real a la API de Meta cada vez -
+    // abierta a todo rol autenticado (domiciliario incluido, a propósito - manda
+    // fotos de entrega desde el chat de su propio pedido, ver DetallePedidoModal).
+    // 60/min es holgado para uso real (unas pocas fotos por entrega) y corta un
+    // abuso que gastaría cuota de Meta o arriesgaría que Meta límite el número.
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({
@@ -557,6 +564,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.post('/:ticketId/send-audio', {
     preHandler: [authenticate],
     bodyLimit: Math.ceil(MAX_AUDIO_BYTES * 1.4) + 100_000,
+    // Security-audit finding: mismo motivo que send-image de arriba.
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({
@@ -609,6 +618,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.post('/:ticketId/send-video', {
     preHandler: [authenticate],
     bodyLimit: Math.ceil(MAX_VIDEO_BYTES * 1.4) + 100_000,
+    // Security-audit finding: mismo motivo que send-image de arriba.
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({
@@ -664,6 +675,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   fastify.post('/:ticketId/send-document', {
     preHandler: [authenticate],
     bodyLimit: Math.ceil(MAX_DOCUMENT_BYTES * 1.4) + 100_000,
+    // Security-audit finding: mismo motivo que send-image de arriba.
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({
@@ -937,7 +950,16 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   // never writes to the DB, never creates/touches an order. The frontend takes
   // the returned items and drops them into the same draft item list staff
   // already reviews before hitting the real save button (POST/PATCH /orders).
-  fastify.post('/:ticketId/parse-messages', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+  fastify.post('/:ticketId/parse-messages', {
+    preHandler: [authenticate, requireRole('admin', 'encargado')],
+    // Security-audit finding: sin límite propio caía en el default global
+    // (300/min), pero cada request acá encadena hasta 3 proveedores de IA como
+    // fallback (Gemini->Groq->OpenRouter, hasta 8 llamadas externas reales por
+    // request) - sin ningún tope de gasto por org como respaldo. 15/min es
+    // holgado para el uso real (staff seleccionando mensajes y extrayendo) y
+    // corta un abuso que quemaría cuota pagada de los proveedores de IA.
+    config: { rateLimit: { max: 15, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const body = z.object({ messageIds: z.array(z.string().uuid()).min(1).max(50) }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });

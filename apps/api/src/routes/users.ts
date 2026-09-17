@@ -126,6 +126,11 @@ export default async function userRoutes(fastify: FastifyInstance) {
       data: updateData,
     });
     if (result.count === 0) return reply.status(404).send({ error: 'Usuario no encontrado', code: 'NOT_FOUND' });
+    // Security-audit finding: desactivar a alguien no cortaba un socket ya
+    // abierto de esa cuenta - seguía recibiendo en vivo cada order:*/ticket:*
+    // del org, sin límite de tiempo, pese a estar desactivada. Mismo lugar
+    // donde ya se revocan sus refresh tokens en reset-password de abajo.
+    if (body.data.active === false) fastify.disconnectUserSockets(id);
     await audit(fastify.prisma, {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'user.update',
       targetId: id, metadata: updateData,
@@ -159,6 +164,11 @@ export default async function userRoutes(fastify: FastifyInstance) {
       where: { user_id: id, revoked: false },
       data: { revoked: true },
     });
+    // Security-audit finding: revocar los refresh tokens no cortaba un socket
+    // ya abierto de esa cuenta - seguía viendo en vivo cada order:*/ticket:*
+    // del org indefinidamente, pese a que un reset de contraseña es casi
+    // siempre respuesta a una sospecha de cuenta comprometida.
+    fastify.disconnectUserSockets(id);
     await audit(fastify.prisma, {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'user.reset_password', targetId: id,
     });

@@ -16,6 +16,12 @@ const loginSchema = z.object({
 // "resend" story the plan called for, no separate endpoint needed.
 const CODE_TTL_MS = 5 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
+// Security-audit finding: sin esto, cada POST /login con la contraseña
+// correcta (permitido hasta 10 veces/min por el rate-limit de la ruta)
+// disparaba un correo nuevo de código - alguien que ya sabe la contraseña
+// podía inundar la bandeja de entrada de la cuenta. 30s alcanza para cubrir un
+// doble-click o un reintento de red sin abrir una ventana real de abuso.
+const CODE_RESEND_COOLDOWN_MS = 30 * 1000;
 
 // Bloqueo por cuenta tras fuerza bruta - independiente del rate-limit HTTP
 // (que solo limita por IP/bucket, no por cuenta - un ataque repartido entre
@@ -136,9 +142,13 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // dueño legítimo sepa por qué no puede entrar - es el mismo trade-off que
     // hace cualquier banco/Gmail al mostrar "demasiados intentos".
     if (user?.locked_until && user.locked_until > new Date()) {
-      const minutesLeft = Math.ceil((user.locked_until.getTime() - Date.now()) / 60000);
+      // Security-audit finding: el mensaje daba los minutos EXACTOS de bloqueo
+      // restante a un caller sin autenticar - como la duración escala en
+      // múltiplos fijos por cada 5 intentos fallidos (lockoutDurationMs), ese
+      // número dejaba inferir cuántos ciclos de intentos fallidos lleva la
+      // cuenta, sin necesidad de loguearse. Mensaje genérico, sin el conteo.
       return reply.status(429).send({
-        error: `Demasiados intentos fallidos. Intenta de nuevo en ${minutesLeft} minuto${minutesLeft === 1 ? '' : 's'}.`,
+        error: 'Demasiados intentos fallidos. Intenta de nuevo más tarde.',
         code: 'ACCOUNT_LOCKED',
       });
     }
@@ -211,6 +221,17 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // email changing later without needing a code change.
     if (!config.REQUIRE_2FA || user.role !== 'dev') {
       return issueSession(fastify, req, reply, user);
+    }
+
+    // Reusa el código ya enviado si todavía está fresco y sigue vigente, en vez
+    // de mandar (y gastar) uno nuevo por correo cada vez (security-audit
+    // finding - ver CODE_RESEND_COOLDOWN_MS arriba).
+    const recentCode = await fastify.prisma.loginVerificationCode.findFirst({
+      where: { user_id: user.id, consumed: false, expires_at: { gt: new Date() } },
+      orderBy: { created_at: 'desc' },
+    });
+    if (recentCode && Date.now() - recentCode.created_at.getTime() < CODE_RESEND_COOLDOWN_MS) {
+      return reply.send({ data: { pending2fa: true, userId: user.id } });
     }
 
     const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');

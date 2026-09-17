@@ -542,21 +542,39 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         await tx.orderItem.createMany({ data: items.map(i => ({ ...i, order_id: id })) });
       }
 
-      const updated = await tx.order.update({
-        where: { id },
+      // Re-afirma que el pedido sigue sin bloquear (para roles no-admin) en el
+      // propio WHERE del write, atómico con el check de `existing.locked` hecho
+      // arriba (security-audit finding: ese check leía un snapshot ya viejo para
+      // cuando este write corre, dejando una ventana en la que un /cobro
+      // concurrente podía bloquear/pagar el pedido justo en el medio - un
+      // encargado terminaba editando igual un pedido que, en ese instante, ya
+      // estaba cerrado). Si count da 0, alguien más lo bloqueó justo ahora.
+      const lockGuard = isAdminOrDev ? {} : { locked: false };
+      const writeResult = await tx.order.updateMany({
+        where: { id, ...lockGuard },
         // client_modified is never cleared by a staff save (per updated user
         // direction - it must stay visible permanently, same as each item's own
         // added_by_client flag, not just until someone opens and saves the order).
         data: { ...fields, updated_at: new Date() },
-        select: buildOrderSelect(false),
       });
+      if (writeResult.count === 0) {
+        throw new Error('ORDER_LOCKED_RACE');
+      }
+      const updated = await tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
 
       if (historyEntries.length > 0) {
         await tx.orderHistory.createMany({ data: historyEntries });
       }
 
       return updated;
+    }).catch((err) => {
+      if (err instanceof Error && err.message === 'ORDER_LOCKED_RACE') return null;
+      throw err;
     });
+
+    if (updatedOrder === null) {
+      return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
+    }
 
     // The factura PDF is a static snapshot generated once, never re-rendered live -
     // any edit here (items, address, payment method...) makes an already-sent one
