@@ -342,13 +342,17 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        // IP + token combined, not token alone - a per-route rateLimit config
-        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
-        // `token` let an attacker get a fresh 15-request budget on every call
-        // just by varying it (even to garbage) - confirmed in a security audit.
-        // Combining both means varying the token no longer helps: the same IP
-        // still shares one budget across however many tokens it tries.
-        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
+        // IP alone (security-audit finding, deep-profile, live-reproduced): a
+        // prior fix combined `${req.ip}:${token}` believing that beat the
+        // original "keying on token alone" bypass - it didn't. `token` is a
+        // value the CALLER fully controls in the request body, so a fresh
+        // random token on every request still produces a fresh combined key
+        // every time, live-confirmed to let 25/25 requests through with zero
+        // 429s. Only a value the server itself derives (like req.ip) can't be
+        // varied per-request by the caller, so it's the only safe key here - a
+        // per-route rateLimit config REPLACES (doesn't add to) the global
+        // per-IP limit, so this IS the only ceiling on this route.
+        keyGenerator: (req) => req.ip,
       },
     },
   }, async (req, reply) => {
@@ -937,13 +941,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         max: 15,
         timeWindow: '1 minute',
         hook: 'preHandler',
-        // IP + token combined, not token alone - a per-route rateLimit config
-        // REPLACES (doesn't add to) the global per-IP limit, so keying only on
-        // `token` let an attacker get a fresh 15-request budget on every call
-        // just by varying it (even to garbage) - confirmed in a security audit.
-        // Combining both means varying the token no longer helps: the same IP
-        // still shares one budget across however many tokens it tries.
-        keyGenerator: (req) => `${req.ip}:${(req.body as { token?: string } | undefined)?.token || ''}`,
+        // IP alone - see the identical finding/comment on POST /submit above;
+        // `${req.ip}:${token}` doesn't help when the caller controls `token`.
+        keyGenerator: (req) => req.ip,
       },
     },
   }, async (req, reply) => {

@@ -6,6 +6,15 @@ import { authenticate } from '../middleware/auth.js';
 import { config } from '../config.js';
 import { sendEmail } from '../services/email.js';
 
+// Security-audit finding (deep-profile): org.name (settable by that org's own
+// admin/dev via config.ts) was interpolated unescaped into this email's HTML
+// body below. Only ever sent to that same org's own users, so no cross-tenant
+// impact, but an org admin could still inject markup into mail sent to their
+// own staff. Escaped as defense in depth.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
@@ -16,6 +25,17 @@ const loginSchema = z.object({
 // "resend" story the plan called for, no separate endpoint needed.
 const CODE_TTL_MS = 5 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
+// Security-audit finding (deep-profile): un código de 6 dígitos es un espacio
+// de solo 1,000,000 valores - un SHA-256 SIN clave sobre eso se revierte por
+// fuerza bruta en bien menos de un segundo si alguien llega a leer esta tabla
+// por cualquier otra vía (backup, réplica, u otro hallazgo no relacionado). El
+// guardado en línea ya está bien protegido (5 intentos, claim atómico), esto
+// es defensa en profundidad para el caso "alguien lee la fila directamente".
+// HMAC con JWT_SECRET (32+ bytes, ya validado por config.ts) como pepper hace
+// que ese mismo ataque offline sea inviable sin el secreto del servidor.
+function hashLoginCode(code: string): string {
+  return crypto.createHmac('sha256', config.JWT_SECRET).update(code).digest('hex');
+}
 // Security-audit finding: sin esto, cada POST /login con la contraseña
 // correcta (permitido hasta 10 veces/min por el rate-limit de la ruta)
 // disparaba un correo nuevo de código - alguien que ya sabe la contraseña
@@ -45,6 +65,9 @@ type UserWithOrg = {
 // Pre-computed dummy hash - prevents timing attack revealing user existence.
 // bcrypt.compare always runs regardless of whether user was found.
 const DUMMY_HASH = '$2b$12$LzVFpXDW.jkMhGlXb2WiIeq3rAhnWPvVRqSRLCLdTT0W5HjCMfBtm';
+// Same idea as DUMMY_HASH, for the extra DB write on a failed attempt instead
+// of the bcrypt compare itself - see its use below.
+const DUMMY_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 // Frontend (Vercel) and backend (Railway) are different origins, so this cookie is
 // sent on cross-site fetches. SameSite=Strict/Lax is NEVER sent cross-site by
@@ -164,15 +187,20 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // por su propio login legítimo, sin haber fallado nada).
     if (!user || !valid) {
       // Solo se cuenta/bloquea contra una cuenta REAL - una contraseña
-      // incorrecta contra un email que no existe no escribe nada (no hay fila
-      // que actualizar, y tampoco aportaría ninguna protección real).
+      // incorrecta contra un email que no existe no escribe nada útil (no hay
+      // fila real que actualizar), pero sí dispara una escritura "de mentira"
+      // más abajo con el mismo costo, para no delatar por temporización cuál
+      // de los dos casos fue.
       if (user) {
         // { increment: 1 } es un UPDATE atómico en la DB (SET x = x + 1), no
         // "leer, sumar en JS, escribir" - varios logins fallidos en paralelo
         // contra la misma cuenta no pueden pisarse el contador entre sí (misma
         // razón que el claim atómico de /login/verify-code más abajo, aunque
         // acá la explotabilidad es menor: bcrypt.compare ya frena el throughput
-        // por sí solo).
+        // por sí solo). Sigue esperado (await) a propósito - el bloqueo debe
+        // quedar aplicado ANTES de responder, para que el intento inmediatamente
+        // siguiente ya lo vea (ver DUMMY_USER_ID abajo para el porqué del
+        // timing, sin sacrificar esto).
         const { failed_login_attempts: attempts } = await fastify.prisma.user.update({
           where: { id: user.id },
           data: { failed_login_attempts: { increment: 1 } },
@@ -193,9 +221,24 @@ export default async function authRoutes(fastify: FastifyInstance) {
           sendEmail(
             user.email,
             'Aviso de seguridad: tu cuenta fue bloqueada temporalmente',
-            `<p>Detectamos varios intentos fallidos de inicio de sesión en tu cuenta de <strong>${user.org.name}</strong> y la bloqueamos temporalmente por seguridad.</p><p>Si fuiste tú, simplemente espera a que se desbloquee sola. Si no fuiste tú, avisa a un administrador.</p>`,
+            `<p>Detectamos varios intentos fallidos de inicio de sesión en tu cuenta de <strong>${escapeHtml(user.org.name)}</strong> y la bloqueamos temporalmente por seguridad.</p><p>Si fuiste tú, simplemente espera a que se desbloquee sola. Si no fuiste tú, avisa a un administrador.</p>`,
           ).catch((err) => fastify.log.warn({ err, userId: user.id }, 'No se pudo enviar el aviso de bloqueo de cuenta'));
         }
+      } else {
+        // Deep-profile security-audit finding, live-reproduced (~10ms gap,
+        // >3 stdev de la señal): la rama de arriba siempre paga el costo de un
+        // UPDATE real; esta rama antes no escribía nada, así que una
+        // contraseña incorrecta contra un email QUE NO EXISTE respondía
+        // mensurablemente más rápido que contra una cuenta real - reintroducía
+        // por temporización exactamente lo que el bcrypt contra DUMMY_HASH de
+        // arriba ya evita para el hash en sí. Un UPDATE real contra un id que
+        // no existe cuesta lo mismo en Postgres (mismo plan, cero filas
+        // afectadas) sin tocar ninguna cuenta de verdad ni afectar el bloqueo
+        // real de nadie.
+        await fastify.prisma.user.updateMany({
+          where: { id: DUMMY_USER_ID },
+          data: { failed_login_attempts: { increment: 1 } },
+        });
       }
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
     }
@@ -225,9 +268,15 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     // Reusa el código ya enviado si todavía está fresco y sigue vigente, en vez
     // de mandar (y gastar) uno nuevo por correo cada vez (security-audit
-    // finding - ver CODE_RESEND_COOLDOWN_MS arriba).
+    // finding - ver CODE_RESEND_COOLDOWN_MS arriba). `attempts < MAX_CODE_ATTEMPTS`
+    // agregado tras un hallazgo de auditoría deep-profile: sin este chequeo, un
+    // código que ya agotó sus 5 intentos (CODE_LOCKED en /verify-code) igual
+    // pasaba por "reciente y vigente" durante los 30s de enfriamiento, y este
+    // endpoint respondía pending2fa:true como si fuera un envío real - sin
+    // mandar código nuevo, dejando la cuenta momentáneamente sin ningún código
+    // utilizable pese a la respuesta de éxito.
     const recentCode = await fastify.prisma.loginVerificationCode.findFirst({
-      where: { user_id: user.id, consumed: false, expires_at: { gt: new Date() } },
+      where: { user_id: user.id, consumed: false, expires_at: { gt: new Date() }, attempts: { lt: MAX_CODE_ATTEMPTS } },
       orderBy: { created_at: 'desc' },
     });
     if (recentCode && Date.now() - recentCode.created_at.getTime() < CODE_RESEND_COOLDOWN_MS) {
@@ -235,7 +284,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
 
     const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const codeHash = hashLoginCode(code);
     await fastify.prisma.loginVerificationCode.create({
       data: { user_id: user.id, code_hash: codeHash, expires_at: new Date(Date.now() + CODE_TTL_MS) },
     });
@@ -286,9 +335,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
 
     // Timing-safe compare (defense-in-depth, security-audit finding) - both
-    // sides are always a 64-char hex SHA-256 digest, so length always matches
-    // and this never throws.
-    const codeHash = crypto.createHash('sha256').update(body.data.code).digest('hex');
+    // sides are always a 64-char hex HMAC-SHA256 digest, so length always
+    // matches and this never throws.
+    const codeHash = hashLoginCode(body.data.code);
     const codesMatch = crypto.timingSafeEqual(Buffer.from(codeHash, 'hex'), Buffer.from(stored.code_hash, 'hex'));
     if (!codesMatch) {
       return reply.status(401).send({ error: 'Código incorrecto', code: 'INVALID_CODE' });
@@ -372,26 +421,48 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // losing request is treated exactly like the reuse-detection case above
     // (revoke the whole family) since a legitimate double-fire and an actual
     // stolen-token race look identical from here.
-    const claim = await fastify.prisma.refreshToken.updateMany({
-      where: { id: stored.id, revoked: false },
-      data: { revoked: true },
-    });
-    if (claim.count === 0) {
-      await fastify.prisma.refreshToken.updateMany({
-        where: { user_id: stored.user_id, revoked: false },
+    //
+    // Deep-profile security-audit finding, live-reproduced: the claim above and
+    // the loser's "revoke the whole family" below were two INDEPENDENT
+    // statements, not serialized against the winner's own refreshToken.create()
+    // further down. A losing request's revoke-all could commit before the
+    // winner's new token existed - the sweep can only touch rows that already
+    // exist, so the winner's brand-new token was invisible to it and survived
+    // unrevoked, defeating the whole point of "a race here means revoke
+    // everything." Wrapping the claim-or-revoke-all decision AND the winner's
+    // insert in one transaction that first takes a row lock on the user
+    // (SELECT ... FOR UPDATE) forces whichever request arrives first to fully
+    // complete - including its insert, if it's the winner - before the other
+    // can even read the pre-claim state.
+    const rotation = await fastify.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${stored.user_id}::uuid FOR UPDATE`;
+
+      const claim = await tx.refreshToken.updateMany({
+        where: { id: stored.id, revoked: false },
         data: { revoked: true },
       });
+      if (claim.count === 0) {
+        await tx.refreshToken.updateMany({
+          where: { user_id: stored.user_id, revoked: false },
+          data: { revoked: true },
+        });
+        return { reused: true as const };
+      }
+
+      const newRaw = crypto.randomBytes(40).toString('hex');
+      const newHash = crypto.createHash('sha256').update(newRaw).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await tx.refreshToken.create({
+        data: { user_id: stored.user_id, token_hash: newHash, expires_at: expiresAt },
+      });
+      return { reused: false as const, newRaw };
+    });
+
+    if (rotation.reused) {
       reply.clearCookie('rf', { path: '/api/v1/auth' });
       return reply.status(401).send({ error: 'Sesión inválida, inicia sesión de nuevo', code: 'TOKEN_REUSE_DETECTED' });
     }
-
-    const newRaw = crypto.randomBytes(40).toString('hex');
-    const newHash = crypto.createHash('sha256').update(newRaw).digest('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await fastify.prisma.refreshToken.create({
-      data: { user_id: stored.user_id, token_hash: newHash, expires_at: expiresAt },
-    });
+    const newRaw = rotation.newRaw;
 
     const payload = { userId: stored.user.id, orgId: stored.user.org_id, role: stored.user.role as import('@4client/shared').UserRole };
     const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });

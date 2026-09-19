@@ -15,7 +15,11 @@ export async function audit(
         metadata: params.metadata as Prisma.InputJsonValue | undefined,
       },
     });
-  } catch {
-    /* swallow - audit logging is best-effort, never breaks the caller */
+  } catch (err) {
+    // Security-audit finding (deep-profile): sigue siendo best-effort a
+    // propósito (un fallo acá nunca debe romper la acción real que registra),
+    // pero antes no dejaba ningún rastro de que un hueco en el historial de
+    // auditoría ocurrió. Un solo log, sin relanzar.
+    console.error('[audit] no se pudo registrar la entrada de auditoría', { action: params.action, orgId: params.orgId, err });
   }
 }

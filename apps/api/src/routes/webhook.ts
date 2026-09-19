@@ -277,14 +277,29 @@ async function ingestMessage(
         where: { org_id: org.id, OR: [{ phone }, { bsuid: phone }] },
       });
       if (winner) {
-        const retryMsg = await fastify.prisma.ticketMessage.create({
-          data: {
-            ticket_id: winner.id, direction: 'in', text,
-            media_url: media?.url ?? null, media_type: media?.type ?? null,
-            wpp_message_id: waMsgId, sent_at: sentAt, raw_payload: rawPayload as any,
-          },
-          include: { sender: { select: { id: true, name: true } } },
-        });
+        let retryMsg;
+        try {
+          retryMsg = await fastify.prisma.ticketMessage.create({
+            data: {
+              ticket_id: winner.id, direction: 'in', text,
+              media_url: media?.url ?? null, media_type: media?.type ?? null,
+              wpp_message_id: waMsgId, sent_at: sentAt, raw_payload: rawPayload as any,
+            },
+            include: { sender: { select: { id: true, name: true } } },
+          });
+        } catch (retryErr) {
+          // Security-audit finding (deep-profile re-verification): un tercer
+          // caso posible - este mismo mensaje (wpp_message_id repetido) es una
+          // redelivery real de Meta Y encima coincide con la creación del
+          // ticket. El ganador de la carrera de arriba ya lo insertó, así que
+          // este segundo insert choca con wpp_message_id - nada que hacer,
+          // igual que el caso ya manejado más arriba, no un error real.
+          if (retryErr instanceof Prisma.PrismaClientKnownRequestError && retryErr.code === 'P2002') {
+            const retryTarget = Array.isArray((retryErr.meta as any)?.target) ? ((retryErr.meta as any).target as string[]) : [];
+            if (retryTarget.includes('wpp_message_id')) return;
+          }
+          throw retryErr;
+        }
         const winnerUpdated = await fastify.prisma.ticket.update({
           where: { id: winner.id },
           data: { unread_count: { increment: 1 }, last_message_at: sentAt },
@@ -308,7 +323,12 @@ async function ingestMessage(
     throw err;
   }
 
-  const newUnread = (ticket.unread_count ?? 0) + 1;
+  // Security-audit finding (deep-profile): `ticket` ya es el objeto POST-
+  // transacción (unread_count ya viene incrementado/en 1 para un ticket nuevo)
+  // - sumarle +1 acá duplicaba el conteo en este evento de socket. Sin
+  // consumidor real hoy (MainPage.tsx ignora el valor y solo dispara un
+  // refetch), pero corregido para no dejar el dato mal a un futuro consumidor.
+  const newUnread = ticket.unread_count ?? 0;
 
   // Auto-reply on first message of the day: welcome + safety notice combined into
   // ONE message, then the link alone, then the follow-up nudge - three messages

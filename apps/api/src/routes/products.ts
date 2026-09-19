@@ -4,7 +4,12 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { sortByCategoryOrder } from '../lib/categoryOrder.js';
 
 const productSchema = z.object({
-  name:           z.string().min(1),
+  // Security-audit finding (deep-profile): sin .max(), esto solo lo topaba la
+  // columna VARCHAR(200) de la DB - pasarse la disparaba como un error crudo
+  // de Postgres (500) en vez de un 400 VALIDATION_ERROR limpio, y dejaba el
+  // límite real de matchProduct.ts's asumido "nombre de producto corto"
+  // implícito en un archivo totalmente distinto.
+  name:           z.string().min(1).max(200),
   category:       z.string().optional(),
   active:         z.boolean().default(true),
   sort_order:     z.number().default(0),
@@ -95,10 +100,17 @@ export default async function productRoutes(fastify: FastifyInstance) {
   // DELETE /api/v1/products/:id - soft delete, solo admin
   fastify.delete('/:id', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    await fastify.prisma.product.updateMany({
+    // Security-audit finding (deep-profile, live-reproduced): sin chequear
+    // count, esto devolvía 200 {ok:true} tanto para un producto de OTRA org
+    // como para un id que no existe en ninguna - igual que PATCH /:id arriba y
+    // DELETE /:id en employees.ts, que sí lo chequean. El filtro org_id ya
+    // impedía cualquier mutación real (confirmado en vivo, cero filas
+    // afectadas en ambos casos); esto solo corrige la respuesta engañosa.
+    const result = await fastify.prisma.product.updateMany({
       where: { id, org_id: req.user.orgId },
       data: { active: false },
     });
+    if (result.count === 0) return reply.status(404).send({ error: 'Producto no encontrado', code: 'NOT_FOUND' });
     fastify.io.to(`org:${req.user.orgId}`).emit('product:changed', { id });
     return reply.send({ data: { ok: true } });
   });

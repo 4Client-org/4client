@@ -217,7 +217,15 @@ model Ticket {
   // `from_user_id`) still resolve to this same ticket instead of spawning a
   // duplicate - the exact "Vivi"/"dayis" fragmentation bug this org already hit
   // once, being closed off structurally. Never overwrites a value already set.
-  bsuid              String?   @unique @db.VarChar(150)
+  // Security-audit finding (deep-profile): this used to be a GLOBAL @unique (not
+  // org-scoped like `phone` above), even though a BSUID identifies a real WhatsApp
+  // account, not something tied to one business - a customer messaging TWO
+  // different orgs on this platform produced the same bsuid for both, so the
+  // second org's webhook ingest hit this constraint and threw an unhandled P2002
+  // (the P2002 recovery path re-resolves scoped to its OWN org_id, so it found
+  // nothing and re-threw), silently losing that org's ability to record the
+  // conversation. Now scoped per-org via the compound unique below, matching phone.
+  bsuid              String?   @db.VarChar(150)
   // The exact webhook POST body that CREATED this ticket (the first message
   // ever received from this phone) - never overwritten on later messages, this
   // is specifically "what did Meta send us that first time", for diagnosing
@@ -335,6 +343,7 @@ model Ticket {
   // instead of forking a new one that the rest of the app (orders, staff replies)
   // has no way to find.
   @@unique([org_id, phone])
+  @@unique([org_id, bsuid])
   @@index([org_id, fecha])
   @@index([org_id, deferred_to])
   @@index([org_id, last_message_at])

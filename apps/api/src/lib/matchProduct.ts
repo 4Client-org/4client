@@ -75,7 +75,18 @@ const FUZZY_MARGIN = 0.08;
 // this function only resolves a NAME against the catalog. The caller
 // (inbox.ts's /parse-messages) always starts every drafted item's price at 0,
 // matched or not - staff types the real price by hand, always, no exceptions.
+// Security-audit finding (deep-profile, live-measured): el costo de Levenshtein
+// de más abajo escala con el largo de `raw` por cada entrada del catálogo -
+// medido en vivo, ~10s con un string de 1M caracteres contra 63 productos.
+// Hoy el único llamador real (inbox.ts's /parse-messages) ya limita `raw` a
+// 200 caracteres vía el schema de extracción de IA, pero esa cota vive en un
+// archivo totalmente distinto - esta función no debe depender de eso para ser
+// segura. Cualquier cosa más larga que un nombre de producto real nunca va a
+// calzar de todas formas, así que se devuelve sin coincidencia de una vez.
+const MAX_MATCH_INPUT_LENGTH = 200;
+
 export function matchProductName(raw: string, catalog: CatalogEntry[]): MatchResult {
+  if (raw.length > MAX_MATCH_INPUT_LENGTH) return { matched: false, name: raw };
   const rawNorm = normalizeForMatch(raw);
   const entries = catalog.map(c => ({ ...c, norm: normalizeForMatch(c.name) }));
 
