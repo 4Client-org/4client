@@ -160,7 +160,22 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
           // an old-num annotation to show.
           const marker = `pasado_manana:${fechaStr}:${existingOrder.num}`;
           const newNotes = existingOrder.notes ? `${existingOrder.notes}\n${marker}` : marker;
-          await tx.order.update({ where: { id: orderId, org_id: req.user.orgId }, data: { fecha: tomorrow, num: newNum, notes: newNotes } });
+          // Re-afirma paid:false/status pendiente en el propio WHERE (security-audit
+          // finding) - si el pedido se cobró concurrentemente entre el snapshot de
+          // `pendientes` de arriba y este write, count queda en 0 y NO lo movemos a
+          // mañana: ya fue contabilizado como pagado hoy vía /cobro, y aplicar la
+          // decisión "mañana" igual lo habría hecho contar doble entre el cierre de
+          // hoy y el de mañana.
+          const deferResult = await tx.order.updateMany({
+            where: { id: orderId, org_id: req.user.orgId, paid: false, status: { notIn: ['cerrado', 'papelera'] } },
+            data: { fecha: tomorrow, num: newNum, notes: newNotes },
+          });
+          if (deferResult.count === 0) {
+            await tx.orderHistory.create({
+              data: { org_id: req.user.orgId, order_id: orderId, actor_id: req.user.userId, action_type: 'cierre', notes: `Decisión "mañana" omitida: el pedido #${existingOrder.num} ya fue cobrado/cerrado durante el cierre.` },
+            });
+            continue;
+          }
           // Move the whole conversation along with the order - otherwise the order
           // shows up tomorrow but its ticket doesn't, and the swimlane (which groups
           // orders under their ticket) never renders it at all.

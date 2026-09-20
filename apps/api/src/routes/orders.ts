@@ -542,21 +542,39 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         await tx.orderItem.createMany({ data: items.map(i => ({ ...i, order_id: id })) });
       }
 
-      const updated = await tx.order.update({
-        where: { id },
+      // Re-afirma que el pedido sigue sin bloquear (para roles no-admin) en el
+      // propio WHERE del write, atómico con el check de `existing.locked` hecho
+      // arriba (security-audit finding: ese check leía un snapshot ya viejo para
+      // cuando este write corre, dejando una ventana en la que un /cobro
+      // concurrente podía bloquear/pagar el pedido justo en el medio - un
+      // encargado terminaba editando igual un pedido que, en ese instante, ya
+      // estaba cerrado). Si count da 0, alguien más lo bloqueó justo ahora.
+      const lockGuard = isAdminOrDev ? {} : { locked: false };
+      const writeResult = await tx.order.updateMany({
+        where: { id, ...lockGuard },
         // client_modified is never cleared by a staff save (per updated user
         // direction - it must stay visible permanently, same as each item's own
         // added_by_client flag, not just until someone opens and saves the order).
         data: { ...fields, updated_at: new Date() },
-        select: buildOrderSelect(false),
       });
+      if (writeResult.count === 0) {
+        throw new Error('ORDER_LOCKED_RACE');
+      }
+      const updated = await tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
 
       if (historyEntries.length > 0) {
         await tx.orderHistory.createMany({ data: historyEntries });
       }
 
       return updated;
+    }).catch((err) => {
+      if (err instanceof Error && err.message === 'ORDER_LOCKED_RACE') return null;
+      throw err;
     });
+
+    if (updatedOrder === null) {
+      return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
+    }
 
     // The factura PDF is a static snapshot generated once, never re-rendered live -
     // any edit here (items, address, payment method...) makes an already-sent one
@@ -908,8 +926,17 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       // only happens later, when it's actually settled from the Créditos tab
       // (PATCH /:id/credito-pagado below).
       const isCredito = existing.payment_method === 'credito';
-      const order = await tx.order.update({
-        where: { id },
+      // Security-audit finding (deep-profile, live-reproduced): esta era la
+      // única escritura de todo este flujo sin el mismo guardado atómico que ya
+      // tienen PATCH /:id y el "mañana" de cierre - dos /cobro concurrentes en
+      // el mismo pedido se pisaban en silencio (los dos devolvían 200), y un
+      // /cobro en vuelo podía aplicar completo sobre un pedido que un cierre
+      // concurrente ya había aplazado a mañana (fecha cambiada), dejándolo
+      // pagado hoy Y aplazado a la vez. Re-afirma locked:false Y fecha (esto
+      // último detecta el caso "cierre lo movió de día mientras esperábamos
+      // el bcrypt.compare de arriba") en el propio WHERE.
+      const result = await tx.order.updateMany({
+        where: { id, locked: false, fecha: existing.fecha },
         data: {
           // paid_at/paid_by always set here, crédito included - they record WHO
           // CLOSED the order and WHEN, which is what "Cerrado por"/"Hora cierre"
@@ -926,8 +953,11 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           split_transfer: body.data.split ? body.data.split.transfer : null,
           updated_at: new Date(),
         },
-        select: buildOrderSelect(false),
       });
+      if (result.count === 0) {
+        throw new Error('ORDER_LOCKED_RACE');
+      }
+      const order = await tx.order.findUniqueOrThrow({ where: { id }, select: buildOrderSelect(false) });
       await tx.orderHistory.create({
         data: {
           org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
@@ -940,7 +970,14 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         },
       });
       return order;
+    }).catch((err) => {
+      if (err instanceof Error && err.message === 'ORDER_LOCKED_RACE') return null;
+      throw err;
     });
+
+    if (updated === null) {
+      return reply.status(409).send({ error: 'Pedido ya cobrado', code: 'ORDER_LOCKED' });
+    }
 
     fastify.io.to(`org:${req.user.orgId}`).emit('order:paid', { orderId: id });
     return reply.send({ data: updated });

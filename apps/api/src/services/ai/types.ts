@@ -14,10 +14,15 @@ export type Extractor = (text: string, catalogNames: string[]) => Promise<Extrac
 // Wrapped in an object (not a bare array) - some providers' JSON modes only
 // guarantee "a valid JSON object", not "a valid JSON array" at the top level.
 export const extractedItemsSchema = z.object({
+  // Security-audit finding (deep-profile): sin tope explícito, este array solo
+  // quedaba acotado incidentalmente por el límite de tokens de salida del
+  // modelo, no por una garantía declarada acá. 200 es muy por encima de
+  // cualquier pedido real (un cliente nunca selecciona cientos de mensajes de
+  // WhatsApp de una sola vez para "Tomar lista").
   items: z.array(z.object({
     product_name: z.string().min(1).max(200),
     quantity_label: z.string().max(100).optional().default(''),
-  })),
+  })).max(200),
 });
 
 // Smaller/free models routinely ignore "no agregues texto fuera del JSON" and

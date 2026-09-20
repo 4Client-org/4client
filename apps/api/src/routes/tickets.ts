@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 
 export default async function ticketRoutes(fastify: FastifyInstance) {
@@ -124,7 +125,9 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       if (collision) return reply.status(409).send({ error: 'Ya existe un chat con ese número - fusionar chats no está soportado todavía', code: 'PHONE_TAKEN' });
     }
 
-    const updated = await fastify.prisma.$transaction(async (tx) => {
+    let updated;
+    try {
+      updated = await fastify.prisma.$transaction(async (tx) => {
       const ticket = await tx.ticket.update({
         where: { id },
         data: {
@@ -171,7 +174,21 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       }
 
       return { ticket, orderIds: orders.map(o => o.id) };
-    });
+      });
+    } catch (err) {
+      // Security-audit finding (deep-profile): el chequeo de colisión de arriba
+      // deja una ventana angosta - dos PATCH concurrentes renombrando tickets
+      // distintos al MISMO teléfono nuevo pueden pasar el chequeo antes de que
+      // cualquiera confirme, y el segundo choca contra el propio constraint de
+      // la DB (@@unique([org_id, phone])) en vez del 409 limpio que ya existe
+      // para el caso no-concurrente. Sin esto, ese caso devolvía un 500 crudo
+      // en vez de PHONE_TAKEN - sin impacto de seguridad (el constraint sigue
+      // protegiendo los datos), solo una respuesta de error más clara.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return reply.status(409).send({ error: 'Ya existe un chat con ese número - fusionar chats no está soportado todavía', code: 'PHONE_TAKEN' });
+      }
+      throw err;
+    }
 
     // Per-order emit (no `.items` in the payload) - DetallePedidoModal/board/inbox
     // already fall back to invalidate-and-refetch for a partial order:updated

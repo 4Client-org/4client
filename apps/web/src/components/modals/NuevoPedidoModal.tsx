@@ -428,7 +428,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                       {(m.sent_at || m.created_at) && (
                         <div className="chat-meta" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start' }}>
                           {formatChatTimestamp(m.sent_at ?? m.created_at)}
-                          {m.direction === 'out' && m.wpp_message_id && (
+                          {m.direction === 'out' && (m.wpp_message_id || m.failed_reason) && (
                             <DeliveryStatus delivered={m.delivered} read_by_client={m.read_by_client} failed_reason={m.failed_reason} />
                           )}
                         </div>

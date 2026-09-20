@@ -82,6 +82,26 @@ export async function buildTestServer(): Promise<FastifyInstance> {
   });
 
   await fastify.ready();
+
+  // Security-audit finding (deep-profile): public.ts's rate limiters were
+  // fixed to key by IP alone (a prior IP+token key was defeated by a caller
+  // just varying the token). That's the correct production fix, but it means
+  // every `inject()` call in a test file now shares ONE bucket by default
+  // (light-my-request has no real socket, so `req.ip` is always the same
+  // fixed address unless told otherwise) - dozens of unrelated test cases
+  // calling the same rate-limited route would collide into spurious 429s that
+  // have nothing to do with what each test actually checks. Giving every
+  // inject() call its own random IP (unless a test explicitly sets one, e.g.
+  // to test the limiter itself) makes each call look like a different real
+  // customer, same as production traffic actually is.
+  const originalInject = fastify.inject.bind(fastify);
+  (fastify as any).inject = (opts: any) => {
+    if (opts && typeof opts === 'object' && !opts.remoteAddress) {
+      opts = { ...opts, remoteAddress: `10.${1 + Math.floor(Math.random() * 254)}.${Math.floor(Math.random() * 256)}.${1 + Math.floor(Math.random() * 254)}` };
+    }
+    return originalInject(opts);
+  };
+
   return fastify;
 }
 

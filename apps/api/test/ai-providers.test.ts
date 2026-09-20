@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { config } from '../src/config.js';
-import { extractOrderItems } from '../src/services/ai/index.js';
+import { extractOrderItems, clearProviderCooldowns } from '../src/services/ai/index.js';
 import { clearDiscoveryCache } from '../src/services/ai/modelDiscovery.js';
 
 // config is a plain mutable object (see config.ts) - tests set/delete keys
@@ -59,6 +59,7 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
   beforeEach(() => {
     clearKeys();
     clearDiscoveryCache();
+    clearProviderCooldowns();
     vi.restoreAllMocks();
   });
 
@@ -66,6 +67,7 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     (config as any).GEMINI_API_KEY = ORIGINAL.gemini;
     (config as any).GROQ_API_KEY = ORIGINAL.groq;
     (config as any).OPENROUTER_API_KEY = ORIGINAL.openrouter;
+    vi.useRealTimers();
   });
 
   it('no provider configured -> throws immediately without calling fetch', async () => {
@@ -185,15 +187,20 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     await expect(extractOrderItems('quiero tomate', ['Tomate'])).rejects.toThrow();
   });
 
-  it('a TRANSIENT failure (503) on Gemini falls through to Groq for this request but does NOT blacklist the model - the next request tries it again first', async () => {
-    // Found live: evicting a model from the cache on every kind of failure
-    // meant one transient 503 on the preferred model blacklisted it for up
-    // to an hour, even though it had already recovered - every request in
-    // that window fell straight to a since-retired fallback that 404s every
-    // time. Only a permanent failure (400/404) should evict; a 503 should not.
-    // Gemini's maxCandidates is 1 now, so Groq is configured too here - a
-    // transient Gemini failure must fall through to a WORKING provider, not
-    // to a 2nd Gemini candidate (there isn't one).
+  it('a TRANSIENT failure (503) on Gemini falls through to Groq for this request but does NOT blacklist the model FOREVER - it is retried again once the provider-level cooldown expires', async () => {
+    // Found live: evicting a model from modelDiscovery's cache on every kind
+    // of failure meant one transient 503 on the preferred model blacklisted
+    // it for up to an hour - that part is unchanged, still covered by
+    // modelDiscovery's own isPermanentModelError tests. What DID change
+    // (speed finding, confirmed live sep/2026: Gemini's free "flash" tier has
+    // real, repeated multi-minute capacity outages several times a week) - a
+    // request landing seconds after a transient failure no longer retries the
+    // still-down provider first and eats its full latency again; it skips
+    // straight to Groq for COOLDOWN_MS, then tries Gemini first again exactly
+    // as before once that short window passes. Gemini's maxCandidates is 1,
+    // so Groq is configured too here - a transient Gemini failure must fall
+    // through to a WORKING provider, not a 2nd Gemini candidate (there isn't
+    // one).
     (config as any).GEMINI_API_KEY = 'test-key';
     (config as any).GROQ_API_KEY = 'groq-key';
     let flashCalls = 0;
@@ -213,9 +220,46 @@ describe('extractOrderItems (services/ai/index.ts provider fallback)', () => {
     expect(first).toEqual([{ product_name: 'primera vez (groq)', quantity_label: '' }]);
     expect(flashCalls).toBe(1); // tried once, failed with 503, fell through to Groq
 
-    // Second request (models list still cached, no clearDiscoveryCache() in
-    // between) - gemini-2.5-flash must be tried FIRST again, not skipped -
-    // and this time it succeeds, so Groq is never even reached.
+    // Still inside the cooldown window - Gemini must be SKIPPED this time,
+    // straight to Groq, without even attempting gemini-2.5-flash again.
+    const stillCooling = await extractOrderItems('quiero algo mientras enfría', ['Algo']);
+    expect(stillCooling).toEqual([{ product_name: 'primera vez (groq)', quantity_label: '' }]);
+    expect(flashCalls).toBe(1); // unchanged - Gemini was not called at all this time
+
+    // Advance real time past the cooldown window - Gemini must be tried
+    // FIRST again, not skipped - and this time it succeeds, so Groq is never
+    // even reached.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(Date.now() + 90_001);
+    const afterCooldown = await extractOrderItems('quiero otra cosa', ['Algo']);
+    expect(afterCooldown).toEqual([{ product_name: 'segunda vez (gemini)', quantity_label: '' }]);
+    expect(flashCalls).toBe(2);
+  });
+
+  it('a NON-transient failure (400, e.g. malformed JSON) does NOT trigger the cooldown - the very next request still tries the same provider first', async () => {
+    // A 400 says "this one generation was bad", not "the provider is down" -
+    // must not cost the provider its priority spot for the next 90s the way
+    // a real 5xx/timeout does.
+    (config as any).GEMINI_API_KEY = 'test-key';
+    (config as any).GROQ_API_KEY = 'groq-key';
+    let flashCalls = 0;
+    vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('generativelanguage.googleapis.com/v1beta/models?')) return jsonResponse(geminiModelsBody);
+      if (u.includes('gemini-2.5-flash:')) {
+        flashCalls++;
+        if (flashCalls === 1) return jsonResponse({}, false, 400); // non-transient, first call only
+        return jsonResponse(geminiChatBody([{ product_name: 'segunda vez (gemini)', quantity_label: '' }]));
+      }
+      if (u.includes('groq.com/openai/v1/models')) return jsonResponse(groqModelsBody);
+      return jsonResponse(chatBody([{ product_name: 'primera vez (groq)', quantity_label: '' }]));
+    });
+
+    const first = await extractOrderItems('quiero algo', ['Algo']);
+    expect(first).toEqual([{ product_name: 'primera vez (groq)', quantity_label: '' }]);
+    expect(flashCalls).toBe(1);
+
+    // No cooldown applied for a 400 - Gemini tried first again immediately.
     const second = await extractOrderItems('quiero otra cosa', ['Algo']);
     expect(second).toEqual([{ product_name: 'segunda vez (gemini)', quantity_label: '' }]);
     expect(flashCalls).toBe(2);

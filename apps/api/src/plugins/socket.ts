@@ -6,6 +6,7 @@ import type { ServerToClientEvents, ClientToServerEvents } from '@4client/shared
 declare module 'fastify' {
   interface FastifyInstance {
     io: Server<ClientToServerEvents, ServerToClientEvents>;
+    disconnectUserSockets: (userId: string) => void;
   }
 }
 
@@ -39,6 +40,16 @@ export default fp(async (fastify) => {
 
   io.on('connection', (socket) => {
     const userOrgId: string = socket.data.user?.orgId;
+    const userId: string | undefined = socket.data.user?.userId;
+
+    // Security-audit finding: el JWT solo se verifica UNA vez, al conectar - una
+    // cuenta desactivada o con su contraseña reseteada (que sí revoca todos sus
+    // refresh tokens - ver users.ts) seguía recibiendo en vivo cada order:*/
+    // ticket:* del org mientras el socket ya abierto siguiera conectado, sin
+    // límite de tiempo. Unirla a su propia room por usuario permite cortarla
+    // puntualmente desde el mismo lugar que ya revoca sus tokens, sin tener que
+    // re-verificar el JWT en cada evento.
+    if (userId) socket.join(`user:${userId}`);
 
     socket.on('join:org', (orgId) => {
       // Only allow joining the org the user actually belongs to
@@ -54,4 +65,10 @@ export default fp(async (fastify) => {
   });
 
   fastify.decorate('io', io);
+  // Llamado desde donde ya se revoca la sesión de un usuario (reset de
+  // contraseña, desactivación) para que un socket ya abierto no siga viendo
+  // eventos en vivo del org después de eso.
+  fastify.decorate('disconnectUserSockets', (userId: string) => {
+    io.in(`user:${userId}`).disconnectSockets();
+  });
 });
