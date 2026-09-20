@@ -169,9 +169,20 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
     const ticket = await fastify.prisma.ticket.findFirst({
       where: { id: ticketId, org_id: req.user.orgId },
       include: {
+        // Incident finding: orderBy 'asc' + take 500 fetches the OLDEST 500
+        // messages, not the most recent ones - a chat that has ever accumulated
+        // more than 500 messages over its lifetime (a real, active repeat
+        // customer easily gets there) silently stopped returning anything newer
+        // than that 500th message ever - including everything from today.
+        // Fixed by taking the 500 most recent (desc) and reversing back to
+        // chronological order below, before this ever reaches the frontend.
         messages: {
-          orderBy: { created_at: 'asc' },
-          take: 500,
+          // id as a secondary sort key - two messages saved in the exact same
+          // transaction (e.g. the 3-part automated welcome sequence) could
+          // otherwise tie on created_at at millisecond resolution, leaving
+          // their relative order (and cursor pagination below) ambiguous.
+          orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+          take: 501,
           include: { sender: { select: { id: true, name: true } } },
         },
         orders: {
@@ -183,12 +194,52 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
 
+    // Fetched one extra (501) purely to know whether there's older history left
+    // to page through ("Cargar mensajes anteriores" button below) - never sent
+    // to the client.
+    const hasMoreMessages = ticket.messages.length > 500;
+    if (hasMoreMessages) ticket.messages.pop();
+    ticket.messages.reverse();
+    (ticket as any).hasMoreMessages = hasMoreMessages;
+
     // unread_count is deliberately NOT cleared just by opening/viewing the chat
     // anymore - it only clears when staff actually sends a reply (see POST
     // /:ticketId/reply below). Opening a chat a thousand times without answering
     // must not make the "sin leer" dot disappear - that dot means "needs a reply",
     // not "someone glanced at it".
     return reply.send({ data: ticket });
+  });
+
+  // GET /api/v1/inbox/:ticketId/messages/older?cursor=<messageId> - pages
+  // backward through history older than the initial 500 loaded by the route
+  // above (or than whatever the previous page's own oldest message was).
+  // Separate endpoint on purpose: the main conversation load above also
+  // fetches `orders`, which "load more chat history" has no reason to repeat.
+  fastify.get('/:ticketId/messages/older', { preHandler: [authenticate] }, async (req, reply) => {
+    const { ticketId } = req.params as { ticketId: string };
+    const query = z.object({ cursor: z.string().uuid() }).safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'cursor requerido', code: 'VALIDATION_ERROR' });
+
+    const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId }, select: { id: true } });
+    if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
+
+    // Prisma's cursor pagination (not a plain `created_at < X` filter) so a
+    // tie on created_at at millisecond resolution can never skip or repeat a
+    // message across pages - same reasoning as the compound orderBy above.
+    const page = await fastify.prisma.ticketMessage.findMany({
+      where: { ticket_id: ticketId },
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      cursor: { id: query.data.cursor },
+      skip: 1,
+      take: 501,
+      include: { sender: { select: { id: true, name: true } } },
+    });
+
+    const hasMore = page.length > 500;
+    if (hasMore) page.pop();
+    page.reverse();
+
+    return reply.send({ data: { messages: page, hasMoreMessages: hasMore } });
   });
 
   // POST /api/v1/inbox/:ticketId/reply - responder desde 4Client, todos los roles

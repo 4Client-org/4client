@@ -168,6 +168,41 @@ export default function InboxPanel() {
     refetchInterval: 60000,
   });
 
+  // Older history beyond the 500 most recent messages the query above loads -
+  // paged in on demand via "Cargar mensajes anteriores", kept in its own state
+  // (not part of the React Query cache above) so a periodic 60s refetch or a
+  // live socket update to the recent-500 window never wipes out history the
+  // staff already scrolled up to load. Reset whenever a different chat opens.
+  const [olderMessages, setOlderMessages] = useState<any[]>([]);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  useEffect(() => {
+    setOlderMessages([]);
+    setHasMoreMessages(false);
+  }, [selectedId]);
+  useEffect(() => {
+    if (conversation) setHasMoreMessages(!!conversation.hasMoreMessages);
+  }, [conversation?.id, conversation?.hasMoreMessages]);
+
+  const allMessages = [...olderMessages, ...(conversation?.messages ?? [])];
+
+  async function loadOlderMessages() {
+    const cursor = allMessages[0]?.id;
+    if (!selectedId || !cursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const res = await api.get<{ data: { messages: any[]; hasMoreMessages: boolean } }>(
+        `/inbox/${selectedId}/messages/older?cursor=${cursor}`,
+      );
+      setOlderMessages((prev) => [...res.data.messages, ...prev]);
+      setHasMoreMessages(res.data.hasMoreMessages);
+    } catch (e: any) {
+      toast(e.message, true);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${selectedId}/reply`, { text }),
     onSuccess: (res: any) => {
@@ -464,9 +499,24 @@ export default function InboxPanel() {
               </div>
             )}
 
-            {conversation?.messages?.map((msg: any, i: number) => {
+            {!loadingConvo && hasMoreMessages && (
+              <div style={{ textAlign: 'center', padding: '4px 0 8px' }}>
+                <button
+                  onClick={loadOlderMessages}
+                  disabled={loadingOlder}
+                  style={{
+                    background: '#fff', border: '1.5px solid var(--brd)', borderRadius: 16,
+                    padding: '6px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gt)',
+                    cursor: loadingOlder ? 'default' : 'pointer',
+                  }}>
+                  {loadingOlder ? 'Cargando...' : 'Cargar mensajes anteriores'}
+                </button>
+              </div>
+            )}
+
+            {allMessages.map((msg: any, i: number) => {
               const isOut = msg.direction === 'out';
-              const prevMsg = conversation.messages[i - 1];
+              const prevMsg = allMessages[i - 1];
               // Grouped by created_at (real arrival order), not sent_at - same reason
               // the message list itself sorts by created_at: a delayed webhook
               // delivery reporting an old sent_at must still land under TODAY's
