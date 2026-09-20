@@ -660,7 +660,12 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
     // even in their own dashboard), so this is the ONLY place this is ever
     // recoverable. Confirmed the hard way: a message arrived with an empty
     // sender phone number and there was nothing left to inspect afterward.
-    fastify.log.info({ rawPayload: payload }, 'WPP: webhook payload recibido');
+    // Security-audit/incident finding: this was logged at `info`, but
+    // server.ts sets the production log level to `warn` - so in production
+    // this line never actually reached the logs at all, silently defeating
+    // the exact recovery mechanism this comment describes. `warn` so it's
+    // actually there next time something needs investigating.
+    fastify.log.warn({ rawPayload: payload }, 'WPP: webhook payload recibido');
 
     // Always return 200 fast - Meta retries if we're slow or error
     reply.status(200).send({ ok: true });
@@ -675,8 +680,21 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
 
         for (const msg of messages ?? []) {
           const sentAt = new Date(parseInt(msg.timestamp) * 1000);
-          // Reject replayed messages older than 10 minutes
-          if (Date.now() - sentAt.getTime() > 10 * 60 * 1000) continue;
+          // Reject replayed messages older than 10 minutes. Incident finding:
+          // this used to be a bare `continue` - a message Meta delivered late
+          // (customer connectivity, Meta's own retry queue) was dropped with
+          // zero trace anywhere, indistinguishable from "the customer never
+          // wrote" when investigating a report of missing messages after the
+          // fact. Logged (not persisted to any customer-facing table) so this
+          // specific silent-drop path is at least visible next time.
+          const ageMs = Date.now() - sentAt.getTime();
+          if (ageMs > 10 * 60 * 1000) {
+            fastify.log.warn(
+              { from: msg.from ?? msg.from_user_id ?? null, wppMessageId: msg.id, sentAt, ageMinutes: Math.round(ageMs / 60000) },
+              'WPP: mensaje descartado por llegar con más de 10 minutos de retraso (Meta lo entregó tarde)',
+            );
+            continue;
+          }
 
           // Real phone number first, then the BSUID (WhatsApp usernames,
           // June 2026 - see MetaWebhookPayload's own notes) as a fallback -
