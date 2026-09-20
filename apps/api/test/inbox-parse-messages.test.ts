@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
 import { config } from '../src/config.js';
 import { clearDiscoveryCache } from '../src/services/ai/modelDiscovery.js';
+import { clearProviderCooldowns } from '../src/services/ai/index.js';
 
 // Direct JWT signing (same pattern as cierre.test.ts's orgWithDirectToken) -
 // skips the real, rate-limited /auth/login route entirely since this file
@@ -98,6 +99,11 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
     delete (config as any).OPENROUTER_API_KEY;
     vi.restoreAllMocks();
     clearDiscoveryCache();
+    // A prior test in this file simulating a provider outage (see below)
+    // would otherwise leave that provider in its short cooldown window
+    // (services/ai/index.ts) for whichever test runs next, since that state
+    // is a module-level singleton shared across tests in this same file.
+    clearProviderCooldowns();
   });
 
   afterEach(() => {
