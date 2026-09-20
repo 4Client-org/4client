@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward, ArrowLeft } from 'lucide-react';
+import { MessageSquare, Send, Paperclip, AlertTriangle, Pencil, CheckCircle, Forward, ArrowLeft, ArrowDown } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -194,6 +194,7 @@ export default function InboxPanel() {
       const res = await api.get<{ data: { messages: any[]; hasMoreMessages: boolean } }>(
         `/inbox/${selectedId}/messages/older?cursor=${cursor}`,
       );
+      preserveScrollHeightRef.current = chatScrollRef.current?.scrollHeight ?? null;
       setOlderMessages((prev) => [...res.data.messages, ...prev]);
       setHasMoreMessages(res.data.hasMoreMessages);
     } catch (e: any) {
@@ -253,11 +254,81 @@ export default function InboxPanel() {
   // whose own size is fixed by its flex parent) catches both cases the same way.
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInnerRef = useRef<HTMLDivElement>(null);
+  // Set right before prepending older messages (loadOlderMessages below) to the
+  // scroll container's height at that instant - lets the very next resize tick
+  // preserve the person's spot in the conversation (keep looking at the same
+  // message) instead of the usual "stick to bottom" behavior, which would
+  // otherwise yank them all the way down to the newest message the moment 100+
+  // older rows get added above what they were reading.
+  const preserveScrollHeightRef = useRef<number | null>(null);
+  // Read continuously from a real scroll listener (below), not recomputed
+  // inside the ResizeObserver's own callback - by the time that callback
+  // fires, the container has already grown, so "was the person at the bottom"
+  // has to be known from BEFORE the content changed, not after.
+  const wasNearBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+
+  useEffect(() => {
+    const outer = chatScrollRef.current;
+    if (!outer) return;
+    const onScroll = () => {
+      const nearBottom = outer.scrollHeight - outer.scrollTop - outer.clientHeight < 80;
+      wasNearBottomRef.current = nearBottom;
+      setShowJumpToBottom(!nearBottom);
+      if (nearBottom) setNewMessageCount(0);
+    };
+    onScroll();
+    outer.addEventListener('scroll', onScroll);
+    return () => outer.removeEventListener('scroll', onScroll);
+  }, [selectedId]);
+
+  // Counts a genuinely NEW message landing at the end of the conversation
+  // (arrived or just sent) while the person is scrolled up reading older
+  // history - same "🔽 N mensajes nuevos" idea WhatsApp itself shows, instead
+  // of silently doing nothing until they happen to scroll down themselves.
+  // Keyed off the last message's own id changing, not the array length, so
+  // loading OLDER history (which changes length too, at the other end) never
+  // counts as a "new" message here.
+  const lastMsgIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const last = allMessages[allMessages.length - 1];
+    if (last && lastMsgIdRef.current !== null && last.id !== lastMsgIdRef.current && !wasNearBottomRef.current) {
+      setNewMessageCount((n) => n + 1);
+    }
+    if (last) lastMsgIdRef.current = last.id;
+  }, [allMessages[allMessages.length - 1]?.id]);
+
+  useEffect(() => {
+    lastMsgIdRef.current = null;
+    setNewMessageCount(0);
+    setShowJumpToBottom(false);
+  }, [selectedId]);
+
+  function jumpToBottom() {
+    const outer = chatScrollRef.current;
+    if (!outer) return;
+    outer.scrollTop = outer.scrollHeight;
+    setNewMessageCount(0);
+  }
+
   useEffect(() => {
     const outer = chatScrollRef.current;
     const inner = chatInnerRef.current;
     if (!outer || !inner) return;
-    const stick = () => { outer.scrollTop = outer.scrollHeight; };
+    const stick = () => {
+      if (preserveScrollHeightRef.current !== null) {
+        outer.scrollTop = outer.scrollHeight - preserveScrollHeightRef.current;
+        preserveScrollHeightRef.current = null;
+        return;
+      }
+      // Only auto-follow to the bottom if the person was already down there -
+      // a message arriving (or being sent) while they're scrolled up reading
+      // history must never yank them away from what they're looking at; the
+      // jump-to-bottom button + new-message counter above are how they get
+      // back down on their own terms instead.
+      if (wasNearBottomRef.current) outer.scrollTop = outer.scrollHeight;
+    };
     stick();
     const ro = new ResizeObserver(stick);
     ro.observe(inner);
@@ -491,6 +562,7 @@ export default function InboxPanel() {
           )}
 
           {/* Messages */}
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
           <div className="inbox-messages" ref={chatScrollRef}>
            <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {loadingConvo && (
@@ -568,6 +640,29 @@ export default function InboxPanel() {
               );
             })}
            </div>
+          </div>
+
+          {showJumpToBottom && (
+            <button
+              onClick={jumpToBottom}
+              title="Ir al mensaje más reciente"
+              style={{
+                position: 'absolute', right: 18, bottom: 14, zIndex: 2,
+                height: 36, borderRadius: 18, border: 'none', background: '#fff',
+                boxShadow: '0 2px 6px rgba(0,0,0,.25)', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: newMessageCount > 0 ? '0 12px 0 10px' : 0,
+                width: newMessageCount > 0 ? 'auto' : 36,
+                color: 'var(--v)',
+              }}>
+              <ArrowDown size={18} style={{ flexShrink: 0 }} />
+              {newMessageCount > 0 && (
+                <span style={{ fontSize: 12, fontWeight: 700 }}>
+                  {newMessageCount === 1 ? '1 mensaje nuevo' : `${newMessageCount} mensajes nuevos`}
+                </span>
+              )}
+            </button>
+          )}
           </div>
 
           {/* Reply bar */}
