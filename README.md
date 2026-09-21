@@ -246,20 +246,19 @@ R2_SECRET_ACCESS_KEY=...
 R2_BUCKET_NAME=4client-files
 ```
 
-### Variables de entorno - Vercel (Web)
+### Variables de entorno - Cloudflare Pages (Web)
 
 ```env
-VITE_API_URL=https://tu-api.up.railway.app
+VITE_API_URL=https://api.4client.shop
 ```
 
-### Costos de infraestructura
+### Infraestructura
 
-| Servicio | Descripción | Costo |
-|----------|-------------|-------|
-| Railway | API Node.js + PostgreSQL | ~$5 USD/mes |
-| Vercel | Frontend React | Gratis |
-| Cloudflare R2 | PDFs (hasta 10 GB) | Gratis |
-| **Total** | Para todos los clientes | **~$5 USD/mes** |
+| Servicio | Descripción |
+|----------|-------------|
+| VPS propio (Coolify) | API Node.js + PostgreSQL, dev y prod aislados |
+| Cloudflare Pages | Frontend React |
+| Cloudflare R2 | PDFs (hasta 10 GB) |
 
 ---
 
@@ -270,7 +269,7 @@ GitHub Actions corre en cada push a `main` y `dev`:
 ```
 push/PR → typecheck (API + Web) → build (API + Web) → ✅
                                                         │
-                                          Railway + Vercel auto-deploy
+                                    VPS (Coolify) + Cloudflare Pages auto-deploy
 ```
 
 ---
