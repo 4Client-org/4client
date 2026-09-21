@@ -42,6 +42,15 @@ export function useChatScroll(ticketId: string | null | undefined, baseMessages:
     lastMsgIdRef.current = null;
     setNewMessageCount(0);
     setShowJumpToBottom(false);
+    // Opening (or re-opening) a chat must always land at the newest message,
+    // never wherever the scroll happened to be left (own chat re-opened, or
+    // the outer scroll container reused for a DIFFERENT ticket entirely - see
+    // InboxPanel, whose .inbox-messages div never unmounts between chats).
+    // Forced here, before the scroll-position effect below gets a chance to
+    // read the container's still-stale scrollTop/scrollHeight from whatever
+    // chat was open a moment ago and misjudge "not near bottom" from it.
+    wasNearBottomRef.current = true;
+    preserveScrollHeightRef.current = null;
   }, [ticketId]);
 
   useEffect(() => {
@@ -57,7 +66,13 @@ export function useChatScroll(ticketId: string | null | undefined, baseMessages:
       setShowJumpToBottom(!nearBottom);
       if (nearBottom) setNewMessageCount(0);
     };
-    onScroll();
+    // No initial call here on purpose - on a ticket switch the container's
+    // scrollTop/scrollHeight still belong to whatever chat was open a moment
+    // ago (this div is reused, not remounted, e.g. InboxPanel switching chats),
+    // so measuring "near bottom" right now would judge the NEW chat by the OLD
+    // chat's leftover scroll position. wasNearBottomRef is already forced true
+    // by the ticket-reset effect above; this listener only needs to react to
+    // the person's own real scrolling from here on.
     outer.addEventListener('scroll', onScroll);
     return () => outer.removeEventListener('scroll', onScroll);
   }, [ticketId]);
