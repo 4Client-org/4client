@@ -16,6 +16,7 @@ import ChatVideo from '../ui/ChatVideo';
 import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
+import { useChatScroll } from '../../hooks/useChatScroll';
 
 // Backend (tickets.ts PATCH /:id) and this UI are both fully built and tested -
 // hidden for now because nobody has actually asked for this yet, not because
@@ -168,41 +169,11 @@ export default function InboxPanel() {
     refetchInterval: 60000,
   });
 
-  // Older history beyond the 500 most recent messages the query above loads -
-  // paged in on demand via "Cargar mensajes anteriores", kept in its own state
-  // (not part of the React Query cache above) so a periodic 60s refetch or a
-  // live socket update to the recent-500 window never wipes out history the
-  // staff already scrolled up to load. Reset whenever a different chat opens.
-  const [olderMessages, setOlderMessages] = useState<any[]>([]);
-  const [hasMoreMessages, setHasMoreMessages] = useState(false);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  useEffect(() => {
-    setOlderMessages([]);
-    setHasMoreMessages(false);
-  }, [selectedId]);
-  useEffect(() => {
-    if (conversation) setHasMoreMessages(!!conversation.hasMoreMessages);
-  }, [conversation?.id, conversation?.hasMoreMessages]);
-
-  const allMessages = [...olderMessages, ...(conversation?.messages ?? [])];
-
-  async function loadOlderMessages() {
-    const cursor = allMessages[0]?.id;
-    if (!selectedId || !cursor || loadingOlder) return;
-    setLoadingOlder(true);
-    try {
-      const res = await api.get<{ data: { messages: any[]; hasMoreMessages: boolean } }>(
-        `/inbox/${selectedId}/messages/older?cursor=${cursor}`,
-      );
-      preserveScrollHeightRef.current = chatScrollRef.current?.scrollHeight ?? null;
-      setOlderMessages((prev) => [...res.data.messages, ...prev]);
-      setHasMoreMessages(res.data.hasMoreMessages);
-    } catch (e: any) {
-      toast(e.message, true);
-    } finally {
-      setLoadingOlder(false);
-    }
-  }
+  const {
+    chatScrollRef, chatInnerRef, allMessages,
+    hasMoreMessages, loadingOlder, loadOlderMessages,
+    showJumpToBottom, newMessageCount, jumpToBottom,
+  } = useChatScroll(selectedId, conversation?.messages ?? [], !!conversation?.hasMoreMessages);
 
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${selectedId}/reply`, { text }),
@@ -245,95 +216,6 @@ export default function InboxPanel() {
     if (!file) return;
     await pickAndSend(file);
   }
-
-  // Keeps the chat pinned to the bottom, not just when a new message arrives but
-  // also when an already-shown row grows AFTER that (an image finishing its async
-  // load, see ChatImage) - a plain "scroll on message count change" fired too early
-  // for images, leaving the bottom of the photo cut off until the person manually
-  // scrolled. ResizeObserver on the inner wrapper (not the outer scroll container,
-  // whose own size is fixed by its flex parent) catches both cases the same way.
-  const chatScrollRef = useRef<HTMLDivElement>(null);
-  const chatInnerRef = useRef<HTMLDivElement>(null);
-  // Set right before prepending older messages (loadOlderMessages below) to the
-  // scroll container's height at that instant - lets the very next resize tick
-  // preserve the person's spot in the conversation (keep looking at the same
-  // message) instead of the usual "stick to bottom" behavior, which would
-  // otherwise yank them all the way down to the newest message the moment 100+
-  // older rows get added above what they were reading.
-  const preserveScrollHeightRef = useRef<number | null>(null);
-  // Read continuously from a real scroll listener (below), not recomputed
-  // inside the ResizeObserver's own callback - by the time that callback
-  // fires, the container has already grown, so "was the person at the bottom"
-  // has to be known from BEFORE the content changed, not after.
-  const wasNearBottomRef = useRef(true);
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-  const [newMessageCount, setNewMessageCount] = useState(0);
-
-  useEffect(() => {
-    const outer = chatScrollRef.current;
-    if (!outer) return;
-    const onScroll = () => {
-      const nearBottom = outer.scrollHeight - outer.scrollTop - outer.clientHeight < 80;
-      wasNearBottomRef.current = nearBottom;
-      setShowJumpToBottom(!nearBottom);
-      if (nearBottom) setNewMessageCount(0);
-    };
-    onScroll();
-    outer.addEventListener('scroll', onScroll);
-    return () => outer.removeEventListener('scroll', onScroll);
-  }, [selectedId]);
-
-  // Counts a genuinely NEW message landing at the end of the conversation
-  // (arrived or just sent) while the person is scrolled up reading older
-  // history - same "🔽 N mensajes nuevos" idea WhatsApp itself shows, instead
-  // of silently doing nothing until they happen to scroll down themselves.
-  // Keyed off the last message's own id changing, not the array length, so
-  // loading OLDER history (which changes length too, at the other end) never
-  // counts as a "new" message here.
-  const lastMsgIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const last = allMessages[allMessages.length - 1];
-    if (last && lastMsgIdRef.current !== null && last.id !== lastMsgIdRef.current && !wasNearBottomRef.current) {
-      setNewMessageCount((n) => n + 1);
-    }
-    if (last) lastMsgIdRef.current = last.id;
-  }, [allMessages[allMessages.length - 1]?.id]);
-
-  useEffect(() => {
-    lastMsgIdRef.current = null;
-    setNewMessageCount(0);
-    setShowJumpToBottom(false);
-  }, [selectedId]);
-
-  function jumpToBottom() {
-    const outer = chatScrollRef.current;
-    if (!outer) return;
-    outer.scrollTop = outer.scrollHeight;
-    setNewMessageCount(0);
-  }
-
-  useEffect(() => {
-    const outer = chatScrollRef.current;
-    const inner = chatInnerRef.current;
-    if (!outer || !inner) return;
-    const stick = () => {
-      if (preserveScrollHeightRef.current !== null) {
-        outer.scrollTop = outer.scrollHeight - preserveScrollHeightRef.current;
-        preserveScrollHeightRef.current = null;
-        return;
-      }
-      // Only auto-follow to the bottom if the person was already down there -
-      // a message arriving (or being sent) while they're scrolled up reading
-      // history must never yank them away from what they're looking at; the
-      // jump-to-bottom button + new-message counter above are how they get
-      // back down on their own terms instead.
-      if (wasNearBottomRef.current) outer.scrollTop = outer.scrollHeight;
-    };
-    stick();
-    const ro = new ResizeObserver(stick);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
