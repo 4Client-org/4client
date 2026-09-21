@@ -5,7 +5,7 @@ export default function DevLinksPanel() {
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--gt)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1 }}>Links rápidos</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {[
-            { label: 'Railway (backend + BD)', url: 'https://railway.app' },
+            { label: 'Coolify (backend + BD)', url: 'http://212.47.78.132:8000' },
             { label: 'Vercel (frontend)', url: 'https://vercel.com' },
             { label: 'Sentry (errores)', url: 'https://sentry.io' },
             { label: 'Meta Business (WPP)', url: 'https://business.facebook.com' },

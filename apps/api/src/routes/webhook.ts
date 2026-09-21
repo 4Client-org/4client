@@ -580,13 +580,13 @@ async function ingestStatus(
 
 export default async function webhookRoutes(fastify: FastifyInstance) {
   if (!config.META_APP_SECRET) {
-    // RAILWAY_ENVIRONMENT_NAME, not NODE_ENV - NODE_ENV is "production" on every
-    // Railway environment (build/runtime optimization flag, not environment
+    // APP_ENVIRONMENT_NAME, not NODE_ENV - NODE_ENV is "production" on every
+    // deploy everywhere (build/runtime optimization flag, not environment
     // identity), so gating on it here made a dev/staging deploy with no Meta
     // credentials configured (the normal case - it has no real WhatsApp number)
     // crash-loop forever instead of just warning, exactly like a genuine prod
     // misconfiguration would. Only the actual "production" environment enforces this.
-    if (config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+    if (config.APP_ENVIRONMENT_NAME === 'production') {
       // Fail closed: without HMAC verification the webhook would accept forged messages.
       throw new Error('META_APP_SECRET es obligatorio en producción - configúralo antes de desplegar');
     }
@@ -597,7 +597,7 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
   // compare `undefined === undefined`, letting anyone complete Meta's verification
   // challenge with no token at all. Doesn't affect message-delivery spoofing
   // (that stays gated by the HMAC check above regardless), just the handshake.
-  if (!config.META_WEBHOOK_VERIFY_TOKEN && config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+  if (!config.META_WEBHOOK_VERIFY_TOKEN && config.APP_ENVIRONMENT_NAME === 'production') {
     throw new Error('META_WEBHOOK_VERIFY_TOKEN es obligatorio en producción - configúralo antes de desplegar');
   }
   // Capture raw body for HMAC validation before JSON parsing

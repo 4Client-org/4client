@@ -4,13 +4,16 @@ const envSchema = z.object({
   DATABASE_URL:              z.string().min(1),
   JWT_SECRET:                z.string().min(32),
   NODE_ENV:                  z.enum(['development', 'production', 'test']).default('development'),
-  // Railway sets this per-environment (e.g. "production", "dev") - unlike NODE_ENV,
-  // which is "production" on EVERY Railway environment (it controls build/runtime
+  // Set explicitly per deploy (Coolify doesn't auto-inject an environment name the
+  // way Railway's own RAILWAY_ENVIRONMENT_NAME used to) - unlike NODE_ENV, which is
+  // "production" on EVERY deploy regardless of environment (it controls build/runtime
   // optimizations, not which environment this is) and so can't tell a real prod
   // deploy apart from a dev/staging one on the same platform. Checks that must only
   // be strict on the ACTUAL live environment (e.g. "is a Meta webhook secret
   // mandatory") need this, not NODE_ENV - see webhook.ts and dev.ts's /seed route.
-  RAILWAY_ENVIRONMENT_NAME:  z.string().optional(),
+  // MUST be set to the literal string 'production' on the real prod deploy only -
+  // left unset (or anything else) everywhere else, including local dev.
+  APP_ENVIRONMENT_NAME:      z.string().optional(),
   PORT:                      z.coerce.number().default(3000),
   FRONTEND_URL:              z.string().default('http://localhost:5173'),
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
@@ -34,9 +37,9 @@ const envSchema = z.object({
   SEED_ADMIN_PASS:           z.string().min(8).optional(),
   SEED_DEV_PASS:             z.string().min(8).optional(),
   RESEND_API_KEY:            z.string().optional(),
-  // Explicit opt-in, not derived from RAILWAY_ENVIRONMENT_NAME - this scopes the
+  // Explicit opt-in, not derived from APP_ENVIRONMENT_NAME - this scopes the
   // login verification-code step to dev only for now (per the original ask),
-  // toggled directly in Railway's env vars for that one environment rather than
+  // toggled directly in that one environment's own env vars rather than
   // inferred from an environment NAME string that could be renamed/duplicated.
   REQUIRE_2FA:               z.coerce.boolean().default(false),
   // "Tomar lista" (routes/inbox.ts's /parse-messages): free-tier AI providers
@@ -64,11 +67,11 @@ export const config = parsed.data;
 // a no-op (returns the plaintext unchanged) - every organization's WhatsApp
 // access token would get written to `organizations.wpp_meta_token` in clear
 // text instead of AES-256-GCM ciphertext, with no error or warning anywhere.
-// Same RAILWAY_ENVIRONMENT_NAME-gated fail-closed pattern already used for
+// Same APP_ENVIRONMENT_NAME-gated fail-closed pattern already used for
 // META_APP_SECRET (webhook.ts) - a dev/staging deploy with no key configured
 // yet is expected and shouldn't crash-loop, but the real production
 // environment must never silently downgrade to storing these in plaintext.
-if (!config.WPP_TOKEN_ENC_KEY && config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+if (!config.WPP_TOKEN_ENC_KEY && config.APP_ENVIRONMENT_NAME === 'production') {
   console.error('❌ WPP_TOKEN_ENC_KEY es obligatorio en producción - sin él, los tokens de WhatsApp de cada organización se guardarían sin cifrar. Configúralo antes de desplegar (64 hex chars = 32 bytes).');
   process.exit(1);
 }

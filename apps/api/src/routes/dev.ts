@@ -175,10 +175,10 @@ export default async function devRoutes(fastify: FastifyInstance) {
 
   // POST /dev/seed - idempotent upsert of base data
   fastify.post('/seed', async (_req, reply) => {
-    // RAILWAY_ENVIRONMENT_NAME, not NODE_ENV - see webhook.ts for why. NODE_ENV is
-    // "production" on the dev Railway environment too, which blocked seeding there
-    // even though it's exactly the environment this is meant for.
-    if (config.RAILWAY_ENVIRONMENT_NAME === 'production') {
+    // APP_ENVIRONMENT_NAME, not NODE_ENV - see webhook.ts for why. NODE_ENV is
+    // "production" on every deploy including dev, which would've blocked seeding
+    // there too even though it's exactly the environment this is meant for.
+    if (config.APP_ENVIRONMENT_NAME === 'production') {
       return reply.status(403).send({ error: 'Seed deshabilitado en producción', code: 'FORBIDDEN' });
     }
     // Exigidas acá explícitamente (config.ts las deja opcionales para no
