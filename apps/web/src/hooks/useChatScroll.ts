@@ -17,6 +17,14 @@ import { toast } from '../components/ui/Toast';
 export function useChatScroll(ticketId: string | null | undefined, baseMessages: any[], initialHasMore: boolean) {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const chatInnerRef = useRef<HTMLDivElement>(null);
+  // Empty div the caller renders as the very last child inside chatInnerRef,
+  // after the last message - scrollIntoView on THIS element is what actually
+  // guarantees the newest message is fully visible. Doing it by computing
+  // `scrollTop = scrollHeight` instead (the previous approach) could land a
+  // few pixels short of true bottom - fractional/rounded heights from images,
+  // the message-gap CSS, etc. all added up to sometimes leaving the last
+  // bubble's very bottom edge just outside the visible area.
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   const [olderMessages, setOlderMessages] = useState<any[]>([]);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
@@ -110,7 +118,7 @@ export function useChatScroll(ticketId: string | null | undefined, baseMessages:
       // history must never yank them away from what they're looking at; the
       // jump-to-bottom button + new-message counter are how they get back
       // down on their own terms instead.
-      if (wasNearBottomRef.current) outer.scrollTop = outer.scrollHeight;
+      if (wasNearBottomRef.current) bottomRef.current?.scrollIntoView({ block: 'end' });
     };
     stick();
     const ro = new ResizeObserver(stick);
@@ -137,14 +145,12 @@ export function useChatScroll(ticketId: string | null | undefined, baseMessages:
   }
 
   function jumpToBottom() {
-    const outer = chatScrollRef.current;
-    if (!outer) return;
-    outer.scrollTop = outer.scrollHeight;
+    bottomRef.current?.scrollIntoView({ block: 'end' });
     setNewMessageCount(0);
   }
 
   return {
-    chatScrollRef, chatInnerRef, allMessages,
+    chatScrollRef, chatInnerRef, bottomRef, allMessages,
     hasMoreMessages, loadingOlder, loadOlderMessages,
     showJumpToBottom, newMessageCount, jumpToBottom,
   };

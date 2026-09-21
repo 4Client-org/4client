@@ -114,7 +114,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   }, [accessToken, ticketId, qc]);
 
   const {
-    chatScrollRef, chatInnerRef, allMessages,
+    chatScrollRef, chatInnerRef, bottomRef, allMessages,
     hasMoreMessages, loadingOlder, loadOlderMessages,
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(ticketId, ticket?.messages ?? [], !!ticket?.hasMoreMessages);
@@ -435,6 +435,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             {!isLoading && allMessages.length === 0 && (
               <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
             )}
+            <div ref={bottomRef} />
            </div>
           </div>
 
