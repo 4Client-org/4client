@@ -9,7 +9,7 @@
 // Pages for this to actually kick in on every deployment. It's still useful for local
 // dev (`apps/web/.env.local`, gitignored) to point at a local API instead of Railway.
 const PROD_API = 'https://api.4client.shop';
-const DEV_API = 'https://4client-dev.up.railway.app';
+const DEV_API = 'https://dev-api.4client.shop';
 
 export function resolveApiBase(): string {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
