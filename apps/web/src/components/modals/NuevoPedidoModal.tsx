@@ -163,7 +163,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
 
   const baseMessages: any[] = convoData?.messages ?? initialMessages ?? [];
   const {
-    chatScrollRef, chatInnerRef, allMessages: liveMessages,
+    chatScrollRef, chatInnerRef, bottomRef, allMessages: liveMessages,
     hasMoreMessages, loadingOlder, loadOlderMessages,
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(ticketId, baseMessages, !!convoData?.hasMoreMessages);
@@ -459,6 +459,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 </Fragment>
                 );
               })}
+              <div ref={bottomRef} />
              </div>
             </div>
             {showJumpToBottom && (

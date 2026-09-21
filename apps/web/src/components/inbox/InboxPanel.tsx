@@ -170,7 +170,7 @@ export default function InboxPanel() {
   });
 
   const {
-    chatScrollRef, chatInnerRef, allMessages,
+    chatScrollRef, chatInnerRef, bottomRef, allMessages,
     hasMoreMessages, loadingOlder, loadOlderMessages,
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(selectedId, conversation?.messages ?? [], !!conversation?.hasMoreMessages);
@@ -521,6 +521,7 @@ export default function InboxPanel() {
                 </div>
               );
             })}
+            <div ref={bottomRef} />
            </div>
           </div>
 

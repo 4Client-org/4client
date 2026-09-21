@@ -467,7 +467,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   }, [accessToken, order?.ticket_id, qc]);
 
   const {
-    chatScrollRef, chatInnerRef, allMessages: chatMessages,
+    chatScrollRef, chatInnerRef, bottomRef, allMessages: chatMessages,
     hasMoreMessages, loadingOlder, loadOlderMessages,
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(order?.ticket_id, chatData?.messages ?? [], !!chatData?.hasMoreMessages);
@@ -1273,6 +1273,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
               {chatData && chatMessages.length === 0 && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
               )}
+              <div ref={bottomRef} />
              </div>
             </div>
 
