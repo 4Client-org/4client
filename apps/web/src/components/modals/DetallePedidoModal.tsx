@@ -1,6 +1,7 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks, Menu } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks, Menu, ArrowDown } from 'lucide-react';
+import { useChatScroll } from '../../hooks/useChatScroll';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
 import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
@@ -465,22 +466,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     };
   }, [accessToken, order?.ticket_id, qc]);
 
-  // Keeps the chat pinned to the bottom, not just when a new message arrives but
-  // also when an already-shown row grows AFTER that (an image finishing its async
-  // load, see ChatImage) - scrolling only on message-count change fired too early
-  // for images, leaving the bottom of the photo cut off until manually scrolled.
-  const chatScrollRef = useRef<HTMLDivElement>(null);
-  const chatInnerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const outer = chatScrollRef.current;
-    const inner = chatInnerRef.current;
-    if (!outer || !inner) return;
-    const stick = () => { outer.scrollTop = outer.scrollHeight; };
-    stick();
-    const ro = new ResizeObserver(stick);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [order?.ticket_id]);
+  const {
+    chatScrollRef, chatInnerRef, allMessages: chatMessages,
+    hasMoreMessages, loadingOlder, loadOlderMessages,
+    showJumpToBottom, newMessageCount, jumpToBottom,
+  } = useChatScroll(order?.ticket_id, chatData?.messages ?? [], !!chatData?.hasMoreMessages);
 
   // Takes the FINAL items array as its mutate variable rather than reading `items`
   // state directly - triggerSave (below) commits whatever's still mid-edit in the
@@ -1193,12 +1183,27 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             )}
 
             {/* Messages */}
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 6px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {!chatData && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Cargando chat...</div>
               )}
-              {chatData?.messages?.map((msg: any, i: number, arr: any[]) => {
+              {!!chatData && hasMoreMessages && (
+                <div style={{ textAlign: 'center', padding: '4px 0 8px' }}>
+                  <button
+                    onClick={loadOlderMessages}
+                    disabled={loadingOlder}
+                    style={{
+                      background: '#fff', border: '1.5px solid var(--brd)', borderRadius: 16,
+                      padding: '6px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gt)',
+                      cursor: loadingOlder ? 'default' : 'pointer',
+                    }}>
+                    {loadingOlder ? 'Cargando...' : 'Cargar mensajes anteriores'}
+                  </button>
+                </div>
+              )}
+              {chatMessages.map((msg: any, i: number, arr: any[]) => {
                 const isOut = msg.direction === 'out';
                 const day = colombiaDateStr(msg.created_at ?? msg.sent_at);
                 const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
@@ -1265,10 +1270,33 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   </Fragment>
                 );
               })}
-              {chatData && (!chatData.messages || chatData.messages.length === 0) && (
+              {chatData && chatMessages.length === 0 && (
                 <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
               )}
              </div>
+            </div>
+
+            {showJumpToBottom && (
+              <button
+                onClick={jumpToBottom}
+                title="Ir al mensaje más reciente"
+                style={{
+                  position: 'absolute', right: 14, bottom: 10, zIndex: 2,
+                  height: 32, borderRadius: 16, border: 'none', background: '#fff',
+                  boxShadow: '0 2px 6px rgba(0,0,0,.25)', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  padding: newMessageCount > 0 ? '0 12px 0 10px' : 0,
+                  width: newMessageCount > 0 ? 'auto' : 32,
+                  color: 'var(--v)',
+                }}>
+                <ArrowDown size={16} style={{ flexShrink: 0 }} />
+                {newMessageCount > 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>
+                    {newMessageCount === 1 ? '1 mensaje nuevo' : `${newMessageCount} mensajes nuevos`}
+                  </span>
+                )}
+              </button>
+            )}
             </div>
 
             {/* Reply bar - visible to all roles - replaced by the Tomar lista

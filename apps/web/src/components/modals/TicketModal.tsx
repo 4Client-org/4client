@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu, Trash2 } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu, Trash2, ArrowDown } from 'lucide-react';
+import { useChatScroll } from '../../hooks/useChatScroll';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
 import ChatAudio from '../ui/ChatAudio';
@@ -55,7 +56,6 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const [showEraseConfirm, setShowEraseConfirm] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [forwardMsg, setForwardMsg] = useState<any | null>(null);
-  const chatRef = useRef<HTMLDivElement>(null);
 
   // Solo importa en celular (ver .tk-actions/.tk-actions-btn en global.css) -
   // en desktop/tablet los botones (Formulario/Bloquear Link/Catálogo/Tomar
@@ -113,23 +113,11 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     };
   }, [accessToken, ticketId, qc]);
 
-  // Keeps the chat pinned to the bottom, not just when a new message arrives but
-  // also when an already-shown row grows AFTER that (an image finishing its async
-  // load, see ChatImage) - scrolling only on message-count change fired too early
-  // for images, leaving the bottom of the photo cut off until manually scrolled.
-  // ResizeObserver on the inner wrapper (not chatRef itself, whose own size is
-  // fixed by its flex parent) catches both cases the same way.
-  const chatInnerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const outer = chatRef.current;
-    const inner = chatInnerRef.current;
-    if (!outer || !inner) return;
-    const stick = () => { outer.scrollTop = outer.scrollHeight; };
-    stick();
-    const ro = new ResizeObserver(stick);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [ticketId]);
+  const {
+    chatScrollRef, chatInnerRef, allMessages,
+    hasMoreMessages, loadingOlder, loadOlderMessages,
+    showJumpToBottom, newMessageCount, jumpToBottom,
+  } = useChatScroll(ticketId, ticket?.messages ?? [], !!ticket?.hasMoreMessages);
 
   const sendMut = useMutation({
     mutationFn: () => api.post<{ data: any; wpp_status: string; wpp_error?: string }>(`/inbox/${ticketId}/reply`, { text: reply }),
@@ -286,7 +274,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
               </div>
               <div style={{ fontSize: 12, opacity: 0.8 }}>
                 {formatPhoneDisplay(ticket?.phone)}
-                {ticket?.messages?.length != null && ` · ${ticket.messages.length} mensajes`}
+                {ticket?.messages?.length != null && ` · ${allMessages.length} mensajes`}
               </div>
             </div>
             {/* En celular esta fila se convierte en un menú hamburguesa (mismos
@@ -358,9 +346,24 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           </div>
 
           {/* Messages - scrollable */}
-          <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
+          <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', minHeight: 0 }}>
            <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(ticket?.messages ?? []).map((msg: any, i: number, arr: any[]) => {
+            {!isLoading && hasMoreMessages && (
+              <div style={{ textAlign: 'center', padding: '4px 0 8px' }}>
+                <button
+                  onClick={loadOlderMessages}
+                  disabled={loadingOlder}
+                  style={{
+                    background: '#fff', border: '1.5px solid var(--brd)', borderRadius: 16,
+                    padding: '6px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gt)',
+                    cursor: loadingOlder ? 'default' : 'pointer',
+                  }}>
+                  {loadingOlder ? 'Cargando...' : 'Cargar mensajes anteriores'}
+                </button>
+              </div>
+            )}
+            {allMessages.map((msg: any, i: number, arr: any[]) => {
               const isOut = msg.direction === 'out';
               // WhatsApp-style day divider - shown whenever this message's calendar
               // day differs from the previous one (or it's the very first message).
@@ -429,10 +432,33 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 </Fragment>
               );
             })}
-            {!isLoading && (!ticket?.messages || ticket.messages.length === 0) && (
+            {!isLoading && allMessages.length === 0 && (
               <div style={{ textAlign: 'center', color: '#999', fontSize: 12, padding: 16 }}>Sin mensajes</div>
             )}
            </div>
+          </div>
+
+          {showJumpToBottom && (
+            <button
+              onClick={jumpToBottom}
+              title="Ir al mensaje más reciente"
+              style={{
+                position: 'absolute', right: 14, bottom: 10, zIndex: 2,
+                height: 32, borderRadius: 16, border: 'none', background: '#fff',
+                boxShadow: '0 2px 6px rgba(0,0,0,.25)', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: newMessageCount > 0 ? '0 12px 0 10px' : 0,
+                width: newMessageCount > 0 ? 'auto' : 32,
+                color: 'var(--v)',
+              }}>
+              <ArrowDown size={16} style={{ flexShrink: 0 }} />
+              {newMessageCount > 0 && (
+                <span style={{ fontSize: 11, fontWeight: 700 }}>
+                  {newMessageCount === 1 ? '1 mensaje nuevo' : `${newMessageCount} mensajes nuevos`}
+                </span>
+              )}
+            </button>
+          )}
           </div>
 
           {/* Reply bar - replaced by the Tomar lista action bar while that

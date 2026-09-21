@@ -1,5 +1,6 @@
 import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks, Menu } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks, Menu, ArrowDown } from 'lucide-react';
+import { useChatScroll } from '../../hooks/useChatScroll';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
 import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
@@ -131,9 +132,6 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     if (e.key === 'ArrowLeft' && which === 'submit') { e.preventDefault(); cancelBtnRef.current?.focus(); }
   }
 
-  const chatScrollRef = useRef<HTMLDivElement>(null);
-  const chatInnerRef = useRef<HTMLDivElement>(null);
-
   // Live chat data from API
   const { data: convoData } = useQuery({
     queryKey: ['inbox-convo', ticketId],
@@ -163,22 +161,12 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     };
   }, [accessToken, ticketId, qc]);
 
-  const liveMessages: any[] = convoData?.messages ?? initialMessages ?? [];
-
-  // Keeps the chat pinned to the bottom, not just when a new message arrives but
-  // also when an already-shown row grows AFTER that (an image finishing its async
-  // load, see ChatImage) - scrolling only on message-count change fired too early
-  // for images, leaving the bottom of the photo cut off until manually scrolled.
-  useEffect(() => {
-    const outer = chatScrollRef.current;
-    const inner = chatInnerRef.current;
-    if (!outer || !inner) return;
-    const stick = () => { outer.scrollTop = outer.scrollHeight; };
-    stick();
-    const ro = new ResizeObserver(stick);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [ticketId]);
+  const baseMessages: any[] = convoData?.messages ?? initialMessages ?? [];
+  const {
+    chatScrollRef, chatInnerRef, allMessages: liveMessages,
+    hasMoreMessages, loadingOlder, loadOlderMessages,
+    showJumpToBottom, newMessageCount, jumpToBottom,
+  } = useChatScroll(ticketId, baseMessages, !!convoData?.hasMoreMessages);
 
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
@@ -401,8 +389,23 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 <AlertTriangle size={14} /> Este ticket llegó sin número de WhatsApp - no se puede responder.
               </div>
             )}
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
             <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
              <div ref={chatInnerRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {hasMoreMessages && (
+                <div style={{ textAlign: 'center', padding: '4px 0 8px' }}>
+                  <button
+                    onClick={loadOlderMessages}
+                    disabled={loadingOlder}
+                    style={{
+                      background: '#fff', border: '1.5px solid var(--brd)', borderRadius: 16,
+                      padding: '6px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gt)',
+                      cursor: loadingOlder ? 'default' : 'pointer',
+                    }}>
+                    {loadingOlder ? 'Cargando...' : 'Cargar mensajes anteriores'}
+                  </button>
+                </div>
+              )}
               {liveMessages.map((m: any, i: number, arr: any[]) => {
                 const day = colombiaDateStr(m.created_at ?? m.sent_at);
                 const prevDay = i > 0 ? colombiaDateStr(arr[i - 1].created_at ?? arr[i - 1].sent_at) : null;
@@ -457,6 +460,28 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                 );
               })}
              </div>
+            </div>
+            {showJumpToBottom && (
+              <button
+                onClick={jumpToBottom}
+                title="Ir al mensaje más reciente"
+                style={{
+                  position: 'absolute', right: 14, bottom: 10, zIndex: 2,
+                  height: 32, borderRadius: 16, border: 'none', background: '#fff',
+                  boxShadow: '0 2px 6px rgba(0,0,0,.25)', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  padding: newMessageCount > 0 ? '0 12px 0 10px' : 0,
+                  width: newMessageCount > 0 ? 'auto' : 32,
+                  color: 'var(--v)',
+                }}>
+                <ArrowDown size={16} style={{ flexShrink: 0 }} />
+                {newMessageCount > 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>
+                    {newMessageCount === 1 ? '1 mensaje nuevo' : `${newMessageCount} mensajes nuevos`}
+                  </span>
+                )}
+              </button>
+            )}
             </div>
             {/* Reply input - replaced by the Tomar lista action bar while that
                 selection mode is active. */}
