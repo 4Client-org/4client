@@ -219,13 +219,26 @@ export default function InboxPanel() {
 
   useEffect(() => {
     if (!selectedId) return;
-    const handler = (e: Event) => { if ((e as globalThis.KeyboardEvent).key === 'Escape') setSelectedId(null); };
+    const handler = (e: Event) => {
+      if ((e as globalThis.KeyboardEvent).key !== 'Escape') return;
+      // Escape must close whatever's on TOP first (the forward-message picker),
+      // not skip straight to closing the whole chat under it - otherwise
+      // forwardMsg never gets reset (its own modal has no Escape handler of its
+      // own to catch this first), just hidden because `forwardMsg && selectedId`
+      // momentarily goes false when selectedId does. Reopening that same chat
+      // later makes both truthy again and the forward picker pops right back up
+      // instead of the chat - reported by a real customer as "reenviar se queda
+      // pegado".
+      if (forwardMsg) { setForwardMsg(null); return; }
+      setSelectedId(null);
+    };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedId]);
+  }, [selectedId, forwardMsg]);
 
-  // Switching chats must not leave a stale rename form open against the wrong ticket.
-  useEffect(() => { setEditingTicket(false); }, [selectedId]);
+  // Switching chats must not leave a stale rename form (or forward-message
+  // picker, same reasoning) open against the wrong ticket.
+  useEffect(() => { setEditingTicket(false); setForwardMsg(null); }, [selectedId]);
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {

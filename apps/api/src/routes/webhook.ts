@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
-import { generateFormLinkUrl, buildFormLinkWarningMessage, buildFormLinkFollowUpMessage, buildPrivacyNoticeMessage } from '../lib/formLink.js';
+import { buildPrivacyNoticeMessage } from '../lib/formLink.js';
 
 // Shared across every place a stored TicketMessage's media kind needs naming.
 type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
@@ -393,10 +393,16 @@ async function ingestMessage(
         // queda en null, así que su próximo mensaje - sea el día que sea - lo
         // trata igual que a un cliente nuevo: se le avisa esa vez y nunca más
         // (pedido explícito, para no repetirlo a diario y molestar).
+        // El link del formulario (con su aviso de "no pedimos datos bancarios" y
+        // el seguimiento) ya NO se manda solo - pedido explícito: solo sale cuando
+        // el encargado lo dispara a mano con el botón "Enviar formulario" (arriba,
+        // junto al catálogo - ver TicketModal/NuevoPedidoModal/DetallePedidoModal).
+        // El saludo automático de acá se queda solo con el mensaje de bienvenida
+        // de la organización + el aviso de privacidad (una sola vez por ticket).
         const needsPrivacyNotice = !ticket.privacy_notice_sent_at;
         const welcomeAndNotice = needsPrivacyNotice
-          ? `${org.welcome_message}\n\n${buildPrivacyNoticeMessage()}\n\n${buildFormLinkWarningMessage()}`
-          : `${org.welcome_message}\n\n${buildFormLinkWarningMessage()}`;
+          ? `${org.welcome_message}\n\n${buildPrivacyNoticeMessage()}`
+          : org.welcome_message!;
         try {
           await sendAndRecord(welcomeAndNotice);
           // Estampado solo tras un envío exitoso a Meta - un envío fallido no
@@ -407,23 +413,6 @@ async function ingestMessage(
           }
         } catch (err) {
           await recordFailed(welcomeAndNotice, err);
-        }
-
-        // No sentByUserId - this is an automated send, not a staff click. public.ts's
-        // /submit already falls back to the first active admin/encargado when
-        // attributing an order to a token with no sentByUserId, so an order placed
-        // through this auto-sent link still gets a real name in "registered_by".
-        // Kept as its own try/catch, separate from the message above - a failed
-        // welcome+notice send must not skip the link, the actually useful part.
-        try {
-          const url = await generateFormLinkUrl(fastify, ticket.id, org.id);
-          await sendAndRecord(url);
-          await sendAndRecord(buildFormLinkFollowUpMessage());
-        } catch (err) {
-          // url generation itself could theoretically throw (DB write failure) before
-          // there's any text to record - still worth a visible failure marker with
-          // whatever context is available, same red-X pattern as every other send.
-          await recordFailed('Formulario de pedido', err);
         }
       })();
     }

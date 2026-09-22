@@ -33,7 +33,15 @@ interface Order {
 // literally 'papelera' (not a column), but it must still appear frozen in the
 // column it came FROM, per status_before_papelera (set by PATCH /:id/status).
 function effectiveStatus(o: Order): string {
-  return o.status === 'papelera' ? (o.status_before_papelera ?? 'nuevo') : o.status;
+  const s = o.status === 'papelera' ? (o.status_before_papelera ?? 'nuevo') : o.status;
+  // 'entregado' is gone from STATUS_ORDER (no longer a board column) as of this
+  // change - an order from before it that's still sitting in that exact status
+  // would otherwise match no column at all and silently vanish from the board
+  // whenever that historical day is viewed. Grouped under 'camino' (its nearest
+  // neighbor) for DISPLAY/column-placement only - the order's real `status` value
+  // in the DB is never touched, and its own detail view still shows "Entregado"
+  // (DetallePedidoModal reads STATUS_LABEL[order.status] directly, not this).
+  return s === 'entregado' ? 'camino' : s;
 }
 
 interface Props {
@@ -465,6 +473,9 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
           </div>
         )}
         <div className="dc-tot">{fmtCOP(total)}</div>
+        {ord.address && (
+          <div className="dc-addr">{ord.address}</div>
+        )}
         <div className="dc-nav">
           <button className="dc-btn" title="Retroceder"
             disabled={ord.locked || frozen || trashed || STATUS_ORDER.indexOf(ord.status) === 0 || moveOrder.isPending}
@@ -688,9 +699,11 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                       Pospuesto
                     </div>
                   )}
-                  <div className="tk-phone">{formatPhoneDisplay(ticket.phone)}</div>
-                  <div className="tk-name">{ticket.customer_name}</div>
-                  <div className="tk-foot">
+                  {/* Orden pedido explícitamente: Ticket (arriba) | Hora | Nombre |
+                      Teléfono | Dirección - la hora se sube acá (antes vivía junto
+                      al badge de pedidos, al final) y nombre/teléfono se
+                      intercambian (antes el teléfono iba primero). */}
+                  <div className="tk-foot" style={{ marginBottom: 4 }}>
                     <span className="tk-time">
                       {new Date(ticket.last_message_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
                     </span>
@@ -698,6 +711,9 @@ export default function Swimlane({ fecha, tickets, orders, search, diaCerrado, o
                       {ticketOrders.length > 0 ? `${ticketOrders.length} pedido${ticketOrders.length > 1 ? 's' : ''}` : 'Sin pedido'}
                     </span>
                   </div>
+                  <div className="tk-name">{ticket.customer_name}</div>
+                  <div className="tk-phone">{formatPhoneDisplay(ticket.phone)}</div>
+                  <div className="tk-address">{ticketOrders[0]?.address || 'Sin dirección'}</div>
                   <button className="tk-ver-btn" style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
                     onClick={(e) => { e.stopPropagation(); onOpenTicket(ticket.id); }}>
                     Ver conversación <ChevronRight size={12} strokeWidth={2.5} />

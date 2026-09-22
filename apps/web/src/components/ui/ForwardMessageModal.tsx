@@ -66,7 +66,16 @@ export default function ForwardMessageModal({ message, currentTicketId, onClose 
               .filter((t: any) => {
                 const q = normalizeSearch(search);
                 if (!q) return true;
-                return normalizeSearch(t.customer_name ?? '').includes(q) || (t.phone ?? '').includes(search);
+                if (normalizeSearch(t.customer_name ?? '').includes(q)) return true;
+                // Compares digits-only on both sides - typing/pasting the number
+                // with spaces, dashes or a leading "+57" (exactly how it shows up
+                // almost everywhere else: WhatsApp itself, caller ID, etc.) must
+                // still match the raw "573001234567" this stores with zero
+                // formatting - a real report: staff could find nobody by phone
+                // unless they typed it with the exact same all-digits shape.
+                const searchDigits = search.replace(/\D/g, '');
+                if (!searchDigits) return false;
+                return (t.phone ?? '').replace(/\D/g, '').includes(searchDigits);
               })
               .map((t: any) => {
                 const checked = selected.has(t.id);

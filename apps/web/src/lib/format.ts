@@ -54,7 +54,14 @@ export const STATUS_LABEL: Record<string, string> = {
   camino: 'En camino', entregado: 'Entregado', cerrado: 'Cerrado',
 };
 
-export const STATUS_ORDER = ['nuevo', 'preparando', 'listo', 'camino', 'entregado', 'cerrado'];
+// 'entregado' stays a valid STATUS_LABEL entry (historical orders already sitting
+// in that status must still render its label correctly everywhere) but is
+// deliberately gone from here - it's no longer a board column nor a reachable
+// step in the active nuevo->preparando->listo->camino->cerrado workflow. Applies
+// only to what happens going forward: an order already in 'entregado' keeps that
+// exact status forever (nothing migrates it), it just won't show as its own
+// column or be a target of "avanzar"/"mover pedido" for anyone anymore.
+export const STATUS_ORDER = ['nuevo', 'preparando', 'listo', 'camino', 'cerrado'];
 
 // Must match the wording staff actually picks (DetallePedidoModal's <select>
 // options) exactly - this same constant drives the factura PDF, the copied invoice
