@@ -705,7 +705,11 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   fastify.patch('/:id/status', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({
-      status: z.enum(['nuevo', 'preparando', 'listo', 'camino', 'entregado', 'papelera']),
+      // 'entregado' removed as of this change - no longer a reachable status for
+      // new transitions (board column gone too, see format.ts's STATUS_ORDER). An
+      // order already sitting in that exact status from before keeps it forever
+      // (nothing here touches existing rows), it just can never be set again.
+      status: z.enum(['nuevo', 'preparando', 'listo', 'camino', 'papelera']),
       // Mandatory only when sending TO papelera - required so staff can never trash
       // an order without leaving a reason behind (stays in OrderHistory even after
       // a later restore, per PATCH /:id/restore below).

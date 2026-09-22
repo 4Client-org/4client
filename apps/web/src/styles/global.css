@@ -108,7 +108,7 @@ input,select,textarea{font-family:var(--f);}
    like ordinary content, which is what let it drift down over the ticket cards
    instead of stopping flush under zona roja). */
 .slane-wrap{margin-bottom:20px;}
-.slane{display:grid;grid-template-columns:260px repeat(6,minmax(120px,1fr));min-width:1050px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
+.slane{display:grid;grid-template-columns:260px repeat(5,minmax(120px,1fr));min-width:930px;border-radius:var(--rad);overflow:hidden;border:2px solid var(--brd);}
 /* Header row is its OWN grid (a sibling of the body grid, not a row inside it) -
    position:sticky on a grid item only sticks within its own grid AREA, so a
    header cell that's row 1 of a grid whose later rows are the (much taller)
@@ -130,6 +130,7 @@ input,select,textarea{font-family:var(--f);}
 /* TICKET CELL */
 .tk-phone{font-size:11px;color:var(--gt);font-weight:600;margin-bottom:2px;}
 .tk-name{font-size:14px;font-weight:800;color:var(--n);margin-bottom:4px;}
+.tk-address{font-size:11px;color:var(--gt);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
 .tk-preview{font-size:12px;color:var(--gt);line-height:1.35;margin-bottom:7px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .tk-foot{display:flex;align-items:center;justify-content:space-between;gap:4px;flex-wrap:wrap;}
 .tk-time{font-size:11px;color:var(--gt);font-weight:600;}
@@ -147,6 +148,7 @@ input,select,textarea{font-family:var(--f);}
 .dc-num{font-size:12px;font-weight:800;color:var(--n);margin-bottom:3px;}
 .dc-prod{font-size:11px;color:var(--gt);line-height:1.3;margin-bottom:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .dc-tot{font-size:13px;font-weight:900;color:var(--v);margin-bottom:6px;}
+.dc-addr{font-size:11px;color:var(--gt);line-height:1.3;margin-bottom:6px;}
 .dc-nav{display:flex;gap:4px;align-items:center;}
 .dc-btn{background:var(--bg);border:1.5px solid var(--brd);color:var(--gt);width:26px;height:26px;border-radius:7px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
 .dc-btn:hover:not(:disabled){border-color:var(--v);color:var(--v);background:var(--vc);}
@@ -465,7 +467,7 @@ input,select,textarea{font-family:var(--f);}
 
 /* TABLET LANDSCAPE (~900px-1180px): tighten swimlane sizing, bump touch targets to ~32px */
 @media (max-width:1180px){
-  .slane{grid-template-columns:200px repeat(6,minmax(136px,1fr));min-width:1016px;}
+  .slane{grid-template-columns:200px repeat(5,minmax(136px,1fr));min-width:880px;}
   .slane-hcell{padding:8px 9px;font-size:10px;}
   .slane-tcell{padding:9px 9px;}
   .slane-scell{padding:7px;min-height:100px;gap:6px;}
@@ -487,13 +489,14 @@ input,select,textarea{font-family:var(--f);}
 
 /* PHONE LANDSCAPE (~560px-900px): narrowest realistic target; .ac's horizontal scroll is the safety net when content doesn't perfectly fit */
 @media (max-width:900px){
-  .slane{grid-template-columns:148px repeat(6,minmax(108px,1fr));min-width:796px;}
+  .slane{grid-template-columns:148px repeat(5,minmax(108px,1fr));min-width:688px;}
   .slane-hcell{padding:6px 6px;font-size:9px;letter-spacing:.3px;}
   .slane-tcell{padding:7px 6px;}
   .slane-scell{padding:5px;min-height:88px;gap:4px;}
   .tk-name{font-size:12px;}
   .tk-preview{font-size:10px;}
   .tk-phone{font-size:9px;}
+  .tk-address{font-size:9px;}
   .tk-badge{font-size:9px;padding:2px 6px;}
   .tk-num{font-size:9px;}
   /* T-01 apretado contra el reloj de tiempo transcurrido a este ancho - el
@@ -503,6 +506,7 @@ input,select,textarea{font-family:var(--f);}
   .dc-card{padding:6px 7px;}
   .dc-num{font-size:10px;}
   .dc-prod{font-size:10px;}
+  .dc-addr{font-size:10px;}
   .dc-tot{font-size:11px;}
   .dc-nav{gap:3px;}
   .dc-det-btn{padding:0 2px;}
