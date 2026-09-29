@@ -23,7 +23,16 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         ],
       },
       include: {
-        messages: { orderBy: { created_at: 'asc' } },
+        // take + desc + reverse, not a plain 'asc' with no limit - a ticket is one
+        // row per phone FOREVER (see comment below), so an unbounded include here
+        // pulled a heavily-returning customer's entire message history on every
+        // single board load, for every ticket showing that day - confirmed as a
+        // real prod cost (security-audit finding) that only gets worse as message
+        // history accumulates. This payload is only ever used as NuevoPedidoModal's
+        // instant-placeholder `messages` prop (MainPage.tsx) while its own live,
+        // already-paginated chat query takes over a moment later - 50 most recent
+        // messages is more than enough for that brief flash of content.
+        messages: { orderBy: { created_at: 'desc' }, take: 50 },
         // Scoped to `fecha` too - a ticket is one row per phone forever now (not per
         // day), so without this a heavily-used chat's badge/count here would include
         // every order across its whole history instead of just what's relevant to the
@@ -60,6 +69,9 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       seenPhones.add(t.phone);
       return true;
     });
+    // messages came back newest-first (take:50) - flip back to chronological order,
+    // same shape consumers already expect from the old unbounded 'asc' query.
+    for (const t of tickets) t.messages.reverse();
 
     return reply.send({ data: tickets });
   });

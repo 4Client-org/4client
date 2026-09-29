@@ -79,6 +79,14 @@ export function buildFormLinkFollowUpMessage(): string {
 // en vez de una constante duplicada en cada lado.
 const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web/politica-privacidad.html';
 
+// Security-audit finding (cumplimiento Ley 1581): sin esto, no quedaba registro
+// de QUÉ versión del texto de la política aceptó cada cliente - solo la fecha
+// (consent_given_at/consent_confirmed_at). Si el contenido de la política
+// cambia algún día, no había forma de saber si un consentimiento viejo sigue
+// siendo válido para el texto nuevo. Bump manual cada vez que cambie el
+// contenido publicado en PRIVACY_POLICY_URL.
+export const PRIVACY_POLICY_VERSION = 'v1';
+
 // Ley 1581 de 2012 - aviso de privacidad, en cursiva (sintaxis de WhatsApp:
 // _texto_), pegado al FINAL del mensaje de bienvenida (ver webhook.ts) - no es
 // un mensaje aparte, a propósito: sirve como prueba de que se avisó al cliente

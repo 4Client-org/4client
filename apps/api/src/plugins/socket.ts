@@ -26,7 +26,7 @@ export default fp(async (fastify) => {
     if (!token) return next(new Error('No autorizado'));
 
     try {
-      const payload = fastify.jwt.verify<{ userId: string; orgId: string; role: string }>(token);
+      const payload = fastify.jwt.verify<{ userId: string; orgId: string; role: string; exp: number }>(token);
       // Reject form-link tokens (routes/public.ts) - same secret, different payload shape
       // (no userId/role). Without this, a client's form link could open a socket and join
       // their org's room, eavesdropping on every order/ticket event in real time.
@@ -41,6 +41,24 @@ export default fp(async (fastify) => {
   io.on('connection', (socket) => {
     const userOrgId: string = socket.data.user?.orgId;
     const userId: string | undefined = socket.data.user?.userId;
+
+    // Security-audit finding: the JWT that authenticated this socket is only
+    // checked once, at connect - a 15-minute access token expiring naturally
+    // (no password reset, no deactivation, so disconnectUserSockets below never
+    // fires) used to leave the socket connected indefinitely, still receiving
+    // every org:*/order:* event as a passive read-only observer. Disconnects it
+    // itself at the exact moment that same token would stop working for a real
+    // HTTP request, instead of only reacting to the two explicit revocation paths.
+    const expiresAt = socket.data.user?.exp;
+    if (typeof expiresAt === 'number') {
+      const msUntilExpiry = expiresAt * 1000 - Date.now();
+      if (msUntilExpiry <= 0) {
+        socket.disconnect(true);
+      } else {
+        const timer = setTimeout(() => socket.disconnect(true), msUntilExpiry);
+        socket.on('disconnect', () => clearTimeout(timer));
+      }
+    }
 
     // Security-audit finding: el JWT solo se verifica UNA vez, al conectar - una
     // cuenta desactivada o con su contraseña reseteada (que sí revoca todos sus
