@@ -317,6 +317,11 @@ model Ticket {
   // cliente vuelva a escribir y complete el formulario de nuevo (Decreto 1377
   // de 2013, art. 10 - no se borra ni se asume nada retroactivamente).
   consent_given_at   DateTime? @db.Timestamptz
+  // Which version of the published privacy policy text was current when
+  // consent_given_at was set (lib/formLink.ts's PRIVACY_POLICY_VERSION) - lets
+  // a future policy-text change be told apart from an old consent that predates
+  // it, instead of only knowing THAT consent happened, never to what text.
+  privacy_policy_version String? @db.VarChar(20)
   // Momento en que este ticket recibió el aviso de privacidad DENTRO del
   // chat de WhatsApp (webhook.ts, mensaje de bienvenida - buildPrivacyNoticeMessage).
   // Null = todavía no se le avisó. A diferencia del welcome_message/link de
@@ -487,6 +492,9 @@ model Order {
   // creado por staff (canal 'call'/'encargado', no source:'form') - esa
   // exigencia es exclusiva del formulario público.
   consent_confirmed_at DateTime? @db.Timestamptz
+  // Same reasoning as Ticket.privacy_policy_version - which text version was
+  // current when THIS order's own consent_confirmed_at was stamped.
+  privacy_policy_version String? @db.VarChar(20)
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @updatedAt @db.Timestamptz
 

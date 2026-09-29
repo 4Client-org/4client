@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { authenticate } from '../middleware/auth.js';
 import { config } from '../config.js';
 import { sendEmail } from '../services/email.js';
+import { audit } from '../lib/audit.js';
 
 // Security-audit finding (deep-profile): org.name (settable by that org's own
 // admin/dev via config.ts) was interpolated unescaped into this email's HTML
@@ -111,6 +112,12 @@ async function issueSession(fastify: FastifyInstance, req: FastifyRequest, reply
     data: { last_login: new Date() },
   });
 
+  // Security-audit finding: last_login above only ever holds the MOST RECENT
+  // success, overwritten every time - no queryable history of past logins
+  // existed anywhere. Shared by both /login (2FA off) and /login/verify-code
+  // (2FA on), so every real successful session gets one entry here.
+  await audit(fastify.prisma, { orgId: user.org_id, actorId: user.id, action: 'auth.login_success' });
+
   fastify.prisma.refreshToken.deleteMany({
     where: { user_id: user.id, OR: [{ revoked: true }, { expires_at: { lt: new Date() } }] },
   }).catch((err) => fastify.log.warn({ err }, 'No se pudo limpiar refresh tokens vencidos'));
@@ -206,6 +213,13 @@ export default async function authRoutes(fastify: FastifyInstance) {
           data: { failed_login_attempts: { increment: 1 } },
           select: { failed_login_attempts: true },
         });
+        // Security-audit finding: no login attempt (success or failure) left any
+        // structured, queryable trace before this - `last_login` (below, on
+        // success) only ever holds the MOST RECENT one, overwritten every time,
+        // and failures left nothing at all. Reconstructing "who tried to log in,
+        // when, from where" for a real incident needed this. Best-effort (see
+        // audit()'s own doc) - never blocks or delays the actual login response.
+        await audit(fastify.prisma, { orgId: user.org_id, actorId: user.id, action: 'auth.login_failed' });
         if (attempts % LOCKOUT_THRESHOLD === 0) {
           await fastify.prisma.user.update({
             where: { id: user.id },

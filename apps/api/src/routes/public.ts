@@ -6,6 +6,7 @@ import { sortByCategoryOrder } from '../lib/categoryOrder.js';
 import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
+import { PRIVACY_POLICY_VERSION } from '../lib/formLink.js';
 
 // Max orders a single form link (ticket) may generate - a link can stay valid up to
 // 24h, so this caps spam from a leaked/shared link.
@@ -409,7 +410,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // no gatea nada (ya no hace falta, se exige siempre) y nunca se pisa una
     // vez seteada.
     if (!ticket.consent_given_at) {
-      await fastify.prisma.ticket.update({ where: { id: ticket.id }, data: { consent_given_at: consentConfirmedAt } });
+      await fastify.prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { consent_given_at: consentConfirmedAt, privacy_policy_version: PRIVACY_POLICY_VERSION },
+      });
     }
 
     const { user: actorUser, label: actorLabel, isAuto: actorIsAuto } = await resolveActorUser(ticket);
@@ -524,6 +528,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             ...(paymentChanged ? { payment_method: body.data.payment_method } : {}),
             client_modified: true,
             consent_confirmed_at: consentConfirmedAt,
+            privacy_policy_version: PRIVACY_POLICY_VERSION,
             items: { deleteMany: {}, create: mergedItemsData },
           },
           include: {
@@ -779,6 +784,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
             registered_by: actorUser.id,
             fecha: todayLocal,
             consent_confirmed_at: consentConfirmedAt,
+            privacy_policy_version: PRIVACY_POLICY_VERSION,
             items: { create: orderItems },
           },
           include: {

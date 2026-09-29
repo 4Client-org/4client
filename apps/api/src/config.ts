@@ -63,6 +63,24 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 
+// Security-audit finding: NODE_ENV is 'production' on nearly every real deploy
+// (Docker/Coolify default), so it can't tell a genuine prod deploy apart from
+// staging/dev on the same platform - only APP_ENVIRONMENT_NAME can, and unlike
+// Railway's old RAILWAY_ENVIRONMENT_NAME, nothing auto-injects it anymore. A
+// deploy that's actually meant to be production but never got this var set (or
+// got it typo'd, e.g. 'Production' with a capital P) would silently relax the
+// three checks below with no visible signal that anything was misconfigured.
+// Refuse to boot rather than guess: force the operator to decide explicitly.
+if (config.NODE_ENV === 'production' && !config.APP_ENVIRONMENT_NAME) {
+  console.error("❌ NODE_ENV=production pero APP_ENVIRONMENT_NAME no está seteada. Configúrala explícitamente a 'production' en el deploy real, o a cualquier otro valor (ej. 'dev') en todos los demás - no se puede arrancar sin esa decisión explícita.");
+  process.exit(1);
+}
+console.log(
+  config.APP_ENVIRONMENT_NAME === 'production'
+    ? "🔒 APP_ENVIRONMENT_NAME='production' detectado - modo estricto activado (WPP_TOKEN_ENC_KEY, META_APP_SECRET y /dev/seed exigidos)."
+    : `⚠️  APP_ENVIRONMENT_NAME no es 'production' (valor actual: ${JSON.stringify(config.APP_ENVIRONMENT_NAME ?? null)}) - modo relajado, esas credenciales NO son obligatorias.`
+);
+
 // SECURITY: without this key, lib/crypto.ts's encryptSecret() silently becomes
 // a no-op (returns the plaintext unchanged) - every organization's WhatsApp
 // access token would get written to `organizations.wpp_meta_token` in clear

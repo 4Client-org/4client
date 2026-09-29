@@ -174,13 +174,20 @@ export default async function devRoutes(fastify: FastifyInstance) {
   });
 
   // POST /dev/seed - idempotent upsert of base data
-  fastify.post('/seed', async (_req, reply) => {
+  fastify.post('/seed', async (req, reply) => {
     // APP_ENVIRONMENT_NAME, not NODE_ENV - see webhook.ts for why. NODE_ENV is
     // "production" on every deploy including dev, which would've blocked seeding
     // there too even though it's exactly the environment this is meant for.
     if (config.APP_ENVIRONMENT_NAME === 'production') {
       return reply.status(403).send({ error: 'Seed deshabilitado en producción', code: 'FORBIDDEN' });
     }
+    // Security-audit finding: same visibility this file's other env-gated checks
+    // already had none of - if APP_ENVIRONMENT_NAME were ever wrong on a real
+    // prod deploy (unset, typo'd), this endpoint would silently stay open with
+    // no trace anywhere. A warn-level log at least leaves a record every time
+    // it's actually used, from who, so a misconfigured prod running this
+    // wouldn't go completely unnoticed.
+    fastify.log.warn({ actorId: req.user.userId, orgId: req.user.orgId }, 'dev.seed_run (APP_ENVIRONMENT_NAME no es \'production\' - seed permitido)');
     // Exigidas acá explícitamente (config.ts las deja opcionales para no
     // romper un server que nunca corre /seed) - sin esto, un ambiente real
     // sin estas 2 variables configuradas crearía/resetearía la cuenta admin y
