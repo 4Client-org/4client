@@ -130,7 +130,16 @@ export default async function userRoutes(fastify: FastifyInstance) {
     // abierto de esa cuenta - seguía recibiendo en vivo cada order:*/ticket:*
     // del org, sin límite de tiempo, pese a estar desactivada. Mismo lugar
     // donde ya se revocan sus refresh tokens en reset-password de abajo.
-    if (body.data.active === false) fastify.disconnectUserSockets(id);
+    if (body.data.active === false) {
+      fastify.disconnectUserSockets(id);
+      // Sin esto, al reactivar la cuenta sus refresh tokens viejos (vigentes hasta
+      // 7 días) volvían a funcionar, aunque durante la desactivación ningún
+      // /refresh los aceptara. Revocarlos al desactivar deja la sesión muerta de verdad.
+      await fastify.prisma.refreshToken.updateMany({
+        where: { user_id: id, revoked: false },
+        data: { revoked: true },
+      });
+    }
     await audit(fastify.prisma, {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'user.update',
       targetId: id, metadata: updateData,

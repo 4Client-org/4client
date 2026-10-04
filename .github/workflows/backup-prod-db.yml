@@ -10,6 +10,9 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch: {} # manual "run now" button in the Actions tab
 
+permissions:
+  contents: read
+
 jobs:
   backup:
     runs-on: ubuntu-latest

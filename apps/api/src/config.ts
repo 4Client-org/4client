@@ -71,6 +71,13 @@ export const config = parsed.data;
 // got it typo'd, e.g. 'Production' with a capital P) would silently relax the
 // three checks below with no visible signal that anything was misconfigured.
 // Refuse to boot rather than guess: force the operator to decide explicitly.
+const KNOWN_ENVIRONMENTS = ['production', 'staging', 'dev', 'test'];
+if (config.APP_ENVIRONMENT_NAME && !KNOWN_ENVIRONMENTS.includes(config.APP_ENVIRONMENT_NAME)) {
+  // Un typo ('Production', 'prod ') dejaría el modo estricto apagado en silencio
+  // en un deploy real - mejor no arrancar que correr relajado sin avisar.
+  console.error(`❌ APP_ENVIRONMENT_NAME inválida: ${JSON.stringify(config.APP_ENVIRONMENT_NAME)}. Valores permitidos: ${KNOWN_ENVIRONMENTS.join(', ')}.`);
+  process.exit(1);
+}
 if (config.NODE_ENV === 'production' && !config.APP_ENVIRONMENT_NAME) {
   console.error("❌ NODE_ENV=production pero APP_ENVIRONMENT_NAME no está seteada. Configúrala explícitamente a 'production' en el deploy real, o a cualquier otro valor (ej. 'dev') en todos los demás - no se puede arrancar sin esa decisión explícita.");
   process.exit(1);

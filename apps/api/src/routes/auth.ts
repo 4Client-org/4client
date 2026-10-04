@@ -43,6 +43,8 @@ function hashLoginCode(code: string): string {
 // podía inundar la bandeja de entrada de la cuenta. 30s alcanza para cubrir un
 // doble-click o un reintento de red sin abrir una ventana real de abuso.
 const CODE_RESEND_COOLDOWN_MS = 30 * 1000;
+const CODE_ISSUE_WINDOW_MS = 15 * 60 * 1000;
+const MAX_CODES_PER_WINDOW = 5;
 
 // Bloqueo por cuenta tras fuerza bruta - independiente del rate-limit HTTP
 // (que solo limita por IP/bucket, no por cuenta - un ataque repartido entre
@@ -219,7 +221,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
         // and failures left nothing at all. Reconstructing "who tried to log in,
         // when, from where" for a real incident needed this. Best-effort (see
         // audit()'s own doc) - never blocks or delays the actual login response.
-        await audit(fastify.prisma, { orgId: user.org_id, actorId: user.id, action: 'auth.login_failed' });
+        // Sin await a propósito: esta rama antes respondía en un tiempo distinto a la
+        // de email inexistente (que no escribe nada extra), y eso era un oráculo de
+        // enumeración por temporización. audit() ya traga sus propios errores.
+        void audit(fastify.prisma, { orgId: user.org_id, actorId: user.id, action: 'auth.login_failed' });
         if (attempts % LOCKOUT_THRESHOLD === 0) {
           await fastify.prisma.user.update({
             where: { id: user.id },
@@ -261,8 +266,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Credenciales incorrectas', code: 'INVALID_CREDENTIALS' });
     }
 
-    // Login correcto - limpia cualquier racha de fallos previa.
-    if (user.failed_login_attempts > 0 || user.locked_until) {
+    // Login correcto - limpia cualquier racha de fallos previa. Solo cuando la
+    // sesión queda completa aquí; con 2FA pendiente la racha se conserva hasta
+    // que el código se verifique (si no, una contraseña robada podría resetear el
+    // contador en cada ciclo y eludir el bloqueo por códigos fallidos).
+    const needs2fa = config.REQUIRE_2FA && user.role === 'dev';
+    if (!needs2fa && (user.failed_login_attempts > 0 || user.locked_until)) {
       await fastify.prisma.user.update({
         where: { id: user.id },
         data: { failed_login_attempts: 0, locked_until: null },
@@ -276,7 +285,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // instruction: 2FA is for one specific account, not a org-wide rollout -
     // gating on role instead of e.g. a hardcoded email survives that account's
     // email changing later without needing a code change.
-    if (!config.REQUIRE_2FA || user.role !== 'dev') {
+    if (!needs2fa) {
       return issueSession(fastify, req, reply, user);
     }
 
@@ -295,6 +304,16 @@ export default async function authRoutes(fastify: FastifyInstance) {
     });
     if (recentCode && Date.now() - recentCode.created_at.getTime() < CODE_RESEND_COOLDOWN_MS) {
       return reply.send({ data: { pending2fa: true, userId: user.id } });
+    }
+
+    // Tope de códigos emitidos por cuenta en ventana: sin esto, quien tenga la
+    // contraseña puede pedir un código nuevo por cada intento (cada /login emite
+    // uno) y cada ciclo ya no cuesta nada más que un correo a la víctima.
+    const codesIssuedRecently = await fastify.prisma.loginVerificationCode.count({
+      where: { user_id: user.id, created_at: { gt: new Date(Date.now() - CODE_ISSUE_WINDOW_MS) } },
+    });
+    if (codesIssuedRecently >= MAX_CODES_PER_WINDOW) {
+      return reply.status(429).send({ error: 'Demasiados códigos solicitados. Intenta de nuevo más tarde.', code: 'CODES_RATE_LIMITED' });
     }
 
     const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
@@ -354,6 +373,20 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const codeHash = hashLoginCode(body.data.code);
     const codesMatch = crypto.timingSafeEqual(Buffer.from(codeHash, 'hex'), Buffer.from(stored.code_hash, 'hex'));
     if (!codesMatch) {
+      // Un código incorrecto también cuenta para el bloqueo de la cuenta, igual que
+      // una contraseña incorrecta - si no, el límite por código (5 por código) se
+      // podía renovar pidiendo códigos nuevos sin consecuencia para la cuenta.
+      const { failed_login_attempts: attempts } = await fastify.prisma.user.update({
+        where: { id: body.data.userId },
+        data: { failed_login_attempts: { increment: 1 } },
+        select: { failed_login_attempts: true },
+      });
+      if (attempts % LOCKOUT_THRESHOLD === 0) {
+        await fastify.prisma.user.update({
+          where: { id: body.data.userId },
+          data: { locked_until: new Date(Date.now() + lockoutDurationMs(attempts)) },
+        });
+      }
       return reply.status(401).send({ error: 'Código incorrecto', code: 'INVALID_CODE' });
     }
 
@@ -366,6 +399,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
 
     await fastify.prisma.loginVerificationCode.update({ where: { id: stored.id }, data: { consumed: true } });
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { failed_login_attempts: 0, locked_until: null },
+      });
+    }
     return issueSession(fastify, req, reply, user);
   });
 

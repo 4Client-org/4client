@@ -2,7 +2,9 @@
 **/dist
 .git
 .env
-apps/**/.env
+**/.env
+**/.env.*
+!**/.env.example
 uploads/
 *.log
 .turbo
