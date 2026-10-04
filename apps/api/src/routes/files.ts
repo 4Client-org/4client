@@ -50,6 +50,11 @@ export default async function fileRoutes(fastify: FastifyInstance) {
     if (decoded.length > 20 * 1024 * 1024) {
       return reply.status(400).send({ error: 'Archivo demasiado grande (máx 20 MB)' });
     }
+    // Solo se guarda y sirve algo que realmente es un PDF (firma %PDF), para que
+    // GET /:filename nunca entregue bytes arbitrarios como application/pdf.
+    if (decoded.subarray(0, 4).toString('latin1') !== '%PDF') {
+      return reply.status(400).send({ error: 'El archivo no es un PDF válido' });
+    }
 
     // 20 random bytes (160 bits) - was 12 hex chars off a UUID (48 bits, a
     // security-audit finding); matches formLink.ts's own token entropy now,

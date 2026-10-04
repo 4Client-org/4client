@@ -654,7 +654,11 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
     // this line never actually reached the logs at all, silently defeating
     // the exact recovery mechanism this comment describes. `warn` so it's
     // actually there next time something needs investigating.
-    fastify.log.warn({ rawPayload: payload }, 'WPP: webhook payload recibido');
+    // Sin el cuerpo completo (teléfonos, nombres y texto de clientes) - el payload
+    // exacto ya queda guardado en la BD (raw_payload) para investigaciones. Acá
+    // solo queda un resumen de tipo de evento, sin PII, para no tener datos
+    // personales en logs de un proveedor externo.
+    fastify.log.warn({ fields: Object.keys((payload as any)?.entry?.[0]?.changes?.[0]?.value ?? {}) }, 'WPP: webhook payload recibido');
 
     // Always return 200 fast - Meta retries if we're slow or error
     reply.status(200).send({ ok: true });
@@ -716,9 +720,18 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           // comments above), it falls straight through to that same generic
           // placeholder instead of guessing wrong or throwing.
           if (msg.type === 'reaction' && msg.reaction?.emoji) {
-            const original = msg.reaction.message_id
-              ? await fastify.prisma.ticketMessage.findUnique({
-                  where: { wpp_message_id: msg.reaction.message_id },
+            // Scoped a la org dueña de este número: wpp_message_id es global, y sin
+            // este filtro una reacción podía copiar el texto de un mensaje de OTRA
+            // organización (si conocía su wamid).
+            const reactionOrg = msg.reaction.message_id
+              ? await fastify.prisma.organization.findFirst({
+                  where: { wpp_meta_phone_id: metadata?.phone_number_id, active: true },
+                  select: { id: true },
+                })
+              : null;
+            const original = reactionOrg
+              ? await fastify.prisma.ticketMessage.findFirst({
+                  where: { wpp_message_id: msg.reaction.message_id, ticket: { org_id: reactionOrg.id } },
                   select: { text: true },
                 })
               : null;

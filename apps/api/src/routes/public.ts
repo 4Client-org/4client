@@ -8,6 +8,17 @@ import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 import { PRIVACY_POLICY_VERSION } from '../lib/formLink.js';
 
+// Tope de confirmaciones automáticas por ticket (24 h): un link de formulario
+// filtrado no debe poder usarse para spamear al cliente desde el número del negocio.
+const MAX_AUTOMATED_FORM_MSGS_PER_DAY = 30;
+async function automatedFormMsgAllowed(prisma: any, ticketId: string): Promise<boolean> {
+  const n = await prisma.ticketMessage.count({
+    where: { ticket_id: ticketId, direction: 'out', sent_by: null, created_at: { gt: new Date(Date.now() - 24 * 3600 * 1000) } },
+  });
+  return n < MAX_AUTOMATED_FORM_MSGS_PER_DAY;
+}
+
+
 // Max orders a single form link (ticket) may generate - a link can stay valid up to
 // 24h, so this caps spam from a leaked/shared link.
 const MAX_FORM_ORDERS_PER_TICKET = 3;
@@ -616,7 +627,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const provider = MetaCloudProvider.fromOrg(ticket.org);
         let wppMessageId: string | null = null;
         let failedReason: string | null = null;
-        if (provider) {
+        if (provider && !(await automatedFormMsgAllowed(fastify.prisma, ticket.id))) {
+          failedReason = 'Límite diario de confirmaciones automáticas alcanzado';
+        } else if (provider) {
           try {
             // Saved onto the message below - webhook.ts's ingestStatus matches every
             // later delivered/read/failed status update by this id. Without it, this
@@ -830,7 +843,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const provider = MetaCloudProvider.fromOrg(ticket.org);
     let wppMessageId: string | null = null;
     let failedReason: string | null = null;
-    if (provider) {
+    if (provider && !(await automatedFormMsgAllowed(fastify.prisma, ticket.id))) {
+      failedReason = 'Límite diario de confirmaciones automáticas alcanzado';
+    } else if (provider) {
       try {
         // Saved onto the message below - see the merge path's identical fix above
         // (same file) for why this id has to be captured, not just discarded.
@@ -988,6 +1003,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // Staff decides from there: Restaurar (clears the flag) or "Mantener
     // eliminado" (leaves it exactly as-is, frozen). See schema.prisma's comment.
     const updated = await fastify.prisma.$transaction(async (tx) => {
+      // Facturas de un pedido borrado no deben seguir descargables (mismo criterio
+      // que el merge de arriba y que erase-data): sin esto, el PDF quedaba vivo
+      // hasta 24h después de que el propio cliente lo eliminó.
+      await tx.invoiceLink.updateMany({
+        where: { order_id: order.id, org_id: ticket.org_id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
       const upd = await tx.order.update({
         where: { id: order.id },
         data: { client_deleted: true, client_modified: true },

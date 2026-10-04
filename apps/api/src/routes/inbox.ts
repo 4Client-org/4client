@@ -965,6 +965,9 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
       // revocan igual, para que ninguna factura vieja de este cliente siga
       // siendo abrible desde afuera. El PDF en sí (R2) no se borra acá.
       await tx.invoiceLink.updateMany({ where: { ticket_id: ticketId, revoked_at: null }, data: { revoked_at: new Date() } });
+      // phone_last4 sigue en la fila (campo obligatorio) y es dato personal del
+      // cliente: se anonimiza aunque el link ya esté revocado.
+      await tx.invoiceLink.updateMany({ where: { ticket_id: ticketId }, data: { phone_last4: '****' } });
 
       // El ticket queda anonimizado, nunca borrado - lo siguen referenciando
       // los pedidos que se anonimizaron arriba. consent_given_at se deja
