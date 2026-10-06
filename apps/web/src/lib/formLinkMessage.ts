@@ -19,5 +19,12 @@ export function buildFormLinkWarningMessage(): string {
 // Sent as a THIRD message, right after the link itself (see callers). Mirrors
 // apps/api/src/lib/formLink.ts's buildFormLinkFollowUpMessage - keep both in sync.
 export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
+  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $10.000 y el domicilio tiene un costo de $2.000. Cualquier duda con gusto.';
+}
+
+// Botón "Cuenta banco" del chat - manda solo los datos de la cuenta, sin el
+// aviso de seguridad ni el link. Mismo número que buildFormLinkWarningMessage
+// (apps/api/src/lib/formLink.ts) - si cambia, cambiar en los dos lados.
+export function buildBankAccountMessage(): string {
+  return 'Ahorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
 }

@@ -69,7 +69,7 @@ export function buildFormLinkWarningMessage(): string {
 // above), and this is a separate, short nudge rather than something to append to
 // either of them.
 export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $30.000. Cualquier duda con gusto.';
+  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $10.000 y el domicilio tiene un costo de $2.000. Cualquier duda con gusto.';
 }
 
 // Fija por ahora - una sola organización real hoy. Mismo valor que
