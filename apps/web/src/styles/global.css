@@ -186,7 +186,7 @@ input,select,textarea{font-family:var(--f);}
 .tk-modal-chat{width:660px;flex-shrink:0;}
 @keyframes mup{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 .mhead{padding:20px 22px 14px;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:2px solid var(--brd);background:var(--b);z-index:10;border-radius:var(--radb) var(--radb) 0 0;flex-shrink:0;}
-.mtit{font-size:18px;font-weight:800;color:var(--n);}
+.mtit{font-size:16px;font-weight:800;color:var(--n);}
 .msub{font-size:12px;color:var(--gt);margin-top:3px;}
 .mclose{background:var(--bg);border:none;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:20px;color:var(--gt);display:flex;align-items:center;justify-content:center;transition:all .2s;flex-shrink:0;}
 .mclose:hover{background:var(--rc);color:var(--r);}
