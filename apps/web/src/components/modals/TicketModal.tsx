@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useEffect, useState, KeyboardEvent, ChangeEvent } from 'react';
-import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu, Trash2, ArrowDown } from 'lucide-react';
+import { Check, SendHorizontal, ArrowRight, Lock, ClipboardList, Ban, Paperclip, AlertTriangle, Forward, ListChecks, Menu, Trash2, ArrowDown, Landmark } from 'lucide-react';
 import { useChatScroll } from '../../hooks/useChatScroll';
 import DeliveryStatus from '../ui/DeliveryStatus';
 import ChatImage from '../ui/ChatImage';
@@ -11,7 +11,7 @@ import ChatLocation from '../ui/ChatLocation';
 import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
+import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage, buildBankAccountMessage } from '../../lib/formLinkMessage';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -180,6 +180,16 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     }
   }
 
+  async function sendBankAccount() {
+    setActionsOpen(false);
+    try {
+      await formLinkMut.mutateAsync(buildBankAccountMessage());
+      toast('Cuenta bancaria enviada');
+    } catch {
+      // formLinkMut's own onError already toasted the specific reason.
+    }
+  }
+
   const blockLinkMut = useMutation({
     mutationFn: () => api.post(`/inbox/${ticketId}/form-link/revoke`, {}),
     onSuccess: () => toast('Link bloqueado - el cliente ya no puede usarlo'),
@@ -289,6 +299,15 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 (página 1) sin deslizar primero. Mismo onClose. */}
             <button className="tk-chat-close" title="Cerrar" onClick={onClose}>×</button>
             <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
+              <button
+                className="hdr-ic-btn"
+                title="Enviar al cliente los datos de la cuenta bancaria"
+                onClick={sendBankAccount}
+                disabled={formLinkMut.isPending}
+              >
+                <Landmark size={13} />
+                Cuenta banco
+              </button>
               <button
                 className="hdr-ic-btn"
                 title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
