@@ -197,7 +197,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     onError: (e: any) => toast(e.message ?? 'No se pudo bloquear el link', true),
   });
 
-  // Ley 1581 de 2012 - derecho de supresión. Admin-only (mismo gate que el
+  // Ley 1581 de 2012 - derecho de supresión. Solo dev (mismo gate que el
   // backend) - se cierra el chat después, no queda nada más que ver acá.
   const eraseMut = useMutation({
     mutationFn: () => api.post<{ data: { ordersAnonymized: number } }>(`/inbox/${ticketId}/erase-data`, {}),
@@ -278,7 +278,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           flexDirection: 'column', minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
-          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: 14 }}>
                 {isLoading ? 'Cargando...' : ticket?.customer_name}
@@ -327,7 +327,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
               </button>
-              {user?.role === 'admin' && (
+              {user?.role === 'dev' && (
                 <button
                   className="hdr-ic-btn"
                   title="Eliminar la información de este cliente (a solicitud suya) - Ley 1581 de 2012"

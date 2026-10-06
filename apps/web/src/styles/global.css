@@ -183,7 +183,7 @@ input,select,textarea{font-family:var(--f);}
    páginas con scroll-snap en vez de 2 columnas - las medidas de escritorio
    quedan exactamente igual que antes de este cambio. */
 .tk-modal-shell{display:flex;flex-direction:row;width:100%;max-width:1110px;margin:auto;border-radius:var(--radb);overflow:hidden;box-shadow:var(--shf);animation:mup .2s ease;max-height:90vh;}
-.tk-modal-chat{width:560px;flex-shrink:0;}
+.tk-modal-chat{width:660px;flex-shrink:0;}
 @keyframes mup{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 .mhead{padding:20px 22px 14px;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:2px solid var(--brd);background:var(--b);z-index:10;border-radius:var(--radb) var(--radb) 0 0;flex-shrink:0;}
 .mtit{font-size:18px;font-weight:800;color:var(--n);}
