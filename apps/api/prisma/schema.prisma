@@ -26,6 +26,10 @@ model Organization {
   wpp_meta_token        String?
   wpp_meta_app_secret   String?
   welcome_message       String?
+  // Textos de los mensajes que el staff manda con botones (formulario, cuenta
+  // de banco). null = usa el texto por defecto de lib/messageTemplates.ts.
+  // Solo guarda las claves que la org editó - las demás caen al default.
+  message_templates     Json?
   // Cuando está seteado, REEMPLAZA por completo el flujo normal de bienvenida
   // (welcome_message + aviso + link de formulario + seguimiento) - se manda
   // SOLO este texto, en cada primer mensaje del día, sin generar ningún link

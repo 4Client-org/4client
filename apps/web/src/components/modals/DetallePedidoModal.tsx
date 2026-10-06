@@ -4,7 +4,7 @@ import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Se
 import { useChatScroll } from '../../hooks/useChatScroll';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
+import { useMessageTemplates } from '../../hooks/useMessageTemplates';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -682,6 +682,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     await pickAndSendChatMedia(file);
   }
 
+  const { data: msgTpl } = useMessageTemplates();
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
     onSuccess: () => {
@@ -702,10 +703,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     }
     try {
       // Three separate messages, in order (awaited, not fire-and-forget - the
-      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
-      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      // whole point is each arrives in this exact sequence, see messageTemplates in the API).
+      await formLinkMut.mutateAsync(msgTpl!.form_warning);
       await formLinkMut.mutateAsync(url);
-      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
+      await formLinkMut.mutateAsync(msgTpl!.form_followup);
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.
@@ -1143,7 +1144,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                   onClick={() => { setActionsOpen(false); sendFormLink(); }}
-                  disabled={formLinkMut.isPending || isPastDay}
+                  disabled={formLinkMut.isPending || isPastDay || !msgTpl}
                 >
                   <ClipboardList size={13} />
                   Formulario

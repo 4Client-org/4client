@@ -10,7 +10,7 @@ import ChatVideo from '../ui/ChatVideo';
 import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
+import { useMessageTemplates } from '../../hooks/useMessageTemplates';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -168,6 +168,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(ticketId, baseMessages, !!convoData?.hasMoreMessages);
 
+  const { data: msgTpl } = useMessageTemplates();
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
     onSuccess: () => {
@@ -337,7 +338,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                     <button
                       className="hdr-ic-btn"
                       title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
-                      disabled={isPastDay}
+                      disabled={isPastDay || !msgTpl}
                       onClick={async () => {
                         setActionsOpen(false);
                         let url: string;
@@ -348,9 +349,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                         try {
                           // Three separate messages, in order (awaited, not fire-and-
                           // forget - each must arrive in this exact sequence).
-                          await replyMut.mutateAsync(buildFormLinkWarningMessage());
+                          await replyMut.mutateAsync(msgTpl!.form_warning);
                           await replyMut.mutateAsync(url);
-                          await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
+                          await replyMut.mutateAsync(msgTpl!.form_followup);
                         } catch {
                           // replyMut's own onError already toasted the specific reason.
                         }
