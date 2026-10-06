@@ -17,7 +17,6 @@ const FIELDS: { key: TemplateKey; label: string; hint: string }[] = [
 ];
 
 const btnStyle = { width: 'auto', padding: '9px 18px', marginTop: 0, fontSize: 14 };
-const secStyle = { padding: '9px 14px', fontSize: 13, background: 'none', border: '1px solid var(--brd)', borderRadius: 8, cursor: 'pointer', color: 'var(--gt)' };
 const areaStyle = { width: '100%', padding: '9px 12px', border: '1px solid var(--brd)', borderRadius: 8, fontSize: 14, background: 'var(--bg)', color: 'var(--n)', minHeight: 90, resize: 'vertical' as const };
 
 export default function MessagesSection() {
@@ -26,11 +25,6 @@ export default function MessagesSection() {
   const { data: org } = useQuery({
     queryKey: ['config-org'],
     queryFn: () => api.get<{ data: any }>('/config/org').then(r => r.data),
-  });
-  const { data: defaults } = useQuery({
-    queryKey: ['message-templates-defaults'],
-    queryFn: () => api.get<{ data: { defaults: MessageTemplates } }>('/config/message-templates').then(r => r.data.defaults),
-    staleTime: Infinity,
   });
 
   // Borradores por campo. Solo los campos que el usuario tocó tienen entrada;
@@ -68,11 +62,6 @@ export default function MessagesSection() {
     onError: (e: any) => toast(e.message ?? 'No se pudo guardar la bienvenida', true),
   });
 
-  function restore(key: TemplateKey) {
-    // null borra la clave guardada y el servidor vuelve al texto por defecto.
-    saveTemplate.mutate({ key, value: null });
-  }
-
   if (isLoading) return <div style={{ color: 'var(--gt)' }}>Cargando...</div>;
 
   return (
@@ -92,7 +81,6 @@ export default function MessagesSection() {
       {FIELDS.map(f => {
         const dirty = isDirty(f.key);
         const pending = saveTemplate.isPending && saveTemplate.variables?.key === f.key;
-        const isDefault = templates?.[f.key] === defaults?.[f.key];
         return (
           <div key={f.key}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{f.label}</div>
@@ -105,11 +93,6 @@ export default function MessagesSection() {
                 onClick={() => saveTemplate.mutate({ key: f.key, value: currentValue(f.key).trim() })}>
                 {pending ? 'Guardando...' : 'Guardar'}
               </button>
-              {!isDefault && defaults && (
-                <button style={secStyle} disabled={saveTemplate.isPending} onClick={() => restore(f.key)}>
-                  Restaurar texto original
-                </button>
-              )}
             </div>
           </div>
         );
