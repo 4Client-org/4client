@@ -1859,7 +1859,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
               <AlertTriangle size={32} color="var(--r)" strokeWidth={1.5} />
             </div>
-            <div style={{ fontSize: 18, fontWeight: 800, textAlign: 'center', marginBottom: 8, color: 'var(--r)' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, textAlign: 'center', marginBottom: 8, color: 'var(--r)' }}>
               El cliente eliminó este pedido
             </div>
             <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 20 }}>
@@ -1883,7 +1883,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         <div className="moverlay on" style={{ zIndex: 900 }} onClick={(e) => e.target === e.currentTarget && setPapeleraReasonDlg(false)}>
           <div className="mwin" style={{ maxWidth: 400 }}>
             <div className="mbody" style={{ padding: '24px 22px 20px' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--n)', marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--n)', marginBottom: 12 }}>
                 ¿Mover este pedido a la papelera?
               </div>
               <textarea
@@ -1930,7 +1930,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
               <Banknote size={32} color="var(--v)" strokeWidth={1.5} />
             </div>
-            <div style={{ fontSize: 18, fontWeight: 800, textAlign: 'center', marginBottom: 8 }}>Confirmar pago</div>
+            <div style={{ fontSize: 16, fontWeight: 800, textAlign: 'center', marginBottom: 8 }}>Confirmar pago</div>
             <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 16 }}>
               {order.customer_name} - Total: <strong>{fmtCOP(total)}</strong>
             </div>

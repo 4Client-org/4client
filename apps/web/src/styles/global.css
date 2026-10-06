@@ -200,6 +200,8 @@ input,select,textarea{font-family:var(--f);}
 .fl2{display:block;font-size:13px;font-weight:700;color:var(--n);margin-bottom:7px;}
 .fi2{width:100%;padding:12px 15px;border:2px solid var(--brd);border-radius:var(--rad);font-size:15px;color:var(--n);background:var(--bg);transition:all .2s;outline:none;}
 .fi2:focus{border-color:var(--v);background:var(--b);}
+/* Dentro de los modales los campos van a 13px, igual que las etiquetas, en todos. */
+.mwin .fi,.mwin .fi2{font-size:13px;}
 .fi2:disabled{opacity:.55;cursor:not-allowed;background:var(--gm);}
 .frow{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 @media(max-width:500px){.frow{grid-template-columns:1fr;}}
