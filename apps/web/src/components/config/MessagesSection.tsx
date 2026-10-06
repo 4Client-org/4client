@@ -7,7 +7,10 @@ import { useMessageTemplates, MessageTemplates } from '../../hooks/useMessageTem
 // Mensajes que el staff manda desde el chat. Admin y dev los editan para su
 // propia org. El de bienvenida es el automático del primer mensaje del día;
 // los otros tres salen con botones (Formulario, Cuenta banco).
-const FIELDS: { key: keyof MessageTemplates; label: string; hint: string }[] = [
+type TemplateKey = keyof MessageTemplates;
+type FieldKey = TemplateKey | 'welcome_message';
+
+const FIELDS: { key: TemplateKey; label: string; hint: string }[] = [
   { key: 'form_warning', label: 'Aviso al enviar el formulario', hint: 'Primer mensaje al tocar "Formulario". Incluye los datos de la cuenta si quieres que vayan con el aviso.' },
   { key: 'form_followup', label: 'Seguimiento del formulario', hint: 'Tercer mensaje, justo después del link del formulario.' },
   { key: 'bank_account', label: 'Cuenta bancaria', hint: 'Lo que se manda al tocar "Cuenta banco" en el chat.' },
@@ -15,7 +18,6 @@ const FIELDS: { key: keyof MessageTemplates; label: string; hint: string }[] = [
 
 const btnStyle = { width: 'auto', padding: '9px 18px', marginTop: 0, fontSize: 14 };
 const secStyle = { padding: '9px 14px', fontSize: 13, background: 'none', border: '1px solid var(--brd)', borderRadius: 8, cursor: 'pointer', color: 'var(--gt)' };
-
 const areaStyle = { width: '100%', padding: '9px 12px', border: '1px solid var(--brd)', borderRadius: 8, fontSize: 14, background: 'var(--bg)', color: 'var(--n)', minHeight: 90, resize: 'vertical' as const };
 
 export default function MessagesSection() {
@@ -31,32 +33,44 @@ export default function MessagesSection() {
     staleTime: Infinity,
   });
 
-  const [drafts, setDrafts] = useState<Partial<Record<keyof MessageTemplates | 'welcome_message', string>>>({});
-  const value = (key: keyof MessageTemplates) => drafts[key] ?? templates?.[key] ?? '';
-  const welcome = drafts.welcome_message ?? org?.welcome_message ?? '';
+  // Borradores por campo. Solo los campos que el usuario tocó tienen entrada;
+  // al guardar uno, se borra únicamente el suyo.
+  const [drafts, setDrafts] = useState<Partial<Record<FieldKey, string>>>({});
 
-  const saveTemplates = useMutation({
-    mutationFn: (data: Partial<Record<keyof MessageTemplates, string | null>>) => api.put('/config/message-templates', data),
-    onSuccess: () => {
-      toast('Mensajes guardados');
+  const savedValue = (key: FieldKey): string =>
+    key === 'welcome_message' ? (org?.welcome_message ?? '') : (templates?.[key] ?? '');
+  const currentValue = (key: FieldKey): string => drafts[key] ?? savedValue(key);
+  const isDirty = (key: FieldKey): boolean => drafts[key] !== undefined && drafts[key] !== savedValue(key);
+
+  function clearDraft(key: FieldKey) {
+    setDrafts(d => { const n = { ...d }; delete n[key]; return n; });
+  }
+
+  // Cada guardado manda solo su campo; el servidor hace merge con lo demás.
+  const saveTemplate = useMutation({
+    mutationFn: (args: { key: TemplateKey; value: string | null }) =>
+      api.put('/config/message-templates', { [args.key]: args.value }),
+    onSuccess: (_res, args) => {
+      clearDraft(args.key);
+      toast('Mensaje guardado');
       qc.invalidateQueries({ queryKey: ['message-templates'] });
     },
-    onError: (e: any) => toast(e.message ?? 'No se pudieron guardar los mensajes', true),
+    onError: (e: any) => toast(e.message ?? 'No se pudo guardar el mensaje', true),
   });
 
   const saveWelcome = useMutation({
     mutationFn: (text: string) => api.patch('/config/wpp', { welcome_message: text || null }),
     onSuccess: () => {
+      clearDraft('welcome_message');
       toast('Mensaje de bienvenida guardado');
       qc.invalidateQueries({ queryKey: ['config-org'] });
     },
     onError: (e: any) => toast(e.message ?? 'No se pudo guardar la bienvenida', true),
   });
 
-  function restore(key: keyof MessageTemplates) {
+  function restore(key: TemplateKey) {
     // null borra la clave guardada y el servidor vuelve al texto por defecto.
-    saveTemplates.mutate({ [key]: null });
-    setDrafts(d => { const n = { ...d }; delete n[key]; return n; });
+    saveTemplate.mutate({ key, value: null });
   }
 
   if (isLoading) return <div style={{ color: 'var(--gt)' }}>Cargando...</div>;
@@ -66,27 +80,33 @@ export default function MessagesSection() {
       <div>
         <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Mensaje de bienvenida</div>
         <div style={{ fontSize: 12, color: 'var(--gt)', marginBottom: 8 }}>Se envía al primer mensaje del día de cada cliente. Vacío = desactivado.</div>
-        <textarea style={areaStyle} value={welcome} onChange={e => setDrafts(d => ({ ...d, welcome_message: e.target.value }))} />
-        <button className="bpri" style={{ ...btnStyle, marginTop: 8 }} disabled={saveWelcome.isPending}
-          onClick={() => saveWelcome.mutate(welcome.trim())}>
+        <textarea style={areaStyle} value={currentValue('welcome_message')}
+          onChange={e => setDrafts(d => ({ ...d, welcome_message: e.target.value }))} />
+        <button className="bpri" style={{ ...btnStyle, marginTop: 8 }}
+          disabled={!isDirty('welcome_message') || saveWelcome.isPending}
+          onClick={() => saveWelcome.mutate(currentValue('welcome_message').trim())}>
           {saveWelcome.isPending ? 'Guardando...' : 'Guardar bienvenida'}
         </button>
       </div>
 
       {FIELDS.map(f => {
+        const dirty = isDirty(f.key);
+        const pending = saveTemplate.isPending && saveTemplate.variables?.key === f.key;
         const isDefault = templates?.[f.key] === defaults?.[f.key];
         return (
           <div key={f.key}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{f.label}</div>
             <div style={{ fontSize: 12, color: 'var(--gt)', marginBottom: 8 }}>{f.hint}</div>
-            <textarea style={areaStyle} value={value(f.key)} onChange={e => setDrafts(d => ({ ...d, [f.key]: e.target.value }))} />
+            <textarea style={areaStyle} value={currentValue(f.key)}
+              onChange={e => setDrafts(d => ({ ...d, [f.key]: e.target.value }))} />
             <div style={{ display: 'flex', gap: 10, marginTop: 8, alignItems: 'center' }}>
-              <button className="bpri" style={btnStyle} disabled={saveTemplates.isPending || !value(f.key).trim()}
-                onClick={() => saveTemplates.mutate({ [f.key]: value(f.key).trim() })}>
-                {saveTemplates.isPending ? 'Guardando...' : 'Guardar'}
+              <button className="bpri" style={btnStyle}
+                disabled={!dirty || pending || !currentValue(f.key).trim()}
+                onClick={() => saveTemplate.mutate({ key: f.key, value: currentValue(f.key).trim() })}>
+                {pending ? 'Guardando...' : 'Guardar'}
               </button>
               {!isDefault && defaults && (
-                <button style={secStyle} disabled={saveTemplates.isPending} onClick={() => restore(f.key)}>
+                <button style={secStyle} disabled={saveTemplate.isPending} onClick={() => restore(f.key)}>
                   Restaurar texto original
                 </button>
               )}
