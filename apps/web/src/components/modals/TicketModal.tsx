@@ -278,7 +278,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           flexDirection: 'column', minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
-          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: 14 }}>
                 {isLoading ? 'Cargando...' : ticket?.customer_name}

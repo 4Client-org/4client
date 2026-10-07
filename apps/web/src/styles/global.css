@@ -240,7 +240,7 @@ input,select,textarea{font-family:var(--f);}
    (Formulario/Bloquear Link/Catálogo/Tomar lista). En celular se convierte en
    un menú hamburguesa (mismos botones .hdr-ic-btn, mismos handlers - ver el
    media query más abajo) en vez de ocultar/recortar la fila. */
-.tk-actions{display:flex;flex-wrap:wrap;gap:5px;flex-shrink:0;justify-content:flex-end;}
+.tk-actions{display:flex;flex-wrap:nowrap;gap:5px;flex-shrink:0;justify-content:flex-end;}
 .tk-hamburger{display:none;background:none;border:none;color:#fff;cursor:pointer;padding:4px;align-items:center;flex-shrink:0;}
 .tk-swipe-hint{display:none;}
 /* El × de siempre (.mclose) vive en el panel de pedido/formulario a la
