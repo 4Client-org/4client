@@ -11,7 +11,7 @@ import ChatLocation from '../ui/ChatLocation';
 import ForwardMessageModal from '../ui/ForwardMessageModal';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage, buildBankAccountMessage } from '../../lib/formLinkMessage';
+import { useMessageTemplates } from '../../hooks/useMessageTemplates';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
@@ -149,6 +149,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     await pickAndSend(file);
   }
 
+  const { data: msgTpl } = useMessageTemplates();
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
     onSuccess: () => {
@@ -170,10 +171,10 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     }
     try {
       // Three separate messages, in order (awaited, not fire-and-forget - the
-      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
-      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      // whole point is each arrives in this exact sequence, see messageTemplates in the API).
+      await formLinkMut.mutateAsync(msgTpl!.form_warning);
       await formLinkMut.mutateAsync(url);
-      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
+      await formLinkMut.mutateAsync(msgTpl!.form_followup);
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.
@@ -183,7 +184,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   async function sendBankAccount() {
     setActionsOpen(false);
     try {
-      await formLinkMut.mutateAsync(buildBankAccountMessage());
+      await formLinkMut.mutateAsync(msgTpl!.bank_account);
       toast('Cuenta bancaria enviada');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.
@@ -196,7 +197,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
     onError: (e: any) => toast(e.message ?? 'No se pudo bloquear el link', true),
   });
 
-  // Ley 1581 de 2012 - derecho de supresión. Admin-only (mismo gate que el
+  // Ley 1581 de 2012 - derecho de supresión. Solo dev (mismo gate que el
   // backend) - se cierra el chat después, no queda nada más que ver acá.
   const eraseMut = useMutation({
     mutationFn: () => api.post<{ data: { ordersAnonymized: number } }>(`/inbox/${ticketId}/erase-data`, {}),
@@ -277,7 +278,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
           flexDirection: 'column', minHeight: 0, overflow: 'hidden',
         }}>
           {/* Chat header */}
-          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: 14 }}>
                 {isLoading ? 'Cargando...' : ticket?.customer_name}
@@ -301,9 +302,9 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
             <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
               <button
                 className="hdr-ic-btn"
-                title="Enviar al cliente los datos de la cuenta bancaria"
+                title={isPastDay ? 'Este chat es de un día anterior - no se pueden enviar mensajes de pago' : 'Enviar al cliente los datos de la cuenta bancaria'}
                 onClick={sendBankAccount}
-                disabled={formLinkMut.isPending}
+                disabled={formLinkMut.isPending || isPastDay || !msgTpl}
               >
                 <Landmark size={13} />
                 Cuenta banco
@@ -312,7 +313,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 className="hdr-ic-btn"
                 title={isPastDay ? 'Este chat es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                 onClick={sendFormLink}
-                disabled={formLinkMut.isPending || isPastDay}
+                disabled={formLinkMut.isPending || isPastDay || !msgTpl}
               >
                 <ClipboardList size={13} />
                 Formulario
@@ -326,7 +327,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
                 <Ban size={13} />
                 <span>Bloquear<br />Link</span>
               </button>
-              {user?.role === 'admin' && (
+              {user?.role === 'dev' && (
                 <button
                   className="hdr-ic-btn"
                   title="Eliminar la información de este cliente (a solicitud suya) - Ley 1581 de 2012"

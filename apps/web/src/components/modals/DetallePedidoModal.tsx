@@ -1,10 +1,10 @@
 import { Fragment, useState, useEffect, useRef, KeyboardEvent, ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks, Menu, ArrowDown } from 'lucide-react';
+import { Trash2, Banknote, AlertTriangle, CheckCircle, ChevronDown, FileText, Send, Lock, Bell, ClipboardList, Ban, Paperclip, Forward, ListChecks, Menu, ArrowDown, Landmark } from 'lucide-react';
 import { useChatScroll } from '../../hooks/useChatScroll';
 import jsPDF from 'jspdf';
 import { api } from '../../lib/api';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
+import { useMessageTemplates } from '../../hooks/useMessageTemplates';
 import { useAuthStore } from '../../store/auth';
 import { getSocket } from '../../lib/socket';
 import { useProducts } from '../../hooks/useProducts';
@@ -682,6 +682,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     await pickAndSendChatMedia(file);
   }
 
+  const { data: msgTpl } = useMessageTemplates();
   const formLinkMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${order?.ticket_id}/reply`, { text }),
     onSuccess: () => {
@@ -702,15 +703,36 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     }
     try {
       // Three separate messages, in order (awaited, not fire-and-forget - the
-      // whole point is each arrives in this exact sequence, see formLinkMessage.ts).
-      await formLinkMut.mutateAsync(buildFormLinkWarningMessage());
+      // whole point is each arrives in this exact sequence, see messageTemplates in the API).
+      await formLinkMut.mutateAsync(msgTpl!.form_warning);
       await formLinkMut.mutateAsync(url);
-      await formLinkMut.mutateAsync(buildFormLinkFollowUpMessage());
+      await formLinkMut.mutateAsync(msgTpl!.form_followup);
       toast('Formulario enviado');
     } catch {
       // formLinkMut's own onError already toasted the specific reason.
     }
   }
+
+  async function sendBankAccount() {
+    if (!msgTpl) return;
+    try {
+      await formLinkMut.mutateAsync(msgTpl.bank_account);
+      toast('Cuenta bancaria enviada');
+    } catch {
+      // formLinkMut's own onError already toasted the specific reason.
+    }
+  }
+
+  // Ley 1581 de 2012 - derecho de supresión. Solo dev (mismo gate que el backend).
+  const eraseMut = useMutation({
+    mutationFn: () => api.post<{ data: { ordersAnonymized: number } }>(`/inbox/${order?.ticket_id}/erase-data`, {}),
+    onSuccess: (res) => {
+      const { ordersAnonymized } = res.data;
+      toast(`Datos del cliente eliminados (${ordersAnonymized} pedido${ordersAnonymized === 1 ? '' : 's'} anonimizado${ordersAnonymized === 1 ? '' : 's'})`);
+      handleClose();
+    },
+    onError: (e: any) => toast(e.message ?? 'No se pudo eliminar la información del cliente', true),
+  });
 
   const blockLinkMut = useMutation({
     mutationFn: () => api.post(`/inbox/${order?.ticket_id}/form-link/revoke`, {}),
@@ -1111,7 +1133,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       {/* Split layout: LEFT=chat, RIGHT=order (only when ticket exists) */}
       <div style={{
         display: 'flex', flexDirection: 'row',
-        width: '100%', maxWidth: hasChatPanel ? 1310 : 700,
+        width: '100%', maxWidth: hasChatPanel ? 1420 : 700,
         margin: 'auto', borderRadius: 'var(--radb)',
         overflow: 'hidden', boxShadow: 'var(--shf)', animation: 'mup .2s ease',
         maxHeight: '90vh',
@@ -1120,11 +1142,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         {/* ===== LEFT: CHAT PANEL ===== */}
         {hasChatPanel && (
           <div style={{
-            width: 550, background: '#ECE5DD', display: 'flex',
+            width: 660, background: '#ECE5DD', display: 'flex',
             flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden',
           }}>
             {/* Chat header */}
-            <div style={{ background: 'var(--vd)', color: '#fff', padding: '12px 14px', flexShrink: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ background: 'var(--vd)', color: '#fff', padding: '14px 16px', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
               <div>
                 <div style={{ fontWeight: 800, fontSize: 14 }}>
                   {order.customer_name}
@@ -1141,9 +1163,18 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
               <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
                 <button
                   className="hdr-ic-btn"
+                  title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - no se pueden enviar mensajes de pago' : 'Enviar al cliente los datos de la cuenta bancaria'}
+                  onClick={() => { setActionsOpen(false); sendBankAccount(); }}
+                  disabled={formLinkMut.isPending || isPastDay || !msgTpl}
+                >
+                  <Landmark size={13} />
+                  Cuenta banco
+                </button>
+                <button
+                  className="hdr-ic-btn"
                   title={isPastDay ? 'Este pedido es de un día anterior o su caja ya cerró - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
                   onClick={() => { setActionsOpen(false); sendFormLink(); }}
-                  disabled={formLinkMut.isPending || isPastDay}
+                  disabled={formLinkMut.isPending || isPastDay || !msgTpl}
                 >
                   <ClipboardList size={13} />
                   Formulario
@@ -1161,6 +1192,21 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   <Ban size={13} />
                   <span>Bloquear<br />Link</span>
                 </button>
+                {user?.role === 'dev' && (
+                  <button
+                    className="hdr-ic-btn"
+                    title="Eliminar la información de este cliente (a solicitud suya) - Ley 1581 de 2012"
+                    onClick={() => { setActionsOpen(false); setConfirmDlg({
+                      msg: 'Vas a eliminar la información de este cliente (chat, datos de sus pedidos y su teléfono). Esta acción no se puede deshacer. ¿Deseas continuar?',
+                      onOk: () => eraseMut.mutate(),
+                      danger: true,
+                    }); }}
+                    disabled={eraseMut.isPending}
+                  >
+                    <Trash2 size={13} />
+                    <span>Eliminar<br />datos</span>
+                  </button>
+                )}
                 <EnviarCatalogoMenu ticketId={order.ticket_id!} products={products} disabled={isPastDay} />
                 {canTomarLista && (
                   <button
@@ -1813,7 +1859,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
               <AlertTriangle size={32} color="var(--r)" strokeWidth={1.5} />
             </div>
-            <div style={{ fontSize: 18, fontWeight: 800, textAlign: 'center', marginBottom: 8, color: 'var(--r)' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, textAlign: 'center', marginBottom: 8, color: 'var(--r)' }}>
               El cliente eliminó este pedido
             </div>
             <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 20 }}>
@@ -1837,7 +1883,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         <div className="moverlay on" style={{ zIndex: 900 }} onClick={(e) => e.target === e.currentTarget && setPapeleraReasonDlg(false)}>
           <div className="mwin" style={{ maxWidth: 400 }}>
             <div className="mbody" style={{ padding: '24px 22px 20px' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--n)', marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--n)', marginBottom: 12 }}>
                 ¿Mover este pedido a la papelera?
               </div>
               <textarea
@@ -1884,7 +1930,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
               <Banknote size={32} color="var(--v)" strokeWidth={1.5} />
             </div>
-            <div style={{ fontSize: 18, fontWeight: 800, textAlign: 'center', marginBottom: 8 }}>Confirmar pago</div>
+            <div style={{ fontSize: 16, fontWeight: 800, textAlign: 'center', marginBottom: 8 }}>Confirmar pago</div>
             <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 16 }}>
               {order.customer_name} - Total: <strong>{fmtCOP(total)}</strong>
             </div>

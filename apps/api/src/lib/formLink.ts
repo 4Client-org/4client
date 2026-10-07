@@ -47,30 +47,6 @@ export async function generateFormLinkUrl(
   return `${frontendUrl}/form?t=${token}`;
 }
 
-// Same wording/order every time a form link goes out, whether from a staff click
-// or the automatic send-after-welcome. WhatsApp bold is a single asterisk on each
-// side of the text (not markdown's **) - each bold paragraph below is self-
-// contained (starts and ends with `*`) so it renders correctly.
-//
-// Sent as its OWN message, separate from both the welcome message before it and
-// the link after it (see webhook.ts/inbox.ts callers) - keeps the client able to
-// forward/copy just the link on its own without carrying this notice along.
-//
-// The account number briefly got removed from here entirely (it read as
-// contradictory right under "nunca te pediremos datos bancarios") - reverted by
-// explicit request: it stays, just without the "válido por 24 horas" line.
-export function buildFormLinkWarningMessage(): string {
-  return '*Este link es solo para hacer tu pedido. Nunca te pediremos dinero ni datos bancarios.*'
-    + '\nAhorros Bancolombia: 27900010068, a nombre de Fruver San Gabriel SAS.';
-}
-
-// Sent as a THIRD message, right after the link itself (see callers) - the
-// warning notice and the link both need to stand alone (see their own comments
-// above), and this is a separate, short nudge rather than something to append to
-// either of them.
-export function buildFormLinkFollowUpMessage(): string {
-  return 'Diligencia por favor el pedido por el link. El monto mínimo para el domicilio es de $10.000 y el domicilio tiene un costo de $2.000. Cualquier duda con gusto.';
-}
 
 // Fija por ahora - una sola organización real hoy. Mismo valor que
 // apps/web/src/pages/ClientFormPage.tsx's PRIVACY_POLICY_URL (no hay forma

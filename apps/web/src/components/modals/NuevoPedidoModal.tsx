@@ -1,5 +1,5 @@
 import { Fragment, useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
-import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks, Menu, ArrowDown } from 'lucide-react';
+import { Smartphone, Check, Send, ClipboardList, Ban, AlertTriangle, Paperclip, ListChecks, Menu, ArrowDown, Landmark, Trash2 } from 'lucide-react';
 import { useChatScroll } from '../../hooks/useChatScroll';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProducts } from '../../hooks/useProducts';
@@ -10,7 +10,7 @@ import ChatVideo from '../ui/ChatVideo';
 import ChatDocument from '../ui/ChatDocument';
 import ChatLocation from '../ui/ChatLocation';
 import { useSendChatMedia, CHAT_MEDIA_ACCEPT } from '../../hooks/useSendChatMedia';
-import { buildFormLinkWarningMessage, buildFormLinkFollowUpMessage } from '../../lib/formLinkMessage';
+import { useMessageTemplates } from '../../hooks/useMessageTemplates';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useCreateOrder } from '../../hooks/useOrders';
@@ -168,6 +168,18 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     showJumpToBottom, newMessageCount, jumpToBottom,
   } = useChatScroll(ticketId, baseMessages, !!convoData?.hasMoreMessages);
 
+  const { data: msgTpl } = useMessageTemplates();
+  // Ley 1581 de 2012 - derecho de supresión. Solo dev (mismo gate que el backend).
+  const eraseMut = useMutation({
+    mutationFn: () => api.post<{ data: { ordersAnonymized: number } }>(`/inbox/${ticketId}/erase-data`, {}),
+    onSuccess: (res) => {
+      const { ordersAnonymized } = res.data;
+      toast(`Datos del cliente eliminados (${ordersAnonymized} pedido${ordersAnonymized === 1 ? '' : 's'} anonimizado${ordersAnonymized === 1 ? '' : 's'})`);
+      handleClose();
+    },
+    onError: (e: any) => toast(e.message ?? 'No se pudo eliminar la información del cliente', true),
+  });
+
   const replyMut = useMutation({
     mutationFn: (text: string) => api.post(`/inbox/${ticketId}/reply`, { text }),
     onSuccess: () => {
@@ -193,6 +205,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
     onError: (e: any) => toast(e.message ?? 'No se pudo bloquear el link', true),
   });
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [showEraseConfirm, setShowEraseConfirm] = useState(false);
 
   // Mismo patrón que TicketModal.tsx - en celular la fila de botones
   // (Formulario/Bloquear Link/Catálogo/Tomar lista) pasa a un menú
@@ -320,7 +333,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
         animation: 'mup .2s ease', maxHeight: '90vh',
       }}>
         {hasChat && (
-          <div style={{ width: 550, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ width: 660, background: '#ECE5DD', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
             <div style={{ background: 'var(--vd)', color: '#fff', padding: '10px 12px', fontWeight: 800, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
               <Smartphone size={15} />
               <span style={{ flex: 1 }}>{preNombre || formatPhoneDisplay(telefono)}</span>
@@ -336,8 +349,24 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                   <div ref={actionsRef} className={`tk-actions${actionsOpen ? ' open' : ''}`}>
                     <button
                       className="hdr-ic-btn"
+                      title={isPastDay ? 'Este ticket es de un día anterior - no se pueden enviar mensajes de pago' : 'Enviar al cliente los datos de la cuenta bancaria'}
+                      disabled={isPastDay || !msgTpl}
+                      onClick={async () => {
+                        setActionsOpen(false);
+                        try {
+                          await replyMut.mutateAsync(msgTpl!.bank_account);
+                        } catch {
+                          // replyMut's own onError already toasted the specific reason.
+                        }
+                      }}
+                    >
+                      <Landmark size={13} />
+                      Cuenta banco
+                    </button>
+                    <button
+                      className="hdr-ic-btn"
                       title={isPastDay ? 'Este ticket es de un día anterior - el link ya expiró' : 'Enviar formulario de pedido al cliente'}
-                      disabled={isPastDay}
+                      disabled={isPastDay || !msgTpl}
                       onClick={async () => {
                         setActionsOpen(false);
                         let url: string;
@@ -348,9 +377,9 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                         try {
                           // Three separate messages, in order (awaited, not fire-and-
                           // forget - each must arrive in this exact sequence).
-                          await replyMut.mutateAsync(buildFormLinkWarningMessage());
+                          await replyMut.mutateAsync(msgTpl!.form_warning);
                           await replyMut.mutateAsync(url);
-                          await replyMut.mutateAsync(buildFormLinkFollowUpMessage());
+                          await replyMut.mutateAsync(msgTpl!.form_followup);
                         } catch {
                           // replyMut's own onError already toasted the specific reason.
                         }
@@ -368,6 +397,17 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
                       <Ban size={13} />
                       <span>Bloquear<br />Link</span>
                     </button>
+                    {user?.role === 'dev' && (
+                      <button
+                        className="hdr-ic-btn"
+                        title="Eliminar la información de este cliente (a solicitud suya) - Ley 1581 de 2012"
+                        onClick={() => { setActionsOpen(false); setShowEraseConfirm(true); }}
+                        disabled={eraseMut.isPending}
+                      >
+                        <Trash2 size={13} />
+                        <span>Eliminar<br />datos</span>
+                      </button>
+                    )}
                     <EnviarCatalogoMenu ticketId={ticketId} products={products} disabled={isPastDay} />
                     {canTomarLista && (
                       <button
@@ -659,6 +699,15 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
           savePending={createOrder.isPending}
           onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
           onCancel={() => setConfirmDlg(null)}
+        />
+      )}
+      {showEraseConfirm && (
+        <ConfirmModal
+          message="Esto borra todos los mensajes del chat. Los pedidos de este cliente NO se borran (quedan como soporte) pero quedan sin nombre, teléfono ni dirección. Esta acción no se puede deshacer. ¿Eliminar la información del cliente?"
+          confirmLabel="Eliminar datos"
+          danger
+          onConfirm={() => { eraseMut.mutate(); setShowEraseConfirm(false); }}
+          onCancel={() => setShowEraseConfirm(false)}
         />
       )}
       {showBlockConfirm && (

@@ -4,8 +4,51 @@ import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { encryptSecret } from '../lib/crypto.js';
 import { audit } from '../lib/audit.js';
+import { DEFAULT_MESSAGE_TEMPLATES, messageTemplatesPatchSchema, resolveMessageTemplates } from '../lib/messageTemplates.js';
 
 export default async function configRoutes(fastify: FastifyInstance) {
+  // GET /api/v1/config/message-templates - textos efectivos de la org para los
+  // botones del chat. Cualquier rol de la org los lee (encargado y domiciliario
+  // también mandan formulario y cuenta de banco), por eso no lleva requireRole.
+  fastify.get('/message-templates', { preHandler: [authenticate] }, async (req, reply) => {
+    const org = await fastify.prisma.organization.findUnique({
+      where: { id: req.user.orgId },
+      select: { message_templates: true },
+    });
+    return reply.send({ data: { templates: resolveMessageTemplates(org?.message_templates), defaults: DEFAULT_MESSAGE_TEMPLATES } });
+  });
+
+  // PUT /api/v1/config/message-templates - edita los textos de la org. Una clave
+  // en null (o vacía) vuelve al default. Solo admin y dev, igual que el resto de
+  // Configuración.
+  fastify.put('/message-templates', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
+    const body = messageTemplatesPatchSchema.safeParse(req.body);
+    if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
+
+    const org = await fastify.prisma.organization.findUnique({
+      where: { id: req.user.orgId },
+      select: { message_templates: true },
+    });
+    const current = (org?.message_templates && typeof org.message_templates === 'object' ? org.message_templates : {}) as Record<string, unknown>;
+    const next: Record<string, unknown> = { ...current };
+    for (const [key, value] of Object.entries(body.data)) {
+      if (value === undefined) continue;
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+
+    await fastify.prisma.organization.update({
+      where: { id: req.user.orgId },
+      data: { message_templates: next as Prisma.InputJsonValue },
+    });
+    // Solo se registran las claves tocadas, no el texto completo.
+    await audit(fastify.prisma, {
+      orgId: req.user.orgId, actorId: req.user.userId, action: 'config.message_templates_update',
+      metadata: { fields: Object.keys(body.data) },
+    });
+    return reply.send({ data: { templates: resolveMessageTemplates(next) } });
+  });
+
   // GET /api/v1/config/org - get org config visible to admin/dev
   fastify.get('/org', { preHandler: [authenticate, requireRole('admin', 'dev')] }, async (req, reply) => {
     const org = await fastify.prisma.organization.findUnique({

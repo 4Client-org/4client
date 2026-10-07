@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Package, Users, Code2, Receipt } from 'lucide-react';
+import { Package, Users, Code2, Receipt, MessageSquare } from 'lucide-react';
 import { useAuthStore } from '../../store/auth';
 import ProductsSection from './ProductsSection';
 import EmployeesSection from './EmployeesSection';
 import UsersSection from './UsersSection';
 import DevSection from './DevSection';
 import BillingSection from './BillingSection';
+import MessagesSection from './MessagesSection';
 
 // ─── ConfigTab root ───────────────────────────────────────────────────────────
 
@@ -13,7 +14,7 @@ import BillingSection from './BillingSection';
 // kept having to manage the same person's name in both places. Still two separate
 // things under the hood (a domiciliario assigned to a pedido isn't necessarily
 // someone with a login), just no longer two separate tabs to hunt between.
-type Section = 'productos' | 'usuarios' | 'facturacion' | 'dev';
+type Section = 'productos' | 'usuarios' | 'mensajes' | 'facturacion' | 'dev';
 
 export default function ConfigTab() {
   const user = useAuthStore(s => s.user);
@@ -34,6 +35,7 @@ export default function ConfigTab() {
   const tabs: { key: Section; label: string; icon: React.ReactNode }[] = [
     { key: 'productos', label: 'Productos', icon: <Package size={15} /> },
     { key: 'usuarios',  label: 'Usuarios',  icon: <Users size={15} /> },
+    { key: 'mensajes',  label: 'Mensajes',  icon: <MessageSquare size={15} /> },
     ...(canSeeBilling ? [{ key: 'facturacion' as Section, label: 'Facturación', icon: <Receipt size={15} /> }] : []),
     ...(isDev ? [{ key: 'dev' as Section, label: 'DevTools', icon: <Code2 size={15} /> }] : []),
   ];
@@ -77,6 +79,7 @@ export default function ConfigTab() {
           </div>
         </>
       )}
+      {section === 'mensajes' && <MessagesSection />}
       {section === 'facturacion' && canSeeBilling && <BillingSection />}
 
       {section === 'dev' && isDev && <DevSection />}

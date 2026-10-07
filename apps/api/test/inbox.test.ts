@@ -605,15 +605,18 @@ describe('POST /:ticketId/erase-data - derecho de supresión (Ley 1581 de 2012)'
   let orgId: string;
   let adminId: string;
   let adminToken: string;
+  let adminRoleToken: string;
   let encargadoToken: string;
 
   beforeAll(async () => {
     app = await buildTestServer();
     const org = await createTestOrg(app.prisma);
     orgId = org.id;
+    const dev = await createTestUser(app.prisma, orgId, 'dev', 'EraseDataDev1!');
+    adminId = dev.id;
+    adminToken = await login(app, dev.email, 'EraseDataDev1!');
     const admin = await createTestUser(app.prisma, orgId, 'admin', 'EraseDataAdmin1!');
-    adminId = admin.id;
-    adminToken = await login(app, admin.email, 'EraseDataAdmin1!');
+    adminRoleToken = await login(app, admin.email, 'EraseDataAdmin1!');
     const encargado = await createTestUser(app.prisma, orgId, 'encargado', 'EraseDataEncargado1!');
     encargadoToken = await login(app, encargado.email, 'EraseDataEncargado1!');
   });
@@ -622,7 +625,16 @@ describe('POST /:ticketId/erase-data - derecho de supresión (Ley 1581 de 2012)'
     await app.close();
   });
 
-  it('rejects a non-admin (encargado) with 403', async () => {
+  it('rejects an admin (no dev) with 403 - solo el desarrollador puede eliminar datos', async () => {
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573005550003', customer_name: 'Cliente Admin' } });
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/inbox/${ticket.id}/erase-data`,
+      headers: { authorization: `Bearer ${adminRoleToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejects a non-dev (encargado) with 403', async () => {
     const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573005550001', customer_name: 'Cliente Rechazo' } });
     const res = await app.inject({
       method: 'POST', url: `/api/v1/inbox/${ticket.id}/erase-data`,

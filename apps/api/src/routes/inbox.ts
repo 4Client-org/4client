@@ -909,7 +909,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/inbox/:ticketId/erase-data - derecho de supresión (Ley 1581 de
-  // 2012): un cliente pide que se elimine su información. Admin-only, una sola
+  // 2012): un cliente pide que se elimine su información. Solo dev (no admin ni encargado), una sola
   // acción sobre el ticket que ya se tiene abierto (por teléfono O por el
   // username/BSUID nuevo de WhatsApp - da igual cuál identificó a este ticket,
   // la lógica es la misma desde acá porque ambos ya viven en la misma fila).
@@ -944,7 +944,7 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
   //   - Una nota interna de staff (OrderObservation) podría igual mencionar al
   //     cliente en texto libre - eso no se escanea/redacta, es contenido
   //     escrito por el propio staff, no el dato del cliente en sí.
-  fastify.post('/:ticketId/erase-data', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+  fastify.post('/:ticketId/erase-data', { preHandler: [authenticate, requireRole('dev')] }, async (req, reply) => {
     const { ticketId } = req.params as { ticketId: string };
     const ticket = await fastify.prisma.ticket.findFirst({ where: { id: ticketId, org_id: req.user.orgId } });
     if (!ticket) return reply.status(404).send({ error: 'Conversación no encontrada', code: 'NOT_FOUND' });
