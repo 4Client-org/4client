@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { buildPrivacyNoticeMessage } from '../lib/formLink.js';
+import { businessDateForInstant } from '../lib/businessDate.js';
 
 // Shared across every place a stored TicketMessage's media kind needs naming.
 type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
@@ -141,7 +142,12 @@ async function ingestMessage(
   // so the ticket fecha matches what the frontend shows as "today"
   const localMs = sentAt.getTime() + (-5 * 60 * 60 * 1000);
   const localDateStr = new Date(localMs).toISOString().split('T')[0];
-  const todayLocal = new Date(localDateStr);
+  // Día de negocio del chat (Ticket.fecha) - un mensaje de 9 p.m. en adelante
+  // cuenta para MAÑANA, no para hoy (ver lib/businessDate.ts). `localDateStr`
+  // arriba sigue siendo el día calendario REAL (sin este corte) - lo necesita
+  // dayStartUtc más abajo para la bienvenida de una vez por día real, que es
+  // un concepto aparte de en qué día del tablero cae el chat.
+  const todayLocal = businessDateForInstant(sentAt);
 
   // Real Bogota (UTC-5, no DST) calendar-day start, in an actual UTC instant - used
   // to decide whether this ticket's first_message_today_at is stale (from a

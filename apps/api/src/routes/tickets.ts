@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { businessDateForInstant } from '../lib/businessDate.js';
 
 export default async function ticketRoutes(fastify: FastifyInstance) {
   // GET /api/v1/tickets?fecha=2026-06-15
@@ -84,8 +85,8 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
-    // Colombia UTC-5: derive local business date from UTC
-    const today = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+    // Día de negocio (9 p.m. en adelante cuenta para mañana - ver lib/businessDate.ts)
+    const today = businessDateForInstant(new Date());
 
     // One ticket per phone forever - reopening an existing conversation rolls it
     // forward to today instead of leaving it (and this route) unable to find it.
