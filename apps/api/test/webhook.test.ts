@@ -654,7 +654,7 @@ describe('webhook: corte de las 9 p.m. para el día del chat', () => {
     }
   });
 
-  it('un ticket que ya existe hoy, y recibe un mensaje a las 10 p.m., se corre al día siguiente', async () => {
+  it('un ticket que ya existe hoy (escribió a las 10 a.m.) y recibe un mensaje a las 10 p.m. NO se corre a mañana - solo un ticket NUEVO se corre', async () => {
     const org = await createTestOrg(app.prisma);
     const wppPhoneId = `test-phone-${randomUUID()}`;
     await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
@@ -683,6 +683,25 @@ describe('webhook: corte de las 9 p.m. para el día del chat', () => {
     }
     await new Promise((r) => setTimeout(r, 200));
     const ticketNight = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
-    expect(ticketNight.fecha.toISOString().split('T')[0]).toBe('2026-03-11');
+    expect(ticketNight.fecha.toISOString().split('T')[0]).toBe('2026-03-10');
+  });
+
+  it('un ticket NUEVO que arranca a las 10 p.m. sí se corre al día siguiente', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `5730014${Math.floor(Math.random() * 100000)}`;
+    const nightTs = bogotaUnix('2026-03-10', 22, 0, 0);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nightTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'hola de noche', `wamid.newnight-${randomUUID()}`, nightTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticket.fecha.toISOString().split('T')[0]).toBe('2026-03-11');
   });
 });

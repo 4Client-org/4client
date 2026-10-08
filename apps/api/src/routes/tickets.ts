@@ -85,19 +85,24 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
-    // Día de negocio (9 p.m. en adelante cuenta para mañana - ver lib/businessDate.ts)
-    const today = businessDateForInstant(new Date());
+    // Colombia UTC-5: día real, sin corte de las 9 p.m. - reabrir un ticket que
+    // YA EXISTÍA lo rueda al día de hoy tal cual, sin importar la hora.
+    const realToday = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+    // Día de negocio SOLO para cuando el ticket se CREA de cero - un ticket
+    // nuevo armado entre las 9 p.m. y las 11:59:59 p.m. cuenta para mañana
+    // (ver lib/businessDate.ts).
+    const businessDateForNewTicket = businessDateForInstant(new Date());
 
     // One ticket per phone forever - reopening an existing conversation rolls it
     // forward to today instead of leaving it (and this route) unable to find it.
     const ticket = await fastify.prisma.ticket.upsert({
       where: { org_id_phone: { org_id: req.user.orgId, phone: body.data.phone } },
-      update: { customer_name: body.data.customer_name ?? body.data.phone, fecha: today, deferred_to: null, first_message_today_at: new Date() },
+      update: { customer_name: body.data.customer_name ?? body.data.phone, fecha: realToday, deferred_to: null, first_message_today_at: new Date() },
       create: {
         org_id: req.user.orgId,
         phone: body.data.phone,
         customer_name: body.data.customer_name ?? body.data.phone,
-        fecha: today,
+        fecha: businessDateForNewTicket,
         last_message_at: new Date(),
         last_activity_at: new Date(),
         first_message_today_at: new Date(),
