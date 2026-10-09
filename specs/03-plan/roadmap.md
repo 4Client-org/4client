@@ -14,7 +14,7 @@ Lo que protege el dinero del cliente actual o la producción.
 
 | # | Item | Por qué | Módulo / área |
 |---|---|---|---|
-| 1 | Decidir la regla de **créditos pagados** en cierre e informe. | Hoy un crédito saldado después no suma en ningún total: el dinero entra y ninguna cifra lo refleja. Requiere respuesta de José y un `CH` (toca dinero). | CAJ, DSH |
+| 1 | ~~Decidir la regla de créditos pagados en cierre e informe~~ → **decidido (D-19):** no se acomodan por ahora; se retoma si el cliente lo pide. | Ver `05-historia/decisiones.md`. | CAJ, DSH |
 | 2 | Responder `preguntas-abiertas.md` y promover a bug lo que José confirme. | Desbloquea los cambios de comportamiento; mientras tanto las specs solo describen lo actual. | todos |
 | 3 | **Probar la restauración de respaldos** con el simulacro de los pasos 1 a 5 del runbook. | El procedimiento está escrito pero marcado como no probado; un respaldo que nunca se restauró no es una garantía. | `04-operacion/runbooks.md` |
 | 4 | Terminar el paso del repositorio a **privado** y el redeploy de prod. | Ya planeado; deja prod sobre la GitHub App y alineada con `dev`. | `04-operacion/entornos-y-despliegue.md` |
