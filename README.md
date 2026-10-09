@@ -39,7 +39,7 @@
 | 🔐 Auth JWT + refresh token con rotación | ✅ Producción |
 | 📱 PWA instalable en móvil | ✅ Producción |
 | ☁️ Cloudflare R2 para PDFs | ✅ Producción |
-| 🚀 Deploy automático Railway + Vercel | ✅ Producción |
+| 🚀 Deploy automático (Coolify + Cloudflare Pages) | ✅ Producción |
 
 ---
 
@@ -49,13 +49,13 @@
 ┌─────────────────────────────────────────────────────────┐
 │                        INTERNET                         │
 │                                                         │
-│  WhatsApp ──▶ Meta Cloud API ──webhook──▶ API (Railway) │
+│  WhatsApp ──▶ Meta Cloud API ──webhook──▶ API (Coolify) │
 │                                               │          │
-│  Empleados ──── PWA (Vercel) ──REST/WS──▶ API (Railway) │
+│  Empleados ── PWA (Cloudflare) ──REST/WS──▶ API (Coolify)│
 │                                               │          │
 │                                  ┌────────────▼───────┐ │
 │                                  │  PostgreSQL         │ │
-│                                  │  (Railway managed)  │ │
+│                                  │  (en el VPS)        │ │
 │                                  └────────────────────┘ │
 │                                               │          │
 │                                  ┌────────────▼───────┐ │
@@ -85,8 +85,8 @@ packages/
 | Auth | JWT (15min) + Refresh tokens (7d, rotación) |
 | WhatsApp | Meta Cloud API (stateless, webhooks) |
 | Storage | Cloudflare R2 (S3-compatible) |
-| Deploy API | Railway (auto-deploy desde `main`) |
-| Deploy Web | Vercel (auto-deploy desde `main`) |
+| Deploy API | Coolify en un VPS (auto-deploy: `dev` → dev, `main` → producción) |
+| Deploy Web | Cloudflare Pages (auto-deploy: `dev` → dev, `main` → producción) |
 | CI | GitHub Actions (type check + build) |
 | Monorepo | pnpm workspaces |
 
@@ -132,17 +132,17 @@ pnpm dev:web    # Puerto 5173
 ## 🌿 Flujo de ramas
 
 ```
-feature/* ──▶ dev ──▶ test ──▶ main
-                                │
-                                └──▶ Railway + Vercel (auto-deploy)
+feature/* ──▶ dev ──▶ main
+                         │       │
+                         │       └──▶ producción (auto-deploy)
+                         └──▶ entorno dev (auto-deploy)
 ```
 
 | Rama | Propósito |
 |------|-----------|
-| `main` | **Producción.** Solo merge desde `test`. Auto-deploy Railway + Vercel |
-| `test` | **Staging.** Validación pre-producción. Mirror de lo que irá a `main` |
-| `dev` | **Integración.** Todas las features se mergean aquí primero |
-| `feature/*` | Trabajo activo. Siempre se ramifica desde `dev` |
+| `main` | **Producción.** Solo merge desde `dev`, con OK explícito. Auto-deploy |
+| `dev` | **Integración + entorno dev.** Todas las features se mergean aquí primero |
+| `feature/*` | Trabajo activo. Se ramifica desde `dev` y se borra al integrarla |
 
 > ⚠️ **Regla de oro:** Nunca hacer commit directo a `main` ni a `test`. Todo pasa por `dev`.
 
@@ -223,10 +223,10 @@ Organization ──┬── User (admin | encargado | domiciliario)
 
 ## 🏗️ Deploy en producción
 
-### Variables de entorno - Railway (API)
+### Variables de entorno - Coolify (API)
 
 ```env
-DATABASE_URL=postgresql://...        # Auto-provisto por Railway PostgreSQL
+DATABASE_URL=postgresql://...        # Postgres del VPS (Coolify)
 JWT_SECRET=<64 bytes hex>
 JWT_REFRESH_SECRET=<64 bytes hex>
 NODE_ENV=production
@@ -311,9 +311,7 @@ push/PR → typecheck (API + Web) → build (API + Web) → ✅
 ├── packages/
 │   └── shared/                    (tipos TypeScript compartidos)
 ├── .github/workflows/ci.yml
-├── railway.json
-├── nixpacks.toml
-├── vercel.json
+├── Dockerfile / start.sh          (build de la API en Coolify)
 └── RoadMap/PLAN_IMPLEMENTACION_ORIGINAL.md
 ```
 
@@ -328,7 +326,7 @@ push/PR → typecheck (API + Web) → build (API + Web) → ✅
 - Informe del día y cierre de caja
 - Panel de Configuración (productos, empleados, usuarios)
 - PWA instalable en Android/iOS
-- Deploy Railway + Vercel + Cloudflare R2
+- Deploy Coolify + Cloudflare Pages + Cloudflare R2
 - Multi-tenant desde el día 1
 
 ### 🔄 Phase 2 - Escalabilidad Multi-cliente

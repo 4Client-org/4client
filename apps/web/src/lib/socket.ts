@@ -15,7 +15,7 @@ export function getSocket(_token: string): Socket<ServerToClientEvents, ClientTo
       transports: ['websocket'],
     });
 
-    // Every backend deploy (or restart, crash, Railway maintenance) drops every
+    // Every backend deploy (or restart, crash, VPS maintenance) drops every
     // open socket. socket.io-client auto-reconnects on its own, but it reuses
     // whatever's in the auth callback above at that moment - if the access token
     // (15min expiry) had already gone stale by then, the reconnect's auth fails,

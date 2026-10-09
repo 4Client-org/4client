@@ -50,7 +50,7 @@ const COD_COLORS: Record<string, string> = {
 function formatHour(raw: string | null | undefined): string {
   if (!raw) return '-';
   // order_hour is a DB TIME column (no date/timezone) stored using the server's clock
-  // (UTC on Railway). Prisma serializes it as an epoch-day ISO string with a "Z" suffix,
+  // (UTC on the server). Prisma serializes it as an epoch-day ISO string with a "Z" suffix,
   // so it must be converted to Colombia local time explicitly - reading getUTCHours()
   // directly (old behavior) showed the raw UTC hour, ~5h ahead of the real local time.
   const d = raw.includes('T') ? new Date(raw) : new Date(`1970-01-01T${raw}Z`);

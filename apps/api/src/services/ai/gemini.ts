@@ -6,7 +6,7 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 // Every network call here has an explicit timeout (AbortSignal.timeout) -
 // found the hard way that without one, a single slow/hanging candidate model
-// could stretch one "Tomar lista" request past Railway's own upstream
+// could stretch one "Tomar lista" request past the proxy's own upstream
 // timeout, which returns a 502 to the browser while the server keeps working
 // in the background on a connection nobody's listening on anymore (looked to
 // staff like the "Montar lista" button just froze forever). Bounding each
@@ -21,7 +21,7 @@ const MODELS_TIMEOUT_MS = 10_000;
 // capacidad del lado de Google. Cuando pasa, tarda varios segundos en
 // devolver el 503 (no es instantáneo) - un timeout más corto deja mas
 // margen para que Groq (confirmado igual de rápido y confiable, ver
-// groq.ts) rescate la petición dentro del tiempo que el navegador/Railway
+// groq.ts) rescate la petición dentro del tiempo que el navegador/proxy
 // están dispuestos a esperar, en vez de quemar el presupuesto completo
 // reintentando un proveedor que hoy está lento.
 const GENERATE_TIMEOUT_MS = 12_000;

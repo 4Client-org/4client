@@ -6,10 +6,10 @@ export default function DevLinksPanel() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {[
             { label: 'Coolify (backend + BD)', url: 'http://212.47.78.132:8000' },
-            { label: 'Vercel (frontend)', url: 'https://vercel.com' },
+            { label: 'GitHub (código)', url: 'https://github.com/4Client-org/4client' },
             { label: 'Sentry (errores)', url: 'https://sentry.io' },
             { label: 'Meta Business (WPP)', url: 'https://business.facebook.com' },
-            { label: 'Cloudflare (DNS)', url: 'https://cloudflare.com' },
+            { label: 'Cloudflare (DNS + web)', url: 'https://cloudflare.com' },
             { label: 'Prisma Studio (local)', url: 'http://localhost:5555' },
           ].map(({ label, url }) => (
             <a key={label} href={url} target="_blank" rel="noreferrer"

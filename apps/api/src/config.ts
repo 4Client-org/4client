@@ -4,8 +4,7 @@ const envSchema = z.object({
   DATABASE_URL:              z.string().min(1),
   JWT_SECRET:                z.string().min(32),
   NODE_ENV:                  z.enum(['development', 'production', 'test']).default('development'),
-  // Set explicitly per deploy (Coolify doesn't auto-inject an environment name the
-  // way Railway's own RAILWAY_ENVIRONMENT_NAME used to) - unlike NODE_ENV, which is
+  // Set explicitly per deploy (Coolify doesn't auto-inject an environment name) - unlike NODE_ENV, which is
   // "production" on EVERY deploy regardless of environment (it controls build/runtime
   // optimizations, not which environment this is) and so can't tell a real prod
   // deploy apart from a dev/staging one on the same platform. Checks that must only
@@ -65,8 +64,8 @@ export const config = parsed.data;
 
 // Security-audit finding: NODE_ENV is 'production' on nearly every real deploy
 // (Docker/Coolify default), so it can't tell a genuine prod deploy apart from
-// staging/dev on the same platform - only APP_ENVIRONMENT_NAME can, and unlike
-// Railway's old RAILWAY_ENVIRONMENT_NAME, nothing auto-injects it anymore. A
+// staging/dev on the same platform - only APP_ENVIRONMENT_NAME can, and nothing
+// auto-injects it. A
 // deploy that's actually meant to be production but never got this var set (or
 // got it typo'd, e.g. 'Production' with a capital P) would silently relax the
 // three checks below with no visible signal that anything was misconfigured.

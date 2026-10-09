@@ -12,7 +12,7 @@ interface CreatedCreds {
 
 // Alta de organizaciones (clientes nuevos) - solo rol dev. Crea la
 // Organization + su primer usuario admin en un solo paso (backend:
-// POST /dev/organizations) para no tener que tocar Railway/la BD a mano cada
+// POST /dev/organizations) para no tener que tocar la BD a mano cada
 // vez. El cliente entra con esas credenciales y configura su propio
 // WhatsApp/productos con las pantallas que ya existen (DevWppPanel,
 // ProductsSection) - esto no cambia nada de esas pantallas.
