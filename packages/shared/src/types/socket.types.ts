@@ -19,6 +19,9 @@ export interface ServerToClientEvents {
   // current listener (useProducts.ts) just invalidates its query regardless of
   // payload, so there was never a need to enumerate every changed id here.
   'product:changed': (data: { id?: string; bulk?: boolean }) => void;
+  // Sin payload a propósito - cada listener (useMessageTemplates.ts) solo
+  // invalida su query y vuelve a pedir el set completo, igual que product:changed.
+  'message-templates:changed': () => void;
 }
 
 export interface ClientToServerEvents {
