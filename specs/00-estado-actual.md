@@ -28,8 +28,8 @@ Lo que `dev` tiene y `main` no, y viajará en el próximo release:
 
 ## Próximas prioridades (propuestas, a confirmar con José)
 
-1. Resolver la regla de **créditos pagados** en cierre e informe (PREG-001, PREG-006): hoy un crédito saldado después no suma en ningún total.
-2. Responder las preguntas abiertas de `03-plan/preguntas-abiertas.md` y promover a `BUG` lo que José confirme.
+1. Responder las preguntas abiertas prioritarias de `03-plan/preguntas-abiertas.md`. Los créditos pagados **no** se acomodan en los totales por ahora (D-19, decisión de José 2026-10-09: el cliente no lo ha pedido).
+2. Promover a `BUG` lo que José confirme que está mal.
 3. Quitar del código lo específico del primer cliente (cuenta bancaria en plantillas por defecto, logo y política fijos) antes de un segundo cliente.
 4. Reiniciar el VPS para aplicar actualizaciones de kernel pendientes, en ventana con caja cerrada y respaldo fresco.
 5. Regenerar el manual de usuario desde `01-funcional` (el actual está desactualizado).
