@@ -46,6 +46,12 @@ export default async function configRoutes(fastify: FastifyInstance) {
       orgId: req.user.orgId, actorId: req.user.userId, action: 'config.message_templates_update',
       metadata: { fields: Object.keys(body.data) },
     });
+    // Sin esto, cualquier sesión que ya tenía los textos en caché (useMessageTemplates,
+    // staleTime 5 min) seguía mandando el texto viejo al cliente hasta que esa caché
+    // expirara sola - un cambio acá no se veía reflejado al enviar el formulario desde
+    // otra pestaña/dispositivo hasta 5 minutos después. Mismo patrón que product:changed
+    // (products.ts/useProducts.ts).
+    fastify.io.to(`org:${req.user.orgId}`).emit('message-templates:changed');
     return reply.send({ data: { templates: resolveMessageTemplates(next) } });
   });
 
