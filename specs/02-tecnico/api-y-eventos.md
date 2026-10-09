@@ -219,7 +219,7 @@ Eventos cliente → servidor: `join:org(orgId)` y `join:date(fecha)`. `MainPage`
 |---|---|---|---|
 | `order:created` | `Order` | `orders.ts › POST /`; `public.ts › POST /submit` (pedido nuevo) | `MainPage` |
 | `order:updated` | `Order` (+ banderas de cambio del cliente) | `orders.ts › PATCH /:id`, `POST/PATCH/DELETE /:id/observations…`, `PATCH /:id/status`, `PATCH /:id/restore`; `public.ts › POST /submit` (fusión) y `POST /order/:orderId/delete`; `tickets.ts › PATCH /:id` (solo `{ id }`) | `MainPage`, `InboxPanel`, `TicketModal`, `DetallePedidoModal` |
-| `order:moved` | `{ orderId, newStatus }` | `orders.ts › PATCH /:id/status`, `PATCH /:id/restore` | `MainPage`, `InboxPanel`, `TicketModal`, `DetallePedidoModal` |
+| `order:moved` | `{ orderId, newStatus }` | `orders.ts › PATCH /:id/status`, `PATCH /:id/restore` (solo si venía de papelera) | `MainPage`, `InboxPanel`, `TicketModal`, `DetallePedidoModal` |
 | `order:paid` | `{ orderId }` | `orders.ts › POST /:id/cobro`, `PATCH /:id/credito-pagado`, `PATCH /:id/cobro-retroactivo` | `MainPage`, `InboxPanel`, `TicketModal`, `DetallePedidoModal` |
 | `ticket:message` | `{ ticketId, message: TicketMessage }` | `webhook.ts` (entrantes y respuestas automáticas); `inbox.ts › reply`, `forward`, `send-image|audio|video|document`; `public.ts › POST /submit` (mensajes automáticos del pedido) | `MainPage`, `InboxPanel`, `TicketModal`, `NuevoPedidoModal`, `DetallePedidoModal` |
 | `ticket:message-status` | `{ ticketId, messageId, delivered, read_by_client, failed_reason }` | `webhook.ts › statuses` de Meta; `inbox.ts` tras el envío en segundo plano (id de Meta guardado o fallo) | `InboxPanel`, `TicketModal`, `NuevoPedidoModal`, `DetallePedidoModal` |
@@ -236,5 +236,5 @@ Reglas de uso:
 
 ## 3. Pendientes
 
-- **PREG-GEN-p8 — Sala por fecha sin uso.** `join:date` une a `org:<orgId>:date:<fecha>`, pero ningún emisor la usa: todo va a `org:<orgId>` y cada pantalla filtra al refrescar. ¿Se elimina o se planea usarla?
-- **PREG-GEN-p9 — `order:updated` con payload incompleto** desde `tickets.ts › PATCH /:id` (`{ id }` con `as any`). Hoy no rompe nada porque nadie lee el payload; ¿se ajusta el tipo o el emisor?
+- **PREG-093 — Sala por fecha sin uso.** `join:date` une a `org:<orgId>:date:<fecha>`, pero ningún emisor la usa: todo va a `org:<orgId>` y cada pantalla filtra al refrescar. ¿Se elimina o se planea usarla?
+- **PREG-094 — `order:updated` con payload incompleto** desde `tickets.ts › PATCH /:id` (`{ id }` con `as any`). Hoy no rompe nada porque nadie lee el payload; ¿se ajusta el tipo o el emisor?

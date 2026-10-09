@@ -96,7 +96,7 @@ flowchart TB
 | | `jspdf` | 4.2.1 |
 | | `xlsx` (tarball de cdn.sheetjs.com, no npm) | 0.20.3 |
 | | `lucide-react` | 1.18.0 |
-| Base | PostgreSQL | ver PREG-GEN-p1 |
+| Base | PostgreSQL | ver PREG-092 |
 
 `package.json › pnpm.overrides` fuerza versiones mínimas de dependencias transitivas por avisos de seguridad (`ws`, `tar`, `find-my-way`, `fast-uri`, `socket.io-parser`, `engine.io`, `dompurify`, `postcss`, `nanoid`, `browserslist`, `brace-expansion`). `onlyBuiltDependencies` limita los scripts de instalación a Prisma, bcrypt y esbuild. Quitar un override sin revisar el aviso que lo motivó reabre el hallazgo. *(código)*
 
@@ -153,7 +153,7 @@ Solo nombres; los valores viven en Coolify. Si el esquema no valida, el proceso 
 
 y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIRONMENT_NAME` también impide arrancar: obliga a decidir explícitamente. *(código)*
 
-**Trampa `REQUIRE_2FA`:** se valida con `z.coerce.boolean()`, que convierte con `Boolean(valor)`. Cualquier texto no vacío es `true`: `REQUIRE_2FA=false` o `REQUIRE_2FA=0` **activan** el 2FA. Para apagarlo hay que dejar la variable sin definir o vacía. *(código)* → PREG-GEN-p2.
+**Trampa `REQUIRE_2FA`:** se valida con `z.coerce.boolean()`, que convierte con `Boolean(valor)`. Cualquier texto no vacío es `true`: `REQUIRE_2FA=false` o `REQUIRE_2FA=0` **activan** el 2FA. Para apagarlo hay que dejar la variable sin definir o vacía. *(código)* → PREG-064.
 
 **Web:** `VITE_API_URL` (opcional, se fija en build). Debe quedar **sin definir** en Cloudflare Pages para que funcione la selección en tiempo de ejecución; sirve para desarrollo local (`apps/web/.env.local`).
 
@@ -211,7 +211,7 @@ y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIR
   - En la API, el día de hoy se calcula como `new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0])`, lo que da un `Date` a medianoche UTC que Prisma guarda como columna `@db.Date`. Se repite en línea en `cierre.ts`, `tickets.ts`, `public.ts`, `files.ts` y `webhook.ts`; no hay helper común salvo `lib/businessDate.ts › businessDateForInstant` (día del ticket con corte a las 21:00).
   - En la web, `lib/format.ts › colombiaDateStr` / `todayStr` hacen lo mismo sin depender de la zona horaria del dispositivo; para mostrar se usa `timeZone: 'America/Bogota'`.
   - Las fechas de día viajan como texto `YYYY-MM-DD` y se convierten con `new Date('YYYY-MM-DD')` (medianoche UTC).
-  - Trampa: `orders.ts › GET /` y `POST /` sin `fecha` usan la fecha **UTC**, no la de Bogotá (ver PREG-GEN-p3).
+  - Trampa: `orders.ts › GET /` y `POST /` sin `fecha` usan la fecha **UTC**, no la de Bogotá (ver PREG-015).
 - **Dinero:** pesos colombianos. En la base, `Decimal(12,2)`; en la API se suma con `Number(...)` (p. ej. `cierre.ts`); en zod, `z.number().min(0).max(9_999_999)` para el precio de una línea. En pantalla, `fmtCOP` (`$` + `toLocaleString('es-CO')`). No hay redondeo explícito ni tipo decimal en JavaScript: los montos se tratan como enteros en la práctica. *(código)*
 - **Concurrencia:** las escrituras sensibles usan guardas atómicas en el `WHERE` (`updateMany` con `locked: false` y la `fecha` esperada, 0 filas → 409) y `pg_advisory_xact_lock` por organización y día para numerar pedidos (`lib/orderNumbering.ts`). *(código)*
 - **Comentarios:** largos y del porqué, mezclando inglés y español; muchos empiezan con "Security-audit finding" y cuentan el incidente o el hallazgo que motivó la línea. Antes de "simplificar" algo raro, lee el comentario de encima: casi siempre documenta un error real. *(código)*
@@ -219,7 +219,7 @@ y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIR
 
 ## 10. Pendientes
 
-- **PREG-GEN-p1 — ¿Qué versión de PostgreSQL corre en producción?** El README dice 15, el entorno local y de tests usa 16, y el workflow de backup instala `postgresql-client-18` "para coincidir con el servidor". *(inferido)*
-- **PREG-GEN-p2 — `REQUIRE_2FA` con `z.coerce.boolean()`.** `REQUIRE_2FA=false` activa el 2FA. ¿Se cambia a un parseo explícito (`'true'`/`'false'`) o se documenta solo en la operación?
-- **PREG-GEN-p3 — Fecha por defecto en UTC en `orders.ts`.** `GET /orders` y `POST /orders` sin `fecha` usan `new Date().toISOString()` (UTC); entre 19:00 y 23:59 de Bogotá eso ya es "mañana". La web siempre envía `fecha`, así que hoy no se nota. ¿Se alinea con el resto (Bogotá)?
-- **PREG-GEN-p4 — Logo fijo en `MainPage`.** El encabezado muestra siempre `/fruver-san-gabriel.jpeg`, sea cual sea la organización. ¿Ya está entre las excepciones multi-tenant registradas (DT-001/DT-002 según el principio 2) o es una nueva?
+- **PREG-092 — ¿Qué versión de PostgreSQL corre en producción?** El README dice 15, el entorno local y de tests usa 16, y el workflow de backup instala `postgresql-client-18` "para coincidir con el servidor". *(inferido)*
+- **PREG-064 — `REQUIRE_2FA` con `z.coerce.boolean()`.** `REQUIRE_2FA=false` activa el 2FA. ¿Se cambia a un parseo explícito (`'true'`/`'false'`) o se documenta solo en la operación?
+- **PREG-015 — Fecha por defecto en UTC en `orders.ts`.** `GET /orders` y `POST /orders` sin `fecha` usan `new Date().toISOString()` (UTC); entre 19:00 y 23:59 de Bogotá eso ya es "mañana". La web siempre envía `fecha`, así que hoy no se nota. ¿Se alinea con el resto (Bogotá)?
+- **DT-002 — Logo fijo en `MainPage`.** El encabezado muestra siempre `/fruver-san-gabriel.jpeg`, sea cual sea la organización. Es una excepción multi-tenant registrada (principio 2); se trata junto con el resto del hardcoding de un solo cliente.

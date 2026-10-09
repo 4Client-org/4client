@@ -64,7 +64,7 @@ Lo que sí depende de `NODE_ENV=production` (en ambos entornos): log en nivel `w
 
 ### Variables de entorno de la API (solo nombres)
 
-Lista completa en `apps/api/src/config.ts › envSchema`. Se configuran en Coolify, en cada app por separado. Que una variable esté en dev o en prod es **(inferido)** salvo donde se indica: el repo no lo registra (ver PREG-OPS-p3).
+Lista completa en `apps/api/src/config.ts › envSchema`. Se configuran en Coolify, en cada app por separado. Que una variable esté en dev o en prod es **(inferido)** salvo donde se indica: el repo no lo registra (ver PREG-103).
 
 | Variable | Para qué | dev | prod |
 |---|---|:-:|:-:|
@@ -80,7 +80,7 @@ Lista completa en `apps/api/src/config.ts › envSchema`. Se configuran en Cooli
 | `WPP_TOKEN_ENC_KEY` | Clave maestra (64 hex) para cifrar el token de WhatsApp de cada organización | ? | ✅ obligatoria |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` | Subida de facturas y cobros. Sin ellas se usa disco local del contenedor (se pierde en cada deploy) | ? | ✅ |
 | `RESEND_API_KEY` | Correo con el código de 2FA | ? | ? |
-| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | ? | ? (PREG-OPS-p2) |
+| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | ? | ? (PREG-102) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY` | Tomar lista (cadena de proveedores; Cerebras desactivado en código) | ? | ? |
 | `SENTRY_DSN` | Errores a Sentry | ? | ? |
 | `SEED_ADMIN_PASS`, `SEED_DEV_PASS` | Solo para sembrar datos; no deberían existir en prod | opc. | ✗ |
@@ -103,7 +103,7 @@ git push (dev o main)
 - **Build** (`Dockerfile`, código): `node:20-slim` + openssl, pnpm 10 vía corepack, `COPY . .`, `pnpm install --frozen-lockfile`, `prisma generate`, `tsc`. El proceso corre como usuario `node`, no root. El `.dockerignore` excluye `node_modules`, `dist`, `.git` y los `.env` (salvo `.env.example`).
 - **Duración:** ~9–11 min por deploy (José).
 - **Rolling** (José): el contenedor viejo sigue sirviendo hasta que el nuevo pasa el health check. Si el build falla o el nuevo no queda sano, el viejo sigue vivo. Consecuencia para migraciones: durante unos minutos el **código viejo corre contra el esquema nuevo**, por eso toda migración debe ser aditiva (principio 1 de [`00-principios.md`](../00-principios.md)).
-- **Health check:** `GET /health` responde `{"status":"ok"}` sin tocar la base (`server.ts`, código). Está excluido de la exigencia de HTTPS porque el chequeo de la plataforma entra directo al contenedor por HTTP. Que Coolify use exactamente esa ruta es (inferido) → PREG-OPS-p1.
+- **Health check:** `GET /health` responde `{"status":"ok","timestamp":…}` sin tocar la base (`server.ts`, código). Está excluido de la exigencia de HTTPS porque el chequeo de la plataforma entra directo al contenedor por HTTP. Que Coolify use exactamente esa ruta es (inferido) → PREG-101.
 - **Migraciones en cada arranque:** `start.sh` usa `set -e`; si `prisma migrate deploy` falla, el contenedor nuevo muere y el viejo sigue sirviendo.
 
 ### Cualquier push redespliega, aunque solo toque documentación
@@ -116,7 +116,7 @@ Ni Coolify ni Cloudflare Pages filtran por ruta (José; el Dockerfile copia todo
 - Cabeceras de seguridad (CSP, `X-Frame-Options: DENY`, etc.) en `apps/web/public/_headers` (código). La CSP permite `connect-src https: wss:` y `img-src/media-src blob:` (el chat necesita `blob:`; commit `3b32c5b`).
 - PWA con `registerType: 'prompt'`: un deploy nuevo **no** recarga las pestañas abiertas; se activa en la siguiente carga natural (`vite.config.ts`, código). Las páginas de `public/legal/` quedan fuera del fallback del service worker.
 - **Política de privacidad:** desde el commit `21017f3` (en `dev`, 2026-10-09) se sirve en `/legal/politica-privacidad` de la propia web, sin `.html` (Cloudflare redirige `/x.html` → `/x`). La API arma la URL con el primer origen de `FRONTEND_URL` (`lib/formLink.ts › privacyPolicyUrl`), así cada entorno apunta a su copia. **`main` todavía apunta a la copia vieja** en GitHub Pages de otro repo hasta el próximo release.
-- Vistas previas de otras ramas: si Cloudflare las construye, su hostname `*.pages.dev` cae en "cualquier otro host" y hablaría con la **API de producción** (CORS la bloquearía si su origen no está en `FRONTEND_URL`). PREG-OPS-p5.
+- Vistas previas de otras ramas: si Cloudflare las construye, su hostname `*.pages.dev` cae en "cualquier otro host" y hablaría con la **API de producción** (CORS la bloquearía si su origen no está en `FRONTEND_URL`). PREG-105.
 
 ## 5. CI (GitHub Actions)
 
@@ -140,7 +140,7 @@ Backup: `.github/workflows/backup-prod-db.yml` corre a las 08:00 UTC (3:00 a. m.
   3. Confirmar que Cloudflare Pages sigue teniendo acceso al repo privado (su propia integración con GitHub).
   4. Hacer un push de prueba inocuo a `dev` y verificar el auto-deploy (webhook → Coolify).
   5. Lanzar a mano el workflow de backup y confirmar que sube el dump.
-- En repos privados, los minutos de GitHub Actions tienen cupo (CI en cada push + backup diario). PREG-OPS-p6.
+- En repos privados, los minutos de GitHub Actions tienen cupo (CI en cada push + backup diario). PREG-106.
 
 ## 7. DNS y dominios
 
@@ -167,10 +167,10 @@ Pasos detallados y verificación: `runbooks.md` › c.
 
 | ID | Pregunta |
 |---|---|
-| PREG-OPS-p1 | ¿El health check de Coolify usa `GET /health`? Esa ruta no toca la base: un contenedor sin conexión a Postgres pasaría el chequeo (aunque `migrate deploy` ya habría fallado antes). |
-| PREG-OPS-p2 | ¿En qué entorno está `REQUIRE_2FA=true`? El commit `28832e1` habla de prod; `LoginPage.tsx` dice "currently dev-only". |
-| PREG-OPS-p3 | ¿Qué variables opcionales (Meta, R2, IA, Resend, Sentry) tiene cada app? ¿dev y prod usan buckets R2 de archivos distintos? |
-| PREG-OPS-p4 | Con la GitHub App como fuente, ¿el auto-deploy de dev sigue llegando por el webhook manual o por el webhook de la App? ¿Se elimina el webhook manual de prod tras el cambio? |
-| PREG-OPS-p5 | ¿Cloudflare Pages construye vistas previas para ramas distintas de `dev`? Hablarían con la API de prod. |
-| PREG-OPS-p6 | ¿Alcanza el cupo de minutos de Actions del plan de `4Client-org` con el repo privado? |
-| PREG-OPS-p7 | El `README.md` lista `JWT_REFRESH_SECRET` (no existe en `config.ts`) y recomienda `VITE_API_URL` en Cloudflare Pages (contradice `apiBase.ts`). ¿Se corrige el README? |
+| PREG-101 | ¿El health check de Coolify usa `GET /health`? Esa ruta no toca la base: un contenedor sin conexión a Postgres pasaría el chequeo (aunque `migrate deploy` ya habría fallado antes). |
+| PREG-102 | ¿En qué entorno está `REQUIRE_2FA=true`? El commit `28832e1` habla de prod; `LoginPage.tsx` dice "currently dev-only". |
+| PREG-103 | ¿Qué variables opcionales (Meta, R2, IA, Resend, Sentry) tiene cada app? ¿dev y prod usan buckets R2 de archivos distintos? |
+| PREG-104 | Con la GitHub App como fuente, ¿el auto-deploy de dev sigue llegando por el webhook manual o por el webhook de la App? ¿Se elimina el webhook manual de prod tras el cambio? |
+| PREG-105 | ¿Cloudflare Pages construye vistas previas para ramas distintas de `dev`? Hablarían con la API de prod. |
+| PREG-106 | ¿Alcanza el cupo de minutos de Actions del plan de `4Client-org` con el repo privado? |
+| PREG-107 | El `README.md` lista `JWT_REFRESH_SECRET` (no existe en `config.ts`) y recomienda `VITE_API_URL` en Cloudflare Pages (contradice `apiBase.ts`). ¿Se corrige el README? |

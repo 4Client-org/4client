@@ -93,7 +93,7 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 | Búsqueda de chats | `20260802050000_chat_search_trgm`: extensiones `pg_trgm` y `unaccent`, función `immutable_unaccent(text)` e índices GIN `ticket_messages_text_trgm_idx`, `tickets_customer_name_trgm_idx`, `tickets_phone_trgm_idx` | Búsqueda `ILIKE` sin tildes en todo el historial. La consulta debe usar **exactamente** la misma expresión (`immutable_unaccent(lower(col))`) o el índice no se usa. *(código)* |
 | Consecutivo de cobros | `PlatformCharge.number` `autoincrement` | Secuencia global entre organizaciones. No es numeración DIAN. *(código)* |
 
-**Trampa recurrente — `DROP INDEX tickets_phone_trgm_idx`:** los índices trigram se crearon con SQL a mano y `schema.prisma` no puede declararlos. Cada `prisma migrate dev` / `migrate diff` detecta una deriva falsa y **agrega un `DROP INDEX "tickets_phone_trgm_idx"`** a la migración generada. Hay que **borrar esa línea a mano** antes de hacer commit (ya pasó en `20260830042938_add_product_in_stock`, `20260901025312_platform_charge_multi_types_period`, `20260903043134_wpp_redirect_message` y `20260903150000_unique_user_email`, que lo dejan anotado). Si se cuela, se rompe la búsqueda por teléfono y se aplica sola en el siguiente arranque. *(código)*
+**Trampa recurrente — `DROP INDEX tickets_phone_trgm_idx`:** los índices trigram se crearon con SQL a mano y `schema.prisma` no puede declararlos. Cada `prisma migrate dev` / `migrate diff` detecta una deriva falsa y **agrega un `DROP INDEX "tickets_phone_trgm_idx"`** a la migración generada. Hay que **borrar esa línea a mano** antes de hacer commit (ya pasó en `20260829044711_add_order_item_ai_unmatched`, `20260830042938_add_product_in_stock`, `20260901025312_platform_charge_multi_types_period`, `20260903043134_wpp_redirect_message` y `20260903150000_unique_user_email`, que lo dejan anotado). Si se cuela, se rompe la búsqueda por teléfono y se aplica sola en el siguiente arranque. *(código)*
 
 ## 7. Borrado y llaves foráneas
 
@@ -101,19 +101,19 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 - **Borrado físico existente:** `OrderItem` (al editar un pedido se borran todas sus líneas y se crean de nuevo, así que **los id de línea no son estables**), `OrderObservation`, `TicketMessage` (solo el borrado de datos), `DailyClose` (solo `POST /dev/actions/reopen-cierre`), `PlatformCharge`, `RefreshToken`, `RevokedFormToken`. *(código)*
 - **`onDelete`:** `CASCADE` solo en `OrderItem → Order`, `RefreshToken → User` y `LoginVerificationCode → User`. `SET NULL` en las relaciones opcionales de `Order` (`ticket_id`, `employee_id`, `paid_by`, `papelera_by`) y en `TicketMessage.sent_by`. Todo lo demás es `RESTRICT`: borrar una organización, un usuario con actividad o un ticket con mensajes falla. `InvoiceLink.ticket_id` y `order_id` **no tienen FK** (son referencias sueltas). *(código)*
 - **Tamaños que importan:** `Ticket.phone`, `Ticket.bsuid` y `Order.customer_phone` son `VarChar(150)` por el BSUID; `Order.num` `VarChar(10)`; `OrderObservation.text` 1000; `papelera_reason` 500; `InvoiceLink.phone_last4` 4 (se anonimiza como `****`). *(código)*
-- **Banderas de cierre:** `Order.locked` = pedido cerrado (cobrado o "cerrar sin cobro"); `Order.caja_cerrada` = el cierre marcó todo el día. Ninguna pantalla lee `caja_cerrada` y la API decide "día cerrado" por la fila de `DailyClose`; reabrir un cierre desde `dev` borra esa fila pero deja `caja_cerrada` y `locked` como estaban. *(código)* → PREG-GEN-p5.
+- **Banderas de cierre:** `Order.locked` = pedido cerrado (cobrado o "cerrar sin cobro"); `Order.caja_cerrada` = el cierre marcó todo el día. Ninguna pantalla lee `caja_cerrada` y la API decide "día cerrado" por la fila de `DailyClose`; reabrir un cierre desde `dev` borra esa fila pero deja `caja_cerrada` y `locked` como estaban. *(código)* → PREG-005.
 
 ## 8. Columnas y tablas heredadas o sin uso
 
 | Elemento | Estado |
 |---|---|
-| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). Hoy ningún código inserta filas; solo el borrado de datos las elimina. Las rutas públicas siguen **exigiendo** `device_token` pero no lo comparan con nada. → PREG-GEN-p6 |
+| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). Hoy ningún código inserta filas; solo el borrado de datos las elimina. Las rutas públicas siguen **exigiendo** `device_token` pero no lo comparan con nada. → PREG-035 |
 | `Organization.wpp_meta_app_secret` | Solo lo escriben `seed-wpp.ts` y `reencrypt-wpp-tokens.ts`. El webhook verifica la firma con la variable global `META_APP_SECRET`, no con esta columna. |
 | `OrderItem.quantity_value`, `quantity_unit` | Sin uso (§2). |
 | `Ticket.wpp_thread_id` | Sin uso; solo aparece en el visor de base de `dev`. |
 | `RevokedFormToken` | Sigue en uso (botón "bloquear link"), aunque nació para los links JWT. Desde `form_link_short_token`, generar un link nuevo ya invalida el anterior por sobrescritura; la fila de revocación se borra al emitir uno nuevo (`lib/formLink.ts`). |
 | `Order.status = 'entregado'` | Valor heredado: pedidos viejos lo conservan, pero ya no se puede asignar. |
-| Comentarios del schema sobre links | Los de `Ticket.form_token_min_iat`, `form_link_opened_at` e `InvoiceLink` hablan de ventanas de 10 min / 4 h sin abrir y de verificar los últimos 4 dígitos del teléfono; el código del formulario aplica un vencimiento fijo de 24 h desde la emisión (`public.ts › loadTicketByFormToken`). Ver `modulos/FRM.md` y `modulos/FAC.md`. → PREG-GEN-p7 |
+| Comentarios del schema sobre links | Los de `Ticket.form_token_min_iat`, `form_link_opened_at` e `InvoiceLink` hablan de ventanas de 10 min / 4 h sin abrir y de verificar los últimos 4 dígitos del teléfono; el código del formulario aplica un vencimiento fijo de 24 h desde la emisión (`public.ts › loadTicketByFormToken`). Ver `modulos/FRM.md` y `modulos/FAC.md`. → DT-040 |
 
 ## 9. Política de migraciones
 
@@ -144,6 +144,6 @@ Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls app
 
 ## 11. Pendientes
 
-- **PREG-GEN-p5 — `caja_cerrada` tras reabrir un cierre.** `POST /dev/actions/reopen-cierre` borra el `DailyClose` pero no limpia `Order.caja_cerrada` ni `locked`. Hoy nada lee `caja_cerrada`. ¿Se deja así, se limpia al reabrir o se elimina la columna?
-- **PREG-GEN-p6 — `device_token` y `FormLinkSession`.** Las rutas públicas exigen `device_token`, pero no se usa y `FormLinkSession` nunca se escribe. ¿Se retiró la atadura a un dispositivo a propósito? Si es así, ¿se quita el parámetro y la tabla?
-- **PREG-GEN-p7 — Comentarios del schema desactualizados** sobre ventanas de link (10 min / 4 h) y `phone_last4`, que contradicen el vencimiento fijo de 24 h del código. ¿Se corrigen los comentarios?
+- **PREG-005 — `caja_cerrada` tras reabrir un cierre.** `POST /dev/actions/reopen-cierre` borra el `DailyClose` pero no limpia `Order.caja_cerrada` ni `locked`. Hoy nada lee `caja_cerrada`. ¿Se deja así, se limpia al reabrir o se elimina la columna?
+- **PREG-035 — `device_token` y `FormLinkSession`.** Las rutas públicas exigen `device_token`, pero no se usa y `FormLinkSession` nunca se escribe. ¿Se retiró la atadura a un dispositivo a propósito? Si es así, ¿se quita el parámetro y la tabla?
+- **DT-040 — Comentarios del schema desactualizados** sobre ventanas de link (10 min / 4 h) y `phone_last4`, que contradicen el vencimiento fijo de 24 h del código. ¿Se corrigen los comentarios?

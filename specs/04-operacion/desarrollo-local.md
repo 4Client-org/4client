@@ -42,9 +42,9 @@ Nunca se commitean (`.gitignore` excluye `.env`, `.env.local`, `.env.test`). Sol
 
 Opcionales en `apps/api/.env` según lo que pruebes: `META_*` y `WPP_TOKEN_ENC_KEY` (WhatsApp), `R2_*` (si no están, las facturas van a `apps/api/uploads/`, ignorado por git), `GEMINI_API_KEY`/`GROQ_API_KEY`/`OPENROUTER_API_KEY` (Tomar lista), `RESEND_API_KEY` + `REQUIRE_2FA` (2FA), `SEED_ADMIN_PASS`/`SEED_DEV_PASS` (seed). Lista completa: `apps/api/src/config.ts › envSchema`.
 
-**Ojo con `apps/api/.env.example`:** trae `NODE_ENV="production"`. Copiado tal cual para local, la API se niega a arrancar (pide `APP_ENVIRONMENT_NAME`) y, si se la das, rechaza todo lo que no llegue por HTTPS. En local usa `NODE_ENV=development` y no definas `APP_ENVIRONMENT_NAME` (`config.ts`, `server.ts`, código). PREG-OPS-p8.
+**Ojo con `apps/api/.env.example`:** trae `NODE_ENV="production"`. Copiado tal cual para local, la API se niega a arrancar (pide `APP_ENVIRONMENT_NAME`) y, si se la das, rechaza todo lo que no llegue por HTTPS. En local usa `NODE_ENV=development` y no definas `APP_ENVIRONMENT_NAME` (`config.ts`, `server.ts`, código). PREG-108.
 
-El `.env.example` de la **raíz** es una plantilla vieja que la API no lee. PREG-OPS-p9.
+El `.env.example` de la **raíz** es una plantilla vieja que la API no lee. PREG-109.
 
 ## 4. Postgres local (receta de José)
 
@@ -118,7 +118,7 @@ SEED_ADMIN_PASS='<...>' SEED_DEV_PASS='<...>' pnpm db:seed     # tsx src/seed.ts
 
 | Script | Qué hace | Cuidado |
 |---|---|---|
-| `src/seed-chats.ts` | Crea chats de ejemplo | Usa una **fecha fija** (2026-06-27), contraria a la convención de abajo. PREG-OPS-p10 |
+| `src/seed-chats.ts` | Crea chats de ejemplo | Usa una **fecha fija** (2026-06-27), contraria a la convención de abajo. PREG-110 |
 | `src/seed-wpp.ts` | Copia `META_*` del `.env` a la primera organización (cifra con `WPP_TOKEN_ENC_KEY` si existe) | Teléfono de prueba fijo en el código |
 | Acción dev "crear ticket de prueba" (`POST /api/v1/dev/actions/create-test-ticket`, panel Configuración › Dev › Base de datos) | Un ticket con mensajes entrantes falsos, sin enviar nada por WhatsApp | Ponerle la fecha de hoy |
 
@@ -144,6 +144,6 @@ Los datos de prueba que José va a mirar (pedidos, tickets) van con la **fecha r
 
 | ID | Pregunta |
 |---|---|
-| PREG-OPS-p8 | `apps/api/.env.example` trae `NODE_ENV="production"`: ¿es intencional (plantilla para deploy) o se cambia a `development` para uso local? |
-| PREG-OPS-p9 | El `.env.example` de la raíz duplica variables con valores viejos y nada lo lee. ¿Se borra? |
-| PREG-OPS-p10 | `seed-chats.ts` usa la fecha fija 2026-06-27. ¿Se adapta a la fecha de hoy o se retira? |
+| PREG-108 | `apps/api/.env.example` trae `NODE_ENV="production"`: ¿es intencional (plantilla para deploy) o se cambia a `development` para uso local? |
+| PREG-109 | El `.env.example` de la raíz duplica variables con valores viejos y nada lo lee. ¿Se borra? |
+| PREG-110 | `seed-chats.ts` usa la fecha fija 2026-06-27. ¿Se adapta a la fecha de hoy o se retira? |

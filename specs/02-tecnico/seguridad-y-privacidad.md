@@ -23,7 +23,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 - **Detección de reutilización:** presentar un token ya revocado revoca **todos** los refresh tokens activos del usuario y responde 401 `TOKEN_REUSE_DETECTED` *(código; test `auth.test.ts › "detects refresh-token reuse: replaying a rotated-away cookie returns 401 TOKEN_REUSE_DETECTED and revokes the whole family"`)*.
 - **CSRF:** `/refresh` es la única ruta que se autentica por cookie; exige `X-Requested-With: XMLHttpRequest` (403 `CSRF_CHECK_FAILED` si falta). Un sitio ajeno no puede poner esa cabecera sin una preflight CORS que la lista de orígenes rechaza *(código; test `auth.test.ts › "rejects refresh with no X-Requested-With header -> 403 CSRF_CHECK_FAILED, even with a valid cookie"`)*. El resto de rutas usa `Authorization: Bearer`, que no es vulnerable a CSRF.
 - **Refresh con usuario u organización inactivos:** revoca ese token y responde 401. El refresh relee el rol desde la base *(código)*.
-- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). **Cambiar el rol no revoca nada.** Como `authenticate` no consulta la base, un access token ya emitido sigue valiendo hasta 15 min después de una desactivación o un cambio de rol *(código)*. Ver PREG-GEN-p10.
+- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). **Cambiar el rol no revoca nada.** Como `authenticate` no consulta la base, un access token ya emitido sigue valiendo hasta 15 min después de una desactivación o un cambio de rol *(código)*. Ver PREG-065.
 - Los refresh tokens revocados o vencidos de un usuario se borran en su siguiente login exitoso; no hay otra limpieza *(código)*.
 - `POST /auth/logout` exige un access token válido y revoca el refresh token de la cookie *(código)*.
 
@@ -58,8 +58,8 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 | Tope de emisión | 5 códigos por cuenta en 15 min, luego 429 `CODES_RATE_LIMITED` |
 | Código incorrecto | También suma al contador de bloqueo de la cuenta |
 
-- `REQUIRE_2FA` se lee con `z.coerce.boolean()`: cualquier texto no vacío, **incluido `"false"`**, lo enciende *(código)*. Ver PREG-GEN-p8.
-- `/login/verify-code` no mira `locked_until`: una cuenta bloqueada puede seguir gastando los intentos que le quedan al código vigente (como máximo 5) *(código)*. Ver PREG-GEN-p17.
+- `REQUIRE_2FA` se lee con `z.coerce.boolean()`: cualquier texto no vacío, **incluido `"false"`**, lo enciende *(código)*. Ver PREG-064.
+- `/login/verify-code` no mira `locked_until`: una cuenta bloqueada puede seguir gastando los intentos que le quedan al código vigente (como máximo 5) *(código)*. Ver PREG-066.
 
 **Política de contraseñas** (`lib/password.ts › passwordSchema`): mínimo 12 caracteres, con al menos una mayúscula, una minúscula y un número. Se aplica al crear usuarios, al resetear contraseñas y al crear una organización desde DevTools; **el login no la aplica**, para que sigan entrando cuentas anteriores a la política. Hash bcrypt de costo 12. No existe cambio de contraseña por el propio usuario: solo el reset que hace un admin o un dev *(código)*.
 
@@ -68,7 +68,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 - `middleware/auth.ts › authenticate` verifica el JWT y además **rechaza** cualquier token sin `userId` o sin `role`. Hoy los links de formulario son tokens opacos (ya no JWT), así que esta comprobación es defensa en profundidad *(código)*.
 - `requireRole(...roles)`: `dev` pasa **todas** las verificaciones de rol *(código)*.
 - Un admin nunca ve ni toca cuentas `dev`: listar, editar y resetear filtran `role != 'dev'` y responden 404 como si no existieran. Ni siquiera un dev puede crear otra cuenta `dev` por la API (el enum de creación no incluye `dev`) *(código)*.
-- **Brecha observada:** `tickets.ts › POST /` solo pide `authenticate` y hace *upsert* por `(org_id, phone)`. Con un teléfono que ya existe, **sobrescribe `customer_name`** del ticket, aunque renombrar un ticket con `PATCH /tickets/:id` es solo para admin. Cualquier rol, domiciliario incluido, puede hacerlo *(código, sin test)*. Ver PREG-GEN-p9.
+- **Brecha observada:** `tickets.ts › POST /` solo pide `authenticate` y hace *upsert* por `(org_id, phone)`. Con un teléfono que ya existe, **sobrescribe `customer_name`** del ticket, aunque renombrar un ticket con `PATCH /tickets/:id` es solo para admin. Cualquier rol, domiciliario incluido, puede hacerlo *(código, sin test)*. Ver PREG-067.
 
 ## 4. Aislamiento entre organizaciones
 
@@ -82,7 +82,7 @@ Regla general (principio 2): toda consulta filtra por `org_id` tomado del JWT (`
 | Factura pública | `filename` → fila `InvoiceLink` |
 
 - **Excepción deliberada:** las rutas de `dev.ts` aceptan un `orgId` explícito (`/dev/db`, `/dev/charges`, `/dev/actions/*`, `/dev/organizations`), porque `dev` es el operador de la plataforma y no un tenant *(código; test `dev-centro-mando.test.ts › "permite al dev consultar una organización distinta a la propia"`)*. Cada lectura de `/dev/db` queda auditada (`dev.db_read`).
-- Pero `inbox.ts › POST /:ticketId/erase-data` filtra por el `org_id` **del JWT del dev**, así que un dev solo puede borrar datos de tickets de su propia organización *(código)*. Ver PREG-GEN-p12.
+- Pero `inbox.ts › POST /:ticketId/erase-data` filtra por el `org_id` **del JWT del dev**, así que un dev solo puede borrar datos de tickets de su propia organización *(código)*. Ver PREG-042.
 - Hay tests de aislamiento en pedidos, multimedia, reenvío, Tomar lista, facturas, precios masivos y facturación (p. ej. `orders.test.ts › "GET /orders?fecha=X only returns orders for the requesting user org (multi-tenant isolation)"`).
 
 ## 5. Cifrado de credenciales de WhatsApp (`lib/crypto.ts`)
@@ -114,7 +114,7 @@ Verificación HMAC-SHA256 con el `META_APP_SECRET` global y comparación de tiem
 - **Topes contra el abuso de un link filtrado:** como máximo 3 pedidos nuevos por ticket y día desde el formulario (`MAX_FORM_ORDERS_PER_TICKET`), y 30 mensajes automáticos por ticket en 24 h (`MAX_AUTOMATED_FORM_MSGS_PER_DAY`). Pasado ese tope, la confirmación se guarda con `failed_reason` y no se envía *(código)*.
 - **Endurecimiento muerto** *(código)*:
   - `device_token` es obligatorio en las peticiones del formulario, pero **nunca se compara** con nada. `FormLinkSession` nunca se escribe (solo se borra) *(test `public.test.ts › "the link is not locked to whichever device opened/submitted it first …"`)*.
-  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Ver PREG-GEN-p11.
+  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Ver PREG-035.
 - Las rutas `GET` públicas no tienen límite propio (300/min por IP); con 160 bits de entropía en el token, adivinarlo no es viable *(inferido)*.
 
 ## 8. Validación y saneamiento de entradas
@@ -138,7 +138,7 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 | `ticket.erase_customer_data` | `routes/inbox.ts › POST /:ticketId/erase-data` |
 | `dev.db_read`, `dev.org_created`, `dev.cierre_reopened`, `dev.test_ticket_created`, `dev.charge_created`, `dev.charge_updated`, `dev.charge_deleted`, `dev.charge_status_changed` | `routes/dev.ts` |
 
-*(código)*. **No se auditan:** logout, bloquear o revocar links, "bloquear todos", cambios de productos y precios, empleados y `POST /dev/seed` (este solo deja un `warn` en el log). Los cambios de pedidos van a `order_history`, que es inmutable. Ver PREG-GEN-p15.
+*(código)*. **No se auditan:** logout, bloquear o revocar links, "bloquear todos", cambios de productos y precios, empleados y `POST /dev/seed` (este solo deja un `warn` en el log). Los cambios de pedidos van a `order_history`, que es inmutable. Ver PREG-098.
 
 ## 10. Transporte, cabeceras y sockets
 
@@ -158,7 +158,7 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 | Multimedia del chat | Nunca se guarda; solo el id de Meta (30 días) | `integraciones.md` §1.3 |
 | Supresión | Solo rol `dev`, con `POST /inbox/:ticketId/erase-data` (ver abajo) | `inbox.ts` *(test `inbox.test.ts › "anonimiza TODOS los pedidos del ticket …"`)* |
 
-- El aviso solo sale si la organización tiene `welcome_message` y no tiene `wpp_redirect_message`. Sin mensaje de bienvenida, el aviso nunca se envía. Los pedidos que el personal crea a mano no llevan consentimiento registrado (solo existe en el formulario) *(código)*. Ver PREG-GEN-p16.
+- El aviso solo sale si la organización tiene `welcome_message` y no tiene `wpp_redirect_message`. Sin mensaje de bienvenida, el aviso nunca se envía. Los pedidos que el personal crea a mano no llevan consentimiento registrado (solo existe en el formulario) *(código)*. Ver PREG-022.
 - La política publicada es una sola para toda la plataforma, con los datos de un único negocio escritos en el HTML *(código)*.
 
 **Qué hace la supresión** *(código)*: en una transacción, anonimiza **todos** los pedidos del ticket (`customer_name`, `client_contact_name`, `customer_phone`, `address`), borra los mensajes del chat, la revocación y la sesión del formulario, revoca las facturas y enmascara su `phone_last4`, y anonimiza el ticket (nombre, teléfono reemplazado por un valor aleatorio, `bsuid` y `raw_payload` en nulo, campos del link en blanco). Conserva `consent_given_at` como prueba del consentimiento previo. Deja la entrada `ticket.erase_customer_data`.
@@ -166,11 +166,11 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 **Qué NO borra** *(código, límites documentados en la propia ruta)*:
 - `order_history` (`value_before`/`value_after` con nombres, teléfonos o direcciones anteriores): es inmutable por reglas de PostgreSQL.
 - `OrderObservation` (texto libre del personal).
-- `Order.notes`, que puede contener texto del cliente o marcadores. Ver PREG-GEN-p13.
+- `Order.notes`, que puede contener texto del cliente o marcadores. Ver PREG-037.
 - Los PDF de factura en R2 (solo se revocan los links).
 - Lo que ya está en los respaldos diarios de la base (hasta que la regla de ciclo de vida del bucket los borre), en Meta y en los logs *(inferido)*.
 
-**Retención:** no hay ninguna purga automática de mensajes, `raw_payload`, pedidos, `audit_logs` ni códigos 2FA. La política publicada dice "solo el tiempo necesario" *(código)*. Ver PREG-GEN-p14.
+**Retención:** no hay ninguna purga automática de mensajes, `raw_payload`, pedidos, `audit_logs` ni códigos 2FA. La política publicada dice "solo el tiempo necesario" *(código)*. Ver PREG-097.
 
 ## 12. Límites de peticiones (`@fastify/rate-limit`)
 
@@ -202,13 +202,13 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 
 ## Pendientes
 
-- **PREG-GEN-p8** — `REQUIRE_2FA` usa `z.coerce.boolean()`, así que `REQUIRE_2FA=false` (texto) **lo activa**. ¿Corregir el parseo o documentar que la variable debe quedar vacía?
-- **PREG-GEN-p9** — `POST /tickets` (cualquier rol) sobrescribe el `customer_name` de un ticket existente, lo que esquiva el `PATCH` que es solo de admin. ¿Es intencional?
-- **PREG-GEN-p10** — Desactivar a un usuario o bajarle el rol no invalida su access token (hasta 15 min). ¿Se acepta o `authenticate` debe consultar `active`/`role`?
-- **PREG-GEN-p11** — `device_token`, `FormLinkSession` y `registerFailedLinkAttempt` son código muerto (se exigen o se comprueban, pero nada los activa). ¿Se borran o se reactivan?
-- **PREG-GEN-p12** — `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización?
-- **PREG-GEN-p13** — `erase-data` no limpia `Order.notes` (y no puede tocar `order_history`). ¿Se acepta, o hay que redactar las notas?
-- **PREG-GEN-p14** — No hay purga automática de datos personales (mensajes, `raw_payload`, pedidos, `audit_logs`). ¿Cuál es el plazo de retención según la política?
-- **PREG-GEN-p15** — La auditoría no registra bloqueos de links, "bloquear todos", cambios de catálogo y precios, empleados ni `/dev/seed`. ¿Hace falta?
-- **PREG-GEN-p16** — El aviso de privacidad depende de que exista `welcome_message` (y de que no haya `wpp_redirect_message`), y los pedidos creados a mano no registran consentimiento. ¿Basta para la Ley 1581?
-- **PREG-GEN-p17** — `/login/verify-code` no respeta `locked_until`. ¿Debe cortar también durante el bloqueo?
+- **PREG-064** — `REQUIRE_2FA` usa `z.coerce.boolean()`, así que `REQUIRE_2FA=false` (texto) **lo activa**. ¿Corregir el parseo o documentar que la variable debe quedar vacía?
+- **PREG-067** — `POST /tickets` (cualquier rol) sobrescribe el `customer_name` de un ticket existente, lo que esquiva el `PATCH` que es solo de admin. ¿Es intencional?
+- **PREG-065** — Desactivar a un usuario o bajarle el rol no invalida su access token (hasta 15 min). ¿Se acepta o `authenticate` debe consultar `active`/`role`?
+- **PREG-035** — `device_token`, `FormLinkSession` y `registerFailedLinkAttempt` son código muerto (se exigen o se comprueban, pero nada los activa). ¿Se borran o se reactivan?
+- **PREG-042** — `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización?
+- **PREG-037** — `erase-data` no limpia `Order.notes` (y no puede tocar `order_history`). ¿Se acepta, o hay que redactar las notas?
+- **PREG-097** — No hay purga automática de datos personales (mensajes, `raw_payload`, pedidos, `audit_logs`). ¿Cuál es el plazo de retención según la política?
+- **PREG-098** — La auditoría no registra bloqueos de links, "bloquear todos", cambios de catálogo y precios, empleados ni `/dev/seed`. ¿Hace falta?
+- **PREG-022** — El aviso de privacidad depende de que exista `welcome_message` (y de que no haya `wpp_redirect_message`), y los pedidos creados a mano no registran consentimiento. ¿Basta para la Ley 1581?
+- **PREG-066** — `/login/verify-code` no respeta `locked_until`. ¿Debe cortar también durante el bloqueo?

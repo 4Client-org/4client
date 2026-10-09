@@ -27,7 +27,7 @@ Si una afirmación se puede leer en cinco segundos en el código, no va. Si requ
 
 - `RN-<MOD>-nn` regla de negocio (por módulo). `BUG-nnn`, `DT-nnn` (deuda técnica), `PREG-nnn` globales y secuenciales. `CH-nnnn` cambio. `D-nn` decisión.
 - Un ID nunca se reutiliza. Lo obsoleto se tacha (`~~RN-X-03~~ → ver RN-X-07`).
-- Los pendientes nuevos que descubras en un módulo se anotan en su sección 3 con ID provisional (`PREG-<MOD>-p1`, `BUG-<MOD>-p1`, `DT-<MOD>-p1`); quien consolida asigna el ID global.
+- Los pendientes nuevos que descubras en un módulo se anotan en su sección 3 con ID provisional (`PREG-<MOD>-p1`, `BUG-<MOD>-p1`, `DT-<MOD>-p1`); quien consolida asigna el ID global y deja la trazabilidad en `03-plan/mapa-de-ids.md`.
 
 ## Verificación
 

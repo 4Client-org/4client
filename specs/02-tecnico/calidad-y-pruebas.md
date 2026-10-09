@@ -94,7 +94,7 @@ Se dispara con push y pull request hacia `main` y `dev` (las ramas `docs/`, `fea
 | `test` | `typecheck` | Servicio `postgres:16` con la base `fourclient_test`; `prisma migrate deploy`; `pnpm --filter api test` con solo `DATABASE_URL` y `JWT_SECRET` en el entorno |
 | `build` | `typecheck`, `test` | `prisma generate`, build de la API (`tsc`) y de la web (`VITE_API_URL` desde la variable del repositorio o un valor por defecto) |
 
-- CI no tiene `.env.test`, así que `META_WEBHOOK_VERIFY_TOKEN` no está definido en el job de test. Sin embargo, `webhook.test.ts › "GET verify handshake with correct hub.verify_token -> 200 returns the challenge string"` espera un token fijo que solo existe en el `.env.test` local *(código)*. Ver PREG-GEN-p20.
+- CI no tiene `.env.test`, así que `META_WEBHOOK_VERIFY_TOKEN` no está definido en el job de test. Sin embargo, `webhook.test.ts › "GET verify handshake with correct hub.verify_token -> 200 returns the challenge string"` espera un token fijo que solo existe en el `.env.test` local *(código)*. Ver PREG-100.
 - El despliegue no lo hace este workflow: Coolify y Cloudflare Pages construyen por su cuenta al recibir el push (ver `04-operacion/flujo-de-trabajo.md`).
 
 ## 6. Respaldo de la base (`.github/workflows/backup-prod-db.yml`)
@@ -113,15 +113,15 @@ Se dispara con push y pull request hacia `main` y `dev` (las ramas `docs/`, `fea
 - **RPO aproximado de 24 h:** lo que entre después del último respaldo se pierde si se pierde la base *(inferido)*.
 - No hay prueba de restauración automatizada ni un RTO documentado en el repo *(código)*.
 - Los PDF de facturas en R2 y los archivos locales `uploads/` no tienen respaldo propio *(código)*.
-- El comentario del workflow dice que el respaldo es independiente "del VPS/Cloudflare", pero el destino es R2, que es de Cloudflare. Ver PREG-GEN-p18.
-- Que el cliente sea la versión 18 sugiere que producción corre Postgres 18, mientras CI y la documentación del repo usan 16. Ver PREG-GEN-p19.
+- El comentario del workflow dice que el respaldo es independiente "del VPS/Cloudflare", pero el destino es R2, que es de Cloudflare. Ver PREG-099.
+- Que el cliente sea la versión 18 sugiere que producción corre Postgres 18, mientras CI y la documentación del repo usan 16. Ver PREG-092.
 
 ## 7. Requisitos no funcionales observados
 
 **Disponibilidad** *(inferido salvo lo marcado)*:
 - Una sola instancia de la API en un VPS con Coolify, sin alta disponibilidad. El despliegue arranca un contenedor nuevo, espera su health check y luego retira el viejo (`04-operacion/flujo-de-trabajo.md`); `start.sh` corre `prisma migrate deploy` antes de levantar el servidor *(código)*.
 - Mucho estado vive en memoria del proceso: contadores de límites (almacén por defecto de `@fastify/rate-limit`), salas de Socket.io (sin adaptador compartido), caché de modelos y enfriamientos de la IA. Correr más de una réplica rompería los eventos en vivo y multiplicaría los límites *(código)*.
-- El webhook responde 200 antes de procesar y descarta mensajes de más de 10 min, así que una caída larga pierde mensajes entrantes (`integraciones.md` §1.2, PREG-GEN-p1).
+- El webhook responde 200 antes de procesar y descarta mensajes de más de 10 min, así que una caída larga pierde mensajes entrantes (`integraciones.md` §1.2, PREG-032).
 - El contenedor corre con el usuario `node` (sin root) *(código, `Dockerfile`)*.
 
 **Límites de uso:** tabla completa en `seguridad-y-privacidad.md` §12 (global de 300/min por usuario o IP).
@@ -161,6 +161,6 @@ Antes de integrar, el resto de la verificación (tipos y builds) está en `04-op
 
 ## Pendientes
 
-- **PREG-GEN-p18** — El comentario del workflow de respaldo promete independencia de Cloudflare, pero el destino es R2. ¿Se acepta, o hace falta una segunda copia fuera de Cloudflare? ¿Cuál es el plazo de la regla de ciclo de vida?
-- **PREG-GEN-p19** — ¿Qué versión de Postgres corre en producción? El cliente de respaldo es la 18, mientras CI, `AGENTS.md` y la memoria del proyecto dicen 16.
-- **PREG-GEN-p20** — El job de test de CI no define `META_WEBHOOK_VERIFY_TOKEN`, pero el test del handshake lo necesita. ¿CI está pasando hoy? (No se pudo comprobar desde esta sesión.)
+- **PREG-099** — El comentario del workflow de respaldo promete independencia de Cloudflare, pero el destino es R2. ¿Se acepta, o hace falta una segunda copia fuera de Cloudflare? ¿Cuál es el plazo de la regla de ciclo de vida?
+- **PREG-092** — ¿Qué versión de Postgres corre en producción? El cliente de respaldo es la 18, mientras CI, `AGENTS.md` y la memoria del proyecto dicen 16.
+- **PREG-100** — El job de test de CI no define `META_WEBHOOK_VERIFY_TOKEN`, pero el test del handshake lo necesita. ¿CI está pasando hoy? (No se pudo comprobar desde esta sesión.)

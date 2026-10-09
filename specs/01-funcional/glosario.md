@@ -40,10 +40,10 @@ Vocabulario congelado: todas las specs usan estos términos. Si falta uno, se ag
 | **Cobro retroactivo** | Corregir un pedido cerrado "sin cobro" por error, marcándolo pagado después. | `cobro-retroactivo` |
 | **Día cerrado / caja cerrada** | Día congelado después del cierre. | `DailyClose`, `caja_cerrada` |
 | **Informe del día** | Reporte del administrador: totales, chats, papelera, créditos, cambios. | `dashboard.ts` |
-| **Zona roja** | Franja urgente del tablero: ticket con pedido abierto, o sin pedido tras 20 minutos. | `Swimlane.tsx` |
+| **Zona roja** | Franja urgente del tablero: un ticket con pedido abierto entra de inmediato; uno sin pedido, a los 20 minutos de su creación. | `Swimlane.tsx` |
 | **Observación** | Nota del personal sobre un pedido; solo su autor la edita. | `OrderObservation` |
 | **Historial** | Registro inmutable de cambios de un pedido. | `OrderHistory` |
-| **Factura** | PDF del pedido que se envía al cliente por WhatsApp con un link de 24 h. | `files.ts`, `InvoiceLink` |
+| **Factura** | PDF **del pedido** que se envía al cliente por WhatsApp con un link de 24 h. No es la factura de plataforma (cobro de 4Client al negocio) ni una factura electrónica DIAN. | `files.ts`, `InvoiceLink` |
 | **Cuenta banco** | Botón del chat que envía los datos bancarios del negocio. | plantilla `bank_account` |
 | **Plantillas de mensajes** | Textos editables por organización para los botones del chat. | `Organization.message_templates` |
 | **Cobro de plataforma** | Lo que 4Client le cobra a una organización (suscripción, onboarding, otro). No es factura electrónica DIAN. | `PlatformCharge` |
@@ -57,5 +57,33 @@ Vocabulario congelado: todas las specs usan estos términos. Si falta uno, se ag
 | **Bolsa** | Cada uno de los dos totales del cierre y del informe: efectivo y transferencia. | `totalEfectivo`, `totalTransferencia` |
 | **Foto del cierre** | Registro guardado del día cerrado (totales y decisiones). | `DailyClose` |
 | **Cerrado sin cobro** (estado) | Pedido cerrado y bloqueado sin pago registrado; resultado de la decisión "Cerrar sin cobro". | `locked`, `paid = false`, no crédito |
+
+| **Link de formulario** | Enlace temporal (40 hexadecimales, 24 h) que permite a un cliente armar su pedido sin cuenta. | `Ticket.form_link_token` |
+| **Pedido del formulario** | Pedido creado por el cliente desde el link; solo estos puede editar o borrar el cliente. | `source = 'form'` |
+| **Editable** | Pedido del formulario en estado nuevo, preparando o listo y sin bloquear: el cliente aún puede cambiarlo. | `editable` en `form-info` |
+| **Marcado por el cliente** | Rastro permanente de que el cliente agregó o cambió algo (campana roja en el pedido). | `added_by_client`, `client_modified` |
+| **Repetir último pedido** | Botón del formulario que carga los productos de un pedido anterior (sin precios). | `GET /public/last-order` |
+| **Pregunta de pago** | Mensaje automático "¿Efectivo o transferencia?" cuando el pedido del formulario no trae método. | `public.ts` |
+| **Chats WPP** | Bandeja con todos los chats de la organización y su búsqueda (solo admin y dev). | `InboxPanel`, `GET /inbox` |
+| **Sin leer** | Mensajes entrantes que el personal aún no atendió; se limpian al responder o al marcar atendido. | `Ticket.unread_count` |
+| **Última actividad** | Instante del último mensaje, entrante o saliente, que ordena la bandeja. | `Ticket.last_activity_at` |
+| **Reenviar** | Copiar un mensaje del chat a otros chats (1 a 20). | `POST /inbox/messages/:id/forward` |
+| **Multimedia del chat** | Imagen, audio, video, documento o ubicación de un mensaje; nunca se guarda, solo su id de Meta (30 días). | `media_url`, `MEDIA_EXPIRED` |
+| **Ticket manual** | Ticket creado por el personal en vez de por un mensaje entrante. | `POST /tickets` |
+| **isPastDay** | Condición de la interfaz: el pedido o chat es de un día anterior o su caja ya cerró; deshabilita Formulario, Cuenta banco y similares. | `TicketModal`, `DetallePedidoModal` |
+| **Cerrados/Cobrados** | Contador del informe: pedidos en estado cerrado (incluye los cerrados sin cobro y los crédito). | `entregados` en `dashboard.ts` |
+| **Bloqueo de cuenta** | Tras 5, 10 y 15 intentos fallidos de contraseña la cuenta se bloquea 5 min, 15 min y 1 h. | `locked_until` |
+| **2FA** | Código de 6 dígitos por correo; solo se pide al rol `dev` cuando `REQUIRE_2FA` está activo. | `LoginVerificationCode` |
+| **Aviso del día 1** | Franja que recuerda a los admins pagar la suscripción el primer día de cada mes. | `MainPage.tsx` |
+| **Existencia (Stock)** | Interruptor de un producto: hay o no hay; no lo desactiva. | `Product.in_stock` |
+| **Consultar** | Texto del catálogo para un producto sin precio. | `catalogImage.ts` |
+| **Canal** | Origen de un pedido: `whatsapp` o `call` (por llamada; hoy sin pantalla que lo cree). | `Order.channel` |
+| **Pedido bloqueado** | Pedido que ya no se edita (cobrado o cerrado sin cobro); distinto de estado `cerrado` solo en que `locked` es el candado. | `Order.locked` |
+| **Pendiente de confirmar** | Dirección provisional de un pedido sin dirección real; impide cobrar. | `address` |
+| **Campana** | Icono rojo del pedido cuando el cliente lo tocó desde el formulario. | `client_modified` |
+| **Link de factura** | Enlace de 24 h al PDF de un pedido: vivo, revocado o vencido. | `InvoiceLink` |
+| **Concepto (de cobro de plataforma)** | `suscripcion`, `onboarding` u `otro`. | `PlatformCharge.types` |
+| **Auditoría** | Registro de acciones sensibles de la plataforma (no de pedidos, que usan el historial). | `AuditLog` |
+| **DevTools / ticket de prueba** | Consola del rol `dev`; un ticket de prueba se crea ahí sin enviar nada por WhatsApp. | `DevSection`, `create-test-ticket` |
 
 Nota de etiquetas: el historial del pedido escribe "Efectivo" para `cash`, mientras la interfaz dice "Pagado en tienda".

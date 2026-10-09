@@ -107,7 +107,7 @@ Reglas para todos:
 
 ## d. Restaurar el backup de la base desde R2
 
-> **NO PROBADO.** Este procedimiento se escribió a partir de cómo funcionan `pg_dump`/`pg_restore` y del workflow de backup; nunca se ha ejecutado de punta a punta contra estos dumps. Antes de necesitarlo de verdad, hacer un simulacro con los pasos 1–5 (PREG-OPS-p11). **Nunca restaurar directamente sobre la base de producción.**
+> **NO PROBADO.** Este procedimiento se escribió a partir de cómo funcionan `pg_dump`/`pg_restore` y del workflow de backup; nunca se ha ejecutado de punta a punta contra estos dumps. Antes de necesitarlo de verdad, hacer un simulacro con los pasos 1–5 (PREG-111). **Nunca restaurar directamente sobre la base de producción.**
 
 **Síntoma:** pérdida o corrupción de datos en prod (borrado accidental, migración destructiva, base caída sin recuperación).
 
@@ -205,7 +205,7 @@ Extraer de `restore_check` las filas necesarias (`COPY (SELECT ...) TO STDOUT WI
 **Pasos (cambio de número):**
 1. Registrar el número nuevo en la misma cuenta de WhatsApp Business (si es otra cuenta, suscribir la app de Meta a ella, inferido) y anotar su **phone number id**.
 2. Configuración › Dev › WhatsApp › "Phone Number ID" (y token si cambió). El phone id es único entre organizaciones: si responde 409 `PHONE_ID_ALREADY_IN_USE`, ese número ya está en otra organización.
-3. El webhook enruta por phone id: desde ese momento lo que llegue al número viejo ya no entra a esta organización. Patrón usado en septiembre (commit `7de543c`): el número viejo queda en otra organización con `wpp_redirect_message` definido, que reemplaza toda la bienvenida por un único aviso ("este número cambió…") sin generar links. **No hay campo en la interfaz** para ese mensaje: se define con `PATCH /api/v1/config/wpp` (`{"wpp_redirect_message": "..."}`) autenticado en esa organización (PREG-OPS-p12).
+3. El webhook enruta por phone id: desde ese momento lo que llegue al número viejo ya no entra a esta organización. Patrón usado en septiembre (commit `7de543c`): el número viejo queda en otra organización con `wpp_redirect_message` definido, que reemplaza toda la bienvenida por un único aviso ("este número cambió…") sin generar links. **No hay campo en la interfaz** para ese mensaje: se define con `PATCH /api/v1/config/wpp` (`{"wpp_redirect_message": "..."}`) autenticado en esa organización (PREG-023).
 4. Los tickets de los clientes no cambian (son por teléfono del cliente).
 
 **Verificar:** mensaje de prueba desde el número de José → entra al tablero, llega la bienvenida, la respuesta desde el chat queda entregada y una foto del chat carga.
@@ -218,8 +218,8 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 
 | Secreto (nombre) | Dónde | Qué depende | Al rotar |
 |---|---|---|---|
-| `JWT_SECRET` | Coolify, por app | Access token (15 min) y autenticación del socket | Los access token vigentes dejan de valer, pero la web pide uno nuevo con el refresh token, que es un valor aleatorio guardado en `refresh_tokens`, no un JWT (`routes/auth.ts › issueSession`). **En la práctica nadie queda deslogueado** (PREG-OPS-p13). Para forzar cierre de sesión de todos: `DELETE FROM refresh_tokens;` |
-| `WPP_TOKEN_ENC_KEY` | Coolify, por app | Descifrar el token de WhatsApp de cada organización (`lib/crypto.ts`) | Con la clave nueva, los tokens `enc:v2:` existentes no se pueden descifrar y **todo envío falla** hasta re-cargarlos. `reencrypt-wpp-tokens.ts` **no sirve para rotar**: solo convierte filas en claro o `enc:v1:` usando la clave actual y salta las `enc:v2:`. Procedimiento: cambiar la clave, redeploy e inmediatamente volver a pegar el token de cada organización (runbook f, paso 2). PREG-OPS-p14 |
+| `JWT_SECRET` | Coolify, por app | Access token (15 min) y autenticación del socket | Los access token vigentes dejan de valer, pero la web pide uno nuevo con el refresh token, que es un valor aleatorio guardado en `refresh_tokens`, no un JWT (`routes/auth.ts › issueSession`). **En la práctica nadie queda deslogueado** (PREG-112). Para forzar cierre de sesión de todos: `DELETE FROM refresh_tokens;` (**escritura destructiva en prod**: solo con OK explícito de José, en una transacción y sabiendo que desloguea también al personal en turno; no probado) |
+| `WPP_TOKEN_ENC_KEY` | Coolify, por app | Descifrar el token de WhatsApp de cada organización (`lib/crypto.ts`) | Con la clave nueva, los tokens `enc:v2:` existentes no se pueden descifrar y **todo envío falla** hasta re-cargarlos. `reencrypt-wpp-tokens.ts` **no sirve para rotar**: solo convierte filas en claro o `enc:v1:` usando la clave actual y salta las `enc:v2:`. Procedimiento: cambiar la clave, redeploy e inmediatamente volver a pegar el token de cada organización (runbook f, paso 2). PREG-113 |
 | `META_APP_SECRET` | Coolify + app de Meta | Firma HMAC de cada webhook | Cambiarlo en Meta y en Coolify casi a la vez: mientras difieran, todos los webhooks se rechazan y no entran mensajes |
 | `META_WEBHOOK_VERIFY_TOKEN` | Coolify + configuración del webhook en Meta | Solo el handshake de verificación (GET) | Cambiar ambos y re-verificar el webhook en Meta |
 | Token de WhatsApp de cada organización | Base (cifrado), se carga por la interfaz | Envíos y multimedia | Runbook f |
@@ -248,7 +248,7 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 - Pedidos "pasados a mañana": siguen en el día siguiente, renumerados.
 - Tickets diferidos y la marca `caja_cerrada` de los pedidos.
 
-**Límite importante:** el cierre normal (`POST /api/v1/cierre`) solo acepta **la fecha de hoy** (`NOT_TODAY`). Reabrir un día pasado lo deja abierto **sin forma de volver a cerrarlo** desde la app. Usar esta acción solo el mismo día (PREG-OPS-p15).
+**Límite importante:** el cierre normal (`POST /api/v1/cierre`) solo acepta **la fecha de hoy** (`NOT_TODAY`). Reabrir un día pasado lo deja abierto **sin forma de volver a cerrarlo** desde la app. Usar esta acción solo el mismo día (PREG-005).
 
 **Pasos:** confirmar con el admin del negocio qué día y por qué; ejecutar la acción; avisar que deben volver a hacer el cierre al final del día.
 
@@ -317,8 +317,8 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 
 | ID | Pregunta |
 |---|---|
-| PREG-OPS-p11 | El procedimiento de restauración (d) nunca se probó. ¿Se agenda un simulacro? ¿Cuántos días retiene la regla de ciclo de vida del bucket de backups? |
-| PREG-OPS-p12 | El commit `7de543c` dice que `wpp_redirect_message` se puede editar "desde la UI de Configuración", pero la web no tiene ese campo. ¿Se agrega o queda solo por API? |
-| PREG-OPS-p13 | José indicó que rotar `JWT_SECRET` desloguea a todos; el código sugiere que no (el refresh token es opaco y vive en la base). ¿Cuál es el comportamiento deseado? |
-| PREG-OPS-p14 | No hay script para rotar `WPP_TOKEN_ENC_KEY` (descifrar con la vieja, cifrar con la nueva). ¿Se crea uno o el procedimiento manual del runbook g es suficiente? |
-| PREG-OPS-p15 | Reabrir un cierre de un día pasado lo deja abierto sin poder cerrarlo de nuevo (`NOT_TODAY`) y no desbloquea pedidos. ¿Es intencional? |
+| PREG-111 | El procedimiento de restauración (d) nunca se probó. ¿Se agenda un simulacro? ¿Cuántos días retiene la regla de ciclo de vida del bucket de backups? |
+| PREG-023 | El commit `7de543c` dice que `wpp_redirect_message` se puede editar "desde la UI de Configuración", pero la web no tiene ese campo. ¿Se agrega o queda solo por API? |
+| PREG-112 | José indicó que rotar `JWT_SECRET` desloguea a todos; el código sugiere que no (el refresh token es opaco y vive en la base). ¿Cuál es el comportamiento deseado? |
+| PREG-113 | No hay script para rotar `WPP_TOKEN_ENC_KEY` (descifrar con la vieja, cifrar con la nueva). ¿Se crea uno o el procedimiento manual del runbook g es suficiente? |
+| PREG-005 | Reabrir un cierre de un día pasado lo deja abierto sin poder cerrarlo de nuevo (`NOT_TODAY`) y no desbloquea pedidos. ¿Es intencional? |
