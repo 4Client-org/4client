@@ -48,19 +48,24 @@ export async function generateFormLinkUrl(
 }
 
 
-// Fija por ahora - una sola organización real hoy. Mismo valor que
-// apps/web/src/pages/ClientFormPage.tsx's PRIVACY_POLICY_URL (no hay forma
-// simple de compartir una constante entre ambos paquetes acá) - cuando haya
-// una segunda organización, ambas pasan a leer esto de Organization en la DB
-// en vez de una constante duplicada en cada lado.
-const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web/politica-privacidad.html';
+// La política vive en la propia web de 4Client (apps/web/public/legal/), en el
+// mismo dominio que el formulario - antes estaba en otro repo (GitHub Pages).
+// Se arma con el primer FRONTEND_URL, igual que el link del formulario, así
+// cada entorno (dev/prod) apunta a su propia copia. Sin extensión .html a
+// propósito: Cloudflare Pages redirige /x.html -> /x y un redirect dentro de un
+// mensaje de WhatsApp es un salto de más. Una sola organización real hoy: cuando
+// haya una segunda, esto pasa a leerse de Organization (política propia por negocio).
+const PRIVACY_POLICY_PATH = '/legal/politica-privacidad';
+function privacyPolicyUrl(): string {
+  return `${config.FRONTEND_URL.split(',')[0].trim()}${PRIVACY_POLICY_PATH}`;
+}
 
 // Security-audit finding (cumplimiento Ley 1581): sin esto, no quedaba registro
 // de QUÉ versión del texto de la política aceptó cada cliente - solo la fecha
 // (consent_given_at/consent_confirmed_at). Si el contenido de la política
 // cambia algún día, no había forma de saber si un consentimiento viejo sigue
 // siendo válido para el texto nuevo. Bump manual cada vez que cambie el
-// contenido publicado en PRIVACY_POLICY_URL.
+// contenido de apps/web/public/legal/politica-privacidad.html.
 export const PRIVACY_POLICY_VERSION = 'v1';
 
 // Ley 1581 de 2012 - aviso de privacidad, en cursiva (sintaxis de WhatsApp:
@@ -75,5 +80,5 @@ export function buildPrivacyNoticeMessage(): string {
   // real que un _ pegado justo al final de la URL la rompe (queda incluido
   // como si fuera parte del link, ej. "...html_" en vez de "...html"). La
   // URL queda sin cursiva, fuera del wrapping, a propósito.
-  return `_Al continuar usando este chat para tus pedidos, confirmas que conoces y aceptas nuestra Política de Privacidad:_ ${PRIVACY_POLICY_URL}`;
+  return `_Al continuar usando este chat para tus pedidos, confirmas que conoces y aceptas nuestra Política de Privacidad:_ ${privacyPolicyUrl()}`;
 }

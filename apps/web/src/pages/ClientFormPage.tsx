@@ -17,10 +17,10 @@ interface DayOrder {
 const UNIT_OPTIONS = ['Kilo', 'Libra', 'Unidad', 'Paquete', 'Bulto', 'Bandeja', 'Canasta', 'Pesos $'];
 const DEFAULT_UNIT = 'Kilo';
 
-// Fijo por ahora - una sola organización real hoy. Cuando haya un segundo
-// cliente en la plataforma, esto pasa a ser un campo de Organization (URL de
-// política propia por negocio) en vez de una constante compartida acá.
-const PRIVACY_POLICY_URL = 'https://4client-org.github.io/fruver-san-gabriel-web/politica-privacidad.html';
+// La política vive en esta misma web (public/legal/), mismo dominio que el
+// formulario. Una sola organización real hoy: cuando haya un segundo cliente,
+// esto pasa a ser un campo de Organization (política propia por negocio).
+const PRIVACY_POLICY_URL = '/legal/politica-privacidad';
 
 const STATUS_LABEL_CLIENT: Record<string, string> = {
   nuevo: 'Nuevo', preparando: 'Preparando', listo: 'Listo para entrega',

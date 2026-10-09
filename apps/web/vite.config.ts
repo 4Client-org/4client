@@ -24,6 +24,10 @@ export default defineConfig({
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
         ],
       },
+      // Páginas estáticas legales (public/legal/): sin esto, el fallback de
+      // navegación del service worker las reemplaza por la app (index.html) para
+      // quien ya la haya usado en ese navegador.
+      workbox: { navigateFallbackDenylist: [/^\/legal\//] },
     }),
   ],
   resolve: {

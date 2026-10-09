@@ -194,7 +194,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     // mensaje (buildPrivacyNoticeMessage) - por eso SÍ lleva una URL (la de la
     // política) y eso es a propósito.
     expect(outbound[0].text).toContain('Política de Privacidad');
-    expect(outbound[0].text).toContain('politica-privacidad.html');
+    expect(outbound[0].text).toContain('/legal/politica-privacidad');
     expect(outbound[0].wpp_message_id).toBeTruthy();
     expect(outbound[0].failed_reason).toBeNull();
 
@@ -237,7 +237,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(outbound[0].text).toContain('bienvenido');
     // ...pero el aviso de privacidad NO se repite - ya se le avisó antes.
     expect(outbound[0].text).not.toContain('Política de Privacidad');
-    expect(outbound[0].text).not.toContain('politica-privacidad.html');
+    expect(outbound[0].text).not.toContain('/legal/politica-privacidad');
 
     // La marca de "ya avisado" queda exactamente igual - no se pisa con un
     // timestamp nuevo por seguir mandando el resto del mensaje cada día.
