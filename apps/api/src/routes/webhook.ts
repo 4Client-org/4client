@@ -145,13 +145,15 @@ async function ingestMessage(
   // Día real (sin corte) - para un ticket que YA EXISTE, un mensaje nuevo lo
   // rueda a este día tal cual, sin importar la hora (ver más abajo).
   const realToday = new Date(localDateStr);
-  // Día de negocio SOLO para cuando el chat se CREA - pedido explícito: un
-  // chat nuevo que arranca entre las 9 p.m. y las 11:59:59 p.m. cuenta para
-  // MAÑANA, no para hoy (ver lib/businessDate.ts), así no queda enterrado en
-  // el tablero/informe de un día que para fines prácticos ya cerró. Un chat
-  // que YA EXISTÍA de antes (p.ej. escribió a las 6 a.m.) y vuelve a escribir
-  // a las 10 p.m. NO se corre a mañana - sigue en el día en que ya estaba.
-  const businessDateForNewTicket = businessDateForInstant(sentAt);
+  // Día de negocio SOLO para el primer mensaje REAL del día de este ticket
+  // (sea un ticket recién creado o uno de hace meses que hoy recién escribe) -
+  // pedido explícito: si ese primer contacto de hoy llega entre las 9 p.m. y
+  // las 11:59:59 p.m., cuenta para MAÑANA, no para hoy (ver lib/businessDate.ts),
+  // así no queda enterrado en el tablero/informe de un día que para fines
+  // prácticos ya cerró. Un segundo mensaje de HOY MISMO (p.ej. escribió a las
+  // 6 a.m. y vuelve a las 10 p.m.) NO se corre a mañana - ver `firstToday` más
+  // abajo, que es lo que decide cuál de las dos fechas se usa.
+  const businessDateForFirstMessageToday = businessDateForInstant(sentAt);
 
   // Real Bogota (UTC-5, no DST) calendar-day start, in an actual UTC instant - used
   // to decide whether this ticket's first_message_today_at is stale (from a
@@ -201,7 +203,7 @@ async function ingestMessage(
             org_id: org.id,
             phone,
             customer_name: name,
-            fecha: businessDateForNewTicket,
+            fecha: businessDateForFirstMessageToday,
             last_message_at: sentAt,
             first_message_today_at: sentAt,
             unread_count: 1,
@@ -231,10 +233,17 @@ async function ingestMessage(
         // so the board/informe pick it up wherever the conversation actually is now.
         // bsuid only ever gets SET here, never overwritten with null - once learned
         // for this ticket it stays, regardless of which identifier a later message uses.
+        //
+        // El corte de las 9 p.m. va por "primer mensaje REAL del día" (firstToday),
+        // no por si el ticket en sí es viejo o nuevo en la base - un ticket de hace
+        // meses cuyo primer contacto de HOY llega a las 9 p.m. también debe pasar a
+        // mañana, igual que uno recién creado. Si ya había un mensaje más temprano
+        // hoy (firstToday=false), esta no es la conversación arrancando - se queda
+        // en el día real, sin importar a qué hora llega esta réplica.
         t = await tx.ticket.update({
           where: { id: t.id },
           data: {
-            fecha: realToday,
+            fecha: firstToday ? businessDateForFirstMessageToday : realToday,
             deferred_to: null,
             unread_count: { increment: 1 },
             last_message_at: sentAt,

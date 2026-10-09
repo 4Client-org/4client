@@ -704,4 +704,40 @@ describe('webhook: corte de las 9 p.m. para el día del chat', () => {
     const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
     expect(ticket.fecha.toISOString().split('T')[0]).toBe('2026-03-11');
   });
+
+  // Caso real reportado: un ticket viejo (de hace meses) cuyo PRIMER mensaje
+  // de HOY llega a las 9 p.m. debe pasar a mañana igual que uno nuevo - el
+  // corte va por "primer mensaje real del día", no por si el ticket en sí
+  // es antiguo en la base.
+  it('un ticket viejo cuyo primer mensaje de hoy llega a las 9 p.m. sí se corre al día siguiente', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `5730015${Math.floor(Math.random() * 100000)}`;
+    // Mensaje de un día anterior - esto es lo que hace que el ticket ya exista.
+    const oldTs = bogotaUnix('2026-03-09', 10, 0, 0);
+    let nowSpy = vi.spyOn(Date, 'now').mockReturnValue(oldTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'hola hace días', `wamid.old-${randomUUID()}`, oldTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticketOld = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticketOld.fecha.toISOString().split('T')[0]).toBe('2026-03-09');
+
+    // Mismo ticket - hoy escribe por PRIMERA VEZ, a las 9 p.m.
+    const firstTodayAt9pmTs = bogotaUnix('2026-03-10', 21, 0, 0);
+    nowSpy = vi.spyOn(Date, 'now').mockReturnValue(firstTodayAt9pmTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'hola otra vez', `wamid.firsttoday9pm-${randomUUID()}`, firstTodayAt9pmTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticketToday = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticketToday.fecha.toISOString().split('T')[0]).toBe('2026-03-11');
+  });
 });
