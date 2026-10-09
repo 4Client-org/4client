@@ -328,7 +328,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(metaCalled).toBe(false);
   });
 
-  // The whole point of raw_payload: Railway's own log retention turned out too
+  // The whole point of raw_payload: the platform's own log retention turned out too
   // short to catch this exact glitch after the fact (confirmed live) - the
   // database is now the only durable place to see what Meta actually sent.
   it('every inbound message persists the ENTIRE webhook POST body verbatim in raw_payload - on the message always, and on the ticket only at creation time', async () => {

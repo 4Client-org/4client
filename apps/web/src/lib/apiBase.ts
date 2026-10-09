@@ -7,7 +7,7 @@
 // VITE_API_URL, if set, still wins - Vite bakes it in at BUILD time (import.meta.env
 // is a static replacement, not read live), so it must be left UNSET in Cloudflare
 // Pages for this to actually kick in on every deployment. It's still useful for local
-// dev (`apps/web/.env.local`, gitignored) to point at a local API instead of Railway.
+// dev (`apps/web/.env.local`, gitignored) to point at a local API instead of the deployed one.
 const PROD_API = 'https://api.4client.shop';
 const DEV_API = 'https://dev-api.4client.shop';
 

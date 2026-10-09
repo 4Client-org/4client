@@ -1,7 +1,7 @@
 import { buildExtractionPrompt, extractedItemsSchema, stripJsonFence, type Extractor } from './types.js';
 
 // Bounds each attempt so a slow/hanging candidate can't stretch the whole
-// request past Railway's own upstream timeout (see gemini.ts's comment -
+// request past the proxy's own upstream timeout (see gemini.ts's comment -
 // found live, applies to every provider that tries multiple candidates).
 const GENERATE_TIMEOUT_MS = 20_000;
 
@@ -18,7 +18,7 @@ interface OpenAiCompatibleConfig {
   model: string;
   // A function, not a plain value - config.<X>_API_KEY must be read at CALL
   // time, not when the module loads, so tests can set/delete it per-test (see
-  // test/ai-providers.test.ts) and so a key added via `railway variables --set`
+  // test/ai-providers.test.ts) and so a key added via the Coolify env vars
   // takes effect without restarting anything beyond the normal deploy.
   getApiKey: () => string | undefined;
   extraHeaders?: () => Record<string, string>;

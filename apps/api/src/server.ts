@@ -49,18 +49,18 @@ const fastify = Fastify({
   // Fastify version (it can't validate the immediate peer on its own), so this
   // trusts hop 0 explicitly via a function instead: only the X-Forwarded-For
   // entry appended by whoever is DIRECTLY connected over the raw socket is
-  // honored, nothing further back in the chain. On Railway the container never
-  // receives a direct internet connection - only Railway's own edge proxy ever
-  // connects to it - so hop 0 IS Railway's edge by construction, and anything a
-  // client puts earlier in the header is correctly ignored.
+  // honored, nothing further back in the chain. En Coolify el contenedor nunca
+  // recibe una conexión directa de internet - solo el proxy Traefik se conecta
+  // a él - así que hop 0 ES Traefik por construcción, y cualquier cosa que un
+  // cliente ponga antes en el header se ignora correctamente.
   trustProxy: (_address, hop) => hop === 0,
 });
 
-// Behind Railway's proxy (trustProxy trusts hop 0 only), req.protocol reflects
+// Behind Traefik (Coolify's proxy; trustProxy trusts hop 0 only), req.protocol reflects
 // the real X-Forwarded-Proto - safe to gate on directly, unlike NODE_ENV which
 // depends on the deploy platform's env vars actually being set correctly.
 fastify.addHook('onRequest', async (req, reply) => {
-  // Excludes /health - Railway's own healthcheck hits the container directly over
+  // Excludes /health - the platform's own healthcheck hits the container directly over
   // plain HTTP, bypassing the edge proxy that would set X-Forwarded-Proto: https.
   // Enforcing this there would make the platform mark deploys unhealthy.
   if (config.NODE_ENV === 'production' && req.protocol !== 'https' && req.url !== '/health') {

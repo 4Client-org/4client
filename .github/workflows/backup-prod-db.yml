@@ -1,6 +1,6 @@
 name: Backup Production Database
 
-# Runs completely independently of Railway/Cloudflare - if either of those has a
+# Runs completely independently of the VPS/Cloudflare - if either of those has a
 # problem (billing lapse, outage, accidental deletion), this backup already exists
 # somewhere else. That independence is the entire point; it must never be merged
 # into the app's own infra.
@@ -17,8 +17,8 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      # Ubuntu's default apt repo ships an older postgresql-client than Railway's
-      # Postgres 18 - pg_dump only guarantees compatibility when the client version
+      # Ubuntu's default apt repo ships an older postgresql-client than the
+      # Postgres server's - pg_dump only guarantees compatibility when the client version
       # is >= the server's, so this pulls the matching v18 client from the official
       # PGDG repo instead of whatever apt-get install postgresql-client would give.
       - name: Install matching postgresql-client

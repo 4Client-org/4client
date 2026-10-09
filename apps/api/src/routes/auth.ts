@@ -72,13 +72,13 @@ const DUMMY_HASH = '$2b$12$LzVFpXDW.jkMhGlXb2WiIeq3rAhnWPvVRqSRLCLdTT0W5HjCMfBtm
 // of the bcrypt compare itself - see its use below.
 const DUMMY_USER_ID = '00000000-0000-0000-0000-000000000000';
 
-// Frontend (Vercel) and backend (Railway) are different origins, so this cookie is
+// Frontend (Cloudflare Pages) and backend (Coolify) are different origins, so this cookie is
 // sent on cross-site fetches. SameSite=Strict/Lax is NEVER sent cross-site by
 // browsers - that silently broke refresh on every page reload, logging users out.
 // SameSite=None requires Secure, which requires HTTPS.
 //
 // This is derived from the actual request protocol (via trustProxy + X-Forwarded-Proto,
-// set by Railway's edge) instead of NODE_ENV - if NODE_ENV isn't explicitly set to
+// set by Traefik) instead of NODE_ENV - if NODE_ENV isn't explicitly set to
 // "production" in the deploy platform's env vars (easy to miss, defaults to
 // "development" in config.ts), basing this on NODE_ENV would silently reintroduce
 // the exact same cross-site cookie bug in a "production" deploy that just forgot
@@ -279,7 +279,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
 
     // Two gates, both must pass: config.REQUIRE_2FA (per-environment master
-    // switch, Railway env var) AND role === 'dev' (per-user - only the single
+    // switch, Coolify env var) AND role === 'dev' (per-user - only the single
     // 'dev' role account needs this extra step; admin/encargado/domiciliario
     // keep logging in exactly as before, in every environment). Explicit
     // instruction: 2FA is for one specific account, not a org-wide rollout -

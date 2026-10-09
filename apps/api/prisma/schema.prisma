@@ -208,7 +208,7 @@ model Ticket {
   // Set only when Meta's webhook delivered a message with an empty/missing sender
   // phone number (a rare, confirmed-real Meta-side glitch - webhook.ts now
   // persists the raw payload in raw_payload below, since Meta itself gives no
-  // way to look up what it sent after the fact, and Railway's own log
+  // way to look up what it sent after the fact, and the platform's own log
   // retention turned out too short to rely on for this). `phone` gets a random
   // unique placeholder ("no-<16 hex>") instead of staying empty, so this
   // ticket doesn't collide with a later, equally-broken message under the same
@@ -371,7 +371,7 @@ model TicketMessage {
   wpp_message_id String?  @unique @db.VarChar(200)
   // The exact webhook POST body Meta sent for THIS message (inbound only - an
   // outbound row is something WE generated, there's no "raw payload from Meta"
-  // to capture for it). Kept forever, not just logged - Railway's own log
+  // to capture for it). Kept forever, not just logged - the platform's own log
   // retention turned out too short to catch a rare glitch (a message arriving
   // with an empty sender phone number) after the fact, and Meta itself keeps
   // no delivery history at all. This is the only durable record of exactly

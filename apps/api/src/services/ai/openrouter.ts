@@ -5,7 +5,7 @@ import { discoverCandidateModels, dropFromCache, isPermanentModelError } from '.
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MODELS_URL = 'https://openrouter.ai/api/v1/models';
 // Bounds each attempt so a slow/hanging candidate can't stretch the whole
-// request past Railway's own upstream timeout (see gemini.ts's comment -
+// request past the proxy's own upstream timeout (see gemini.ts's comment -
 // found live, applies to every provider that tries multiple candidates).
 const GENERATE_TIMEOUT_MS = 20_000;
 
