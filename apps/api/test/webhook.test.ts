@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { buildTestServer, createTestOrg } from './helpers.js';
@@ -139,7 +139,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     await app.close();
   });
 
-  function messagePayload(phoneNumberId: string, from: string, text: string, waMsgId: string) {
+  function messagePayload(phoneNumberId: string, from: string, text: string, waMsgId: string, unixSeconds?: number) {
     return {
       object: 'whatsapp_business_account',
       entry: [{
@@ -150,7 +150,7 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
             messaging_product: 'whatsapp',
             metadata: { phone_number_id: phoneNumberId, display_phone_number: '' },
             contacts: [{ profile: { name: 'Cliente Nuevo' }, wa_id: from }],
-            messages: [{ from, id: waMsgId, timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }],
+            messages: [{ from, id: waMsgId, timestamp: String(unixSeconds ?? Math.floor(Date.now() / 1000)), type: 'text', text: { body: text } }],
           },
         }],
       }],
@@ -575,5 +575,133 @@ describe('webhook POST - incoming message triggers welcome + auto form-link send
     expect(inbound.media_url).toBe('https://maps.google.com/?q=4.6097,-74.0817');
     expect(inbound.text).toContain('Casa');
     expect(metaCalled).toBe(false);
+  });
+});
+
+// Pedido explícito: un chat que escribe de 9 p.m. (Bogotá) en adelante debe
+// contarse para el día SIGUIENTE en el tablero/informe, no para hoy - ver
+// lib/businessDate.ts. Construye el timestamp Unix exacto de cada caso a mano
+// (no Date.now()) para no depender de la hora real a la que corre el test.
+describe('webhook: corte de las 9 p.m. para el día del chat', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildTestServer();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  function messagePayload(phoneNumberId: string, from: string, text: string, waMsgId: string, unixSeconds: number) {
+    return {
+      object: 'whatsapp_business_account',
+      entry: [{
+        id: 'entry-1',
+        changes: [{
+          field: 'messages',
+          value: {
+            messaging_product: 'whatsapp',
+            metadata: { phone_number_id: phoneNumberId, display_phone_number: '' },
+            contacts: [{ profile: { name: 'Cliente Nuevo' }, wa_id: from }],
+            messages: [{ from, id: waMsgId, timestamp: String(unixSeconds), type: 'text', text: { body: text } }],
+          },
+        }],
+      }],
+    };
+  }
+
+  // Unix timestamp for a given Bogotá (UTC-5) wall-clock time on a fixed date.
+  function bogotaUnix(dateStr: string, hour: number, minute: number, second: number): number {
+    return Math.floor(Date.UTC(
+      Number(dateStr.slice(0, 4)), Number(dateStr.slice(5, 7)) - 1, Number(dateStr.slice(8, 10)),
+      hour + 5, minute, second,
+    ) / 1000);
+  }
+
+  // El guard anti-replay del webhook ("mensaje descartado por llegar con más
+  // de 10 minutos de retraso", ver webhook.ts) compara contra Date.now() REAL -
+  // así que para probar una hora de Bogotá concreta sin que el test dependa de
+  // a qué hora real corre, se congela Date.now() exactamente en ese instante
+  // (igual que "llegó un mensaje justo ahora, y ahora son las 9 p.m.").
+  it('20:59:59 cae en el mismo día; 21:00:00 y 23:59:59 caen en el día siguiente', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const cases: { label: string; hour: number; minute: number; second: number; expectedFecha: string }[] = [
+      { label: '20:59:59 -> mismo día (2026-03-10)', hour: 20, minute: 59, second: 59, expectedFecha: '2026-03-10' },
+      { label: '21:00:00 -> día siguiente (2026-03-11)', hour: 21, minute: 0, second: 0, expectedFecha: '2026-03-11' },
+      { label: '23:59:59 -> día siguiente (2026-03-11)', hour: 23, minute: 59, second: 59, expectedFecha: '2026-03-11' },
+    ];
+
+    for (const c of cases) {
+      const phone = `5730012${Math.floor(Math.random() * 100000)}`;
+      const ts = bogotaUnix('2026-03-10', c.hour, c.minute, c.second);
+      const payload = messagePayload(wppPhoneId, phone, 'hola', `wamid.cutoff-${randomUUID()}`, ts);
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(ts * 1000);
+      try {
+        const res = await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload });
+        expect(res.statusCode).toBe(200);
+      } finally {
+        nowSpy.mockRestore();
+      }
+      await new Promise((r) => setTimeout(r, 200));
+
+      const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+      expect(ticket.fecha.toISOString().split('T')[0], c.label).toBe(c.expectedFecha);
+    }
+  });
+
+  it('un ticket que ya existe hoy (escribió a las 10 a.m.) y recibe un mensaje a las 10 p.m. NO se corre a mañana - solo un ticket NUEVO se corre', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `5730013${Math.floor(Math.random() * 100000)}`;
+    // Primer mensaje temprano en el día (2026-03-10, 10 a.m.)
+    const morningTs = bogotaUnix('2026-03-10', 10, 0, 0);
+    let nowSpy = vi.spyOn(Date, 'now').mockReturnValue(morningTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'buenos días', `wamid.morning-${randomUUID()}`, morningTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticketMorning = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticketMorning.fecha.toISOString().split('T')[0]).toBe('2026-03-10');
+
+    // Segundo mensaje esa misma noche a las 10 p.m. - el ticket debe rodar a mañana
+    const nightTs = bogotaUnix('2026-03-10', 22, 0, 0);
+    nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nightTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'buenas noches', `wamid.night-${randomUUID()}`, nightTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticketNight = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticketNight.fecha.toISOString().split('T')[0]).toBe('2026-03-10');
+  });
+
+  it('un ticket NUEVO que arranca a las 10 p.m. sí se corre al día siguiente', async () => {
+    const org = await createTestOrg(app.prisma);
+    const wppPhoneId = `test-phone-${randomUUID()}`;
+    await app.prisma.organization.update({ where: { id: org.id }, data: { wpp_meta_phone_id: wppPhoneId, wpp_meta_token: 'test-token' } });
+    global.fetch = (async () => new Response(JSON.stringify({ messages: [{ id: `wamid.auto-${randomUUID()}` }] }), { status: 200 })) as any;
+
+    const phone = `5730014${Math.floor(Math.random() * 100000)}`;
+    const nightTs = bogotaUnix('2026-03-10', 22, 0, 0);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nightTs * 1000);
+    try {
+      await app.inject({ method: 'POST', url: '/api/v1/webhook', headers: { 'content-type': 'application/json' }, payload: messagePayload(wppPhoneId, phone, 'hola de noche', `wamid.newnight-${randomUUID()}`, nightTs) });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    const ticket = await app.prisma.ticket.findFirstOrThrow({ where: { org_id: org.id, phone } });
+    expect(ticket.fecha.toISOString().split('T')[0]).toBe('2026-03-11');
   });
 });

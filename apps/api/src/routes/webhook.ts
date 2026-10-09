@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { config } from '../config.js';
 import { MetaCloudProvider } from '../services/whatsapp/meta-cloud.js';
 import { buildPrivacyNoticeMessage } from '../lib/formLink.js';
+import { businessDateForInstant } from '../lib/businessDate.js';
 
 // Shared across every place a stored TicketMessage's media kind needs naming.
 type MediaType = 'image' | 'audio' | 'video' | 'document' | 'location';
@@ -141,7 +142,16 @@ async function ingestMessage(
   // so the ticket fecha matches what the frontend shows as "today"
   const localMs = sentAt.getTime() + (-5 * 60 * 60 * 1000);
   const localDateStr = new Date(localMs).toISOString().split('T')[0];
-  const todayLocal = new Date(localDateStr);
+  // Día real (sin corte) - para un ticket que YA EXISTE, un mensaje nuevo lo
+  // rueda a este día tal cual, sin importar la hora (ver más abajo).
+  const realToday = new Date(localDateStr);
+  // Día de negocio SOLO para cuando el chat se CREA - pedido explícito: un
+  // chat nuevo que arranca entre las 9 p.m. y las 11:59:59 p.m. cuenta para
+  // MAÑANA, no para hoy (ver lib/businessDate.ts), así no queda enterrado en
+  // el tablero/informe de un día que para fines prácticos ya cerró. Un chat
+  // que YA EXISTÍA de antes (p.ej. escribió a las 6 a.m.) y vuelve a escribir
+  // a las 10 p.m. NO se corre a mañana - sigue en el día en que ya estaba.
+  const businessDateForNewTicket = businessDateForInstant(sentAt);
 
   // Real Bogota (UTC-5, no DST) calendar-day start, in an actual UTC instant - used
   // to decide whether this ticket's first_message_today_at is stale (from a
@@ -191,7 +201,7 @@ async function ingestMessage(
             org_id: org.id,
             phone,
             customer_name: name,
-            fecha: todayLocal,
+            fecha: businessDateForNewTicket,
             last_message_at: sentAt,
             first_message_today_at: sentAt,
             unread_count: 1,
@@ -224,7 +234,7 @@ async function ingestMessage(
         t = await tx.ticket.update({
           where: { id: t.id },
           data: {
-            fecha: todayLocal,
+            fecha: realToday,
             deferred_to: null,
             unread_count: { increment: 1 },
             last_message_at: sentAt,
