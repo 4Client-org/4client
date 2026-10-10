@@ -82,7 +82,7 @@ Lista completa en `apps/api/src/config.ts › envSchema`. Se configuran en Cooli
 | `WPP_TOKEN_ENC_KEY` | Clave maestra (64 hex) para cifrar el token de WhatsApp de cada organización | ? | ✅ obligatoria |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` | Subida de facturas y cobros. Sin ellas se usa disco local del contenedor (se pierde en cada deploy) | ? | ✅ |
 | `RESEND_API_KEY` | Correo con el código de 2FA | ? | ? |
-| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | ? | ? (PREG-102) |
+| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | activo (José 2026-10-10: le pide el código) | activo (José 2026-10-10: le pide el código) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY` | Tomar lista (cadena de proveedores; Cerebras desactivado en código) | ? | ? |
 | `SENTRY_DSN` | Errores a Sentry | ? | ? |
 | `SEED_ADMIN_PASS`, `SEED_DEV_PASS` | Solo para sembrar datos; no deberían existir en prod | opc. | ✗ |

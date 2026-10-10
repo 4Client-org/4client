@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0021 — 2FA activo en dev y prod, bucket privado y corrección de pago por el administrador
+- **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-5`
+- **Qué cambió:** PREG-092, 095, 102 y 137 respondidas; nueva PREG-139 (lectura por confirmar); roadmap 25, 34 y 35 precisados y nuevos 41 y 42; `entornos-y-despliegue.md` anota `REQUIRE_2FA` activo en dev y prod; el checklist pide actualizar versiones al cambiar la infraestructura. Ningún código cambió.
+- **Por qué:** respuestas de José (2026-10-10).
+- **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `04-operacion/entornos-y-despliegue.md`, `_plantillas/checklist.md`, `00-estado-actual.md`.
+- **Obsoleto:** `entornos-y-despliegue.md` decía que el valor de `REQUIRE_2FA` por entorno era desconocido.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0020 — Respuestas de José: permisos, pago dividido, hora de corte y formulario
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-4`
 - **Qué cambió:** 12 PREG respondidas (007, 008, 010, 012, 025, 026, 027, 052, 074, 075, 137, 138); D-26 a D-28; roadmap 25 y 34 precisados y nuevos 36 a 40. Ningún código cambió.
 - **Por qué:** respuestas de José (2026-10-10).
 - **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
 - **Obsoleto:** nada (lo decidido es futuro).
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `9384279` · **Prod:** pendiente
 
 ### R-0019 — Más respuestas de José: cierre, crédito, edición de cobrados, aviso de privacidad
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-3` y `docs/respuestas-jose-3b`
