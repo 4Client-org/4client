@@ -197,7 +197,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-092 | **Respondida (roadmap 42):** se lee la versión real (VPS Manager, solo lectura) y se mantiene documentada. | GEN, OPS | Respondida | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
+| PREG-092 | **Respondida:** PostgreSQL 16.15 en dev y prod (VPS, 2026-10-10). | GEN, OPS | Respondida | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
 | PREG-093 | La sala `join:date` no la usa ningún emisor. ¿Se elimina o se planea usar? | GEN | Bajo | `02-tecnico/api-y-eventos.md` (Preguntas/Pendientes) |
 | PREG-094 | `order:updated` desde `tickets.ts › PATCH /:id` manda solo `{ id }` con `as any`. ¿Se ajusta el tipo o el emisor? | GEN | Bajo | `02-tecnico/api-y-eventos.md` (Preguntas/Pendientes) |
 | PREG-095 | **Respondida (roadmap 41):** el bucket no debe ser público; hay que revisarlo y servir los PDF solo por la aplicación. | GEN, FAC | Respondida | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
@@ -212,7 +212,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
 | PREG-101 | ¿El health check de Coolify usa `GET /health`, que no toca la base? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
-| PREG-102 | **Respondida:** el 2FA de `dev` está activo en dev y en prod (José 2026-10-10). El texto exacto del valor se lee antes del ítem 35 del roadmap. | OPS, ACC | Respondida | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
+| PREG-102 | **Respondida:** `REQUIRE_2FA=true` en dev y prod (VPS, 2026-10-10). | OPS, ACC | Respondida | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-103 | ¿Qué variables opcionales (Meta, R2, IA, Resend, Sentry) tiene cada app y dev y prod usan buckets de archivos distintos? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-104 | Con la GitHub App como fuente, ¿el auto-deploy de dev llega por el webhook manual o por la App? ¿Se elimina el webhook manual de prod? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-105 | ¿Cloudflare Pages construye vistas previas de ramas distintas de `dev` que hablarían con la API de prod? | OPS | Bajo | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |

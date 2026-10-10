@@ -125,7 +125,7 @@ flowchart LR
 - No hay prueba de restauración automatizada ni un RTO documentado en el repo *(código)*.
 - Los PDF de facturas en R2 y los archivos locales `uploads/` no tienen respaldo propio *(código)*.
 - El comentario del workflow dice que el respaldo es independiente "del VPS/Cloudflare", pero el destino es R2, que es de Cloudflare. Ver PREG-099.
-- Que el cliente sea la versión 18 sugiere que producción corre Postgres 18, mientras CI y la documentación del repo usan 16. Ver PREG-092.
+- El cliente de respaldo es la versión 18 y los servidores son Postgres 16.15 (lectura en el VPS, 2026-10-10): el cliente es más nuevo que el servidor, lo cual es normal para `pg_dump`. Ver PREG-092.
 
 ## 7. Requisitos no funcionales observados
 
@@ -187,5 +187,5 @@ Datos ficticios siempre (`@example.com`, `+57 300 000 0000`).
 ## Pendientes
 
 - **PREG-099** — El comentario del workflow de respaldo promete independencia de Cloudflare, pero el destino es R2. ¿Se acepta, o hace falta una segunda copia fuera de Cloudflare? ¿Cuál es el plazo de la regla de ciclo de vida?
-- **PREG-092** — ¿Qué versión de Postgres corre en producción? El cliente de respaldo es la 18, mientras CI, `AGENTS.md` y la memoria del proyecto dicen 16.
+- **PREG-092** — Respondida: producción y dev corren Postgres 16.15 (lectura en el VPS, 2026-10-10).
 - **PREG-100** — El job de test de CI no define `META_WEBHOOK_VERIFY_TOKEN`, pero el test del handshake lo necesita. ¿CI está pasando hoy? (No se pudo comprobar desde esta sesión.)
