@@ -5,7 +5,7 @@ import { normalizeSearch } from '../lib/normalize';
 
 const API = resolveApiBase();
 
-interface Product { id: string; name: string; category: string; unit_type?: string | null; }
+interface Product { id: string; name: string; category: string; unit_type?: string | null; in_stock?: boolean; }
 interface SelectedItem { product_name: string; quantity_label: string; productId: string; isManual?: boolean; }
 interface DayOrderItem { id: string; product_name: string; quantity_label: string; price: number; }
 interface LastOrderItem { product_name: string; quantity_label: string; available: boolean; }
@@ -38,27 +38,8 @@ function groupByCategory(products: Product[]) {
   return order.map(cat => ({ category: cat, products: groups[cat] }));
 }
 
-// Random value this browser generates once per link and keeps in localStorage -
-// there's no real "device identity" reachable from a web page, so this is the
-// closest available proxy. Kept and still sent on every request (backend still
-// records it against submitted/deleted orders for traceability), but the backend
-// no longer REJECTS a request over it - a link can be opened/used from more than
-// one device/browser at once (see public.ts's own comment on this).
-function getOrCreateDeviceToken(token: string): string {
-  const key = `4client_device_${token}`;
-  const fresh = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  try {
-    let dt = localStorage.getItem(key);
-    if (!dt) { dt = fresh(); localStorage.setItem(key, dt); }
-    return dt;
-  } catch {
-    return fresh(); // localStorage unavailable (private mode) - works for this load, just won't persist
-  }
-}
-
 export default function ClientFormPage() {
   const token = new URLSearchParams(window.location.search).get('t') ?? '';
-  const deviceToken = useMemo(() => getOrCreateDeviceToken(token), [token]);
   const draftKey = `4client_form_draft_${token}`;
   const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -139,7 +120,7 @@ export default function ClientFormPage() {
   // right after calling setProducts() here would still see the stale pre-update
   // value in the same tick (React state updates aren't synchronous).
   async function loadFormInfo(): Promise<{ orders: DayOrder[]; products: Product[] } | null> {
-    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
+    const qs = `t=${encodeURIComponent(token)}`;
     try {
       const [info, prods, lastOrderRes] = await Promise.all([
         fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()),
@@ -298,7 +279,7 @@ export default function ClientFormPage() {
   // stomps whatever the client is mid-typing.
   useEffect(() => {
     if (state !== 'catalog' || !token) return;
-    const qs = `t=${encodeURIComponent(token)}&device_token=${encodeURIComponent(deviceToken)}`;
+    const qs = `t=${encodeURIComponent(token)}`;
     const poll = () => {
       fetch(`${API}/api/v1/public/form-info?${qs}`).then(r => r.json()).then(info => {
         const orders: DayOrder[] = info?.data?.orders ?? [];
@@ -323,7 +304,7 @@ export default function ClientFormPage() {
     };
     const iv = setInterval(poll, 5000);
     return () => clearInterval(iv);
-  }, [state, token, deviceToken, mergeTarget]);
+  }, [state, token, mergeTarget]);
 
   const grouped = useMemo(() => groupByCategory(products), [products]);
   const searchLower = normalizeSearch(search);
@@ -508,7 +489,7 @@ export default function ClientFormPage() {
       const res = await fetch(`${API}/api/v1/public/order/${mergeTarget}/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, device_token: deviceToken }),
+        body: JSON.stringify({ token }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({} as { error?: string }));
@@ -561,7 +542,6 @@ export default function ClientFormPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
-          device_token: deviceToken,
           address: address.trim(),
           payment_method: paymentMethod || undefined,
           merge_order_id: mergeTarget && mergeTarget !== 'new' ? mergeTarget : undefined,
@@ -968,6 +948,13 @@ export default function ClientFormPage() {
                     <div style={{ fontSize: 15, fontWeight: isAdded ? 700 : 500, color: isAdded ? GREEN : '#111', display: 'flex', alignItems: 'center', gap: 5 }}>
                       {p.name}
                       {isAdded && <Check size={13} color={GREEN} />}
+                      {/* Agotado: solo se marca, se puede pedir igual (el encargado decide) */}
+                      {p.in_stock === false && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 800, letterSpacing: '.4px', color: '#B42318',
+                          background: '#FEE4E2', borderRadius: 6, padding: '2px 6px', flexShrink: 0,
+                        }}>NO HAY</span>
+                      )}
                     </div>
                     {p.unit_type && <div style={{ fontSize: 12, color: '#888', marginTop: 1 }}>{p.unit_type}</div>}
                   </div>

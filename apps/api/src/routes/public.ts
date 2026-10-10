@@ -7,6 +7,7 @@ import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 import { PRIVACY_POLICY_VERSION } from '../lib/formLink.js';
+import { calendarDateForInstant } from '../lib/businessDate.js';
 
 // Tope de confirmaciones automáticas por ticket (24 h): un link de formulario
 // filtrado no debe poder usarse para spamear al cliente desde el número del negocio.
@@ -57,22 +58,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   });
   fastify.options('*', async (_req, reply) => reply.status(204).send());
 
-  // Checked BEFORE token verification (no DB work needed) and given its own
-  // clear message+code, unlike the generic "link inválido" used for revoked/
-  // expired/device-mismatch - this isn't a security-sensitive reason to
-  // hide, and a legitimate customer deserves to know why instead of thinking their
-  // link is broken.
-  // Every other invalid-link reason (revoked/org-blocked/never-opened-in-
-  // time/unknown token) stays behind the same generic message on purpose - doesn't
-  // help an attacker learn which one it was. Wrong phone digits get their own message
-  // instead: that's the one case where the visitor might genuinely be the right
-  // customer who just mistyped, and a useless "link inválido" only pushes them to
-  // give up and ask staff to resend instead of just retrying the 4 digits.
+  // Every invalid-link reason (unknown/superseded token, revoked, org-blocked,
+  // expired after 24h) answers the same generic "Link inválido o expirado" on
+  // purpose - it doesn't help an attacker learn which one it was. The only
+  // exceptions are the two attempt-lockout messages below, which are dormant today.
   function sendInvalidToken(err: unknown, reply: FastifyReply) {
-    // 'ticket blocked'/'link attempts exceeded' below are dead in practice now
-    // (nothing calls registerFailedLinkAttempt anymore since the phone-digits check
-    // that used to trigger it is gone - see loadTicketByFormToken) but harmless to
-    // leave: if this ever gets re-enabled, the messaging is already here.
+    // 'ticket blocked'/'link attempts exceeded' below are dormant: nothing calls
+    // registerFailedLinkAttempt anymore (the phone-digits check that triggered it
+    // is gone), so they only fire for counter values already stored in the DB.
+    // Harmless to leave: if this ever gets re-enabled, the messaging is already here.
     if (err instanceof Error && err.message === 'ticket blocked') {
       return reply.status(403).send({
         error: 'Demasiados intentos incorrectos. Este chat quedó bloqueado temporalmente por seguridad. Intenta de nuevo en 24 horas o contáctanos directamente.',
@@ -109,9 +103,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   const FORM_LINK_ABSOLUTE_TTL_SECONDS = 24 * 60 * 60;
 
   // The link itself (an unguessable random token, DB-backed, time-limited,
-  // revocable) is the entire security boundary now - see git history for the
-  // phone_last4 digit-entry step this replaced, dropped because customers kept
-  // getting confused by it. GET /link-status calls this same function - a dead
+  // revocable) is the entire security boundary: there is no device lock and no
+  // phone-digits step (dropped because customers kept getting confused by it). GET /link-status calls this same function - a dead
   // link answers "is this link alive" identically whether or not the visitor has
   // gotten as far as form-info/products/submit.
   async function loadTicketByFormToken(token: string) {
@@ -124,9 +117,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     });
     if (!ticket) throw new Error('invalid token');
     if (ticket.revoked_form_token) throw new Error('revoked');
-    // Checked before anything token-specific below - a chat that hit
-    // MAX_ATTEMPTS_HARD wrong guesses is locked out entirely for TICKET_BLOCK_HOURS,
-    // even against a link issued after the block started.
+    // Dormant (see sendInvalidToken): only fires if link_blocked_until was already
+    // stored in the future; it would lock the chat out even against a newer link.
     if (ticket.link_blocked_until && ticket.link_blocked_until > new Date()) throw new Error('ticket blocked');
     // Ticket-wide, not specific to this token - a wrong guess against the
     // INVOICE link for this same ticket counts here too (files.ts), so hitting
@@ -186,6 +178,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     return { user: fallback, label: 'el sistema (formulario enviado automáticamente)', isAuto: true };
   }
 
+  // Día de los pedidos de este link: día calendario de Bogotá (sin corte de 21:00,
+  // es el concepto de Order.fecha, no el de Ticket.fecha) en que se EMITIÓ el link
+  // (form_token_min_iat, que generateFormLinkUrl estampa al crearlo; un reenvío crea
+  // un token nuevo y por tanto una fecha nueva). Sin ese dato (ticket viejo), el día
+  // de hoy en Bogotá, como antes.
+  function linkDayFor(ticket: { form_token_min_iat: Date | null }): Date {
+    return calendarDateForInstant(ticket.form_token_min_iat ?? new Date());
+  }
+
   // GET /api/v1/public/link-status?t=TOKEN - checked BEFORE the client ever sees the
   // catalog, so a dead link (blocked/expired/revoked) shows the same "Link inválido"
   // screen immediately instead of the form flashing content it's about to yank away.
@@ -205,10 +206,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/public/form-info?t=TOKEN&device_token=X - verifica token y devuelve
+  // GET /api/v1/public/form-info?t=TOKEN - verifica token y devuelve
   // info del cliente + sus pedidos activos de hoy
   fastify.get('/form-info', async (req, reply) => {
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
       const ticket = await loadTicketByFormToken(q.data.t);
@@ -221,7 +222,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       }
 
       // Colombia UTC-5 local date - same "today" the client's own submissions land on.
-      const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+      // Día del link (ver linkDayFor): el día calendario de Bogotá en que se envió el link.
+      const todayLocal = linkDayFor(ticket);
 
       // Only orders still in play today - cerrado (and papelera) are excluded outright,
       // not just marked non-editable. An order deferred INTO today (e.g. left open
@@ -264,15 +266,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/public/products?t=TOKEN&device_token=X - catálogo público (sin precios)
+  // GET /api/v1/public/products?t=TOKEN - catálogo público (sin precios)
   fastify.get('/products', async (req, reply) => {
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
       const ticket = await loadTicketByFormToken(q.data.t);
       const products = await fastify.prisma.product.findMany({
         where: { org_id: ticket.org_id, active: true },
-        select: { id: true, name: true, category: true, unit_type: true, sort_order: true },
+        select: { id: true, name: true, category: true, unit_type: true, sort_order: true, in_stock: true },
         orderBy: [{ category: 'asc' }, { sort_order: 'asc' }, { name: 'asc' }],
       });
       return reply.send({ data: sortByCategoryOrder(products) });
@@ -281,7 +283,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // GET /api/v1/public/last-order?t=TOKEN&device_token=X - the client's most
+  // GET /api/v1/public/last-order?t=TOKEN - the client's most
   // recent PAST order (not today's ACTIVE ones - form-info already covers
   // those), used by the opt-in "Repetir mi último pedido" button so a returning
   // customer doesn't have to retype everything. Only product_name/quantity_label
@@ -300,12 +302,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // listo/camino stays OUT of this - that one is what "editar pedido activo"
   // is for, not "repetir" (repetir copies items into a brand-new order).
   fastify.get('/last-order', async (req, reply) => {
-    const q = z.object({ t: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.query);
+    const q = z.object({ t: z.string().min(1) }).safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Token requerido', code: 'VALIDATION_ERROR' });
     try {
       const ticket = await loadTicketByFormToken(q.data.t);
 
-      const todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+      const todayLocal = linkDayFor(ticket);
       const lastOrder = await fastify.prisma.order.findFirst({
         where: {
           ticket_id: ticket.id, org_id: ticket.org_id,
@@ -370,7 +372,6 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   }, async (req, reply) => {
     const body = z.object({
       token: z.string().min(1),
-      device_token: z.string().min(1),
       // Required - a pedido without a delivery address can't actually be dispatched,
       // and staff kept having to chase clients down for it after the fact.
       address: z.string().trim().min(1, 'La dirección es obligatoria').max(500),
@@ -716,8 +717,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
 
     // ── New order path ──
-    // Colombia UTC-5 local date for fecha
-    let todayLocal = new Date(new Date(Date.now() - 5 * 3600000).toISOString().split('T')[0]);
+    // Fecha del pedido = día calendario de Bogotá (sin corte de 21:00) en que se
+    // ENVIÓ el link, no cuándo el cliente lo manda (ver linkDayFor).
+    let todayLocal = linkDayFor(ticket);
 
     // A client's own form submission has no idea whether staff already ran
     // cierre for today (e.g. closed early evening while the business was still
@@ -730,13 +732,20 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // forward one day mirrors exactly what cierre.ts's own "mañana" deferral
     // already does for a pending order at cierre time - this order genuinely
     // belongs to the next open business day, not a closed one.
-    const alreadyClosed = await fastify.prisma.dailyClose.findUnique({
-      where: { org_id_fecha: { org_id: ticket.org_id, fecha: todayLocal } },
-    });
-    if (alreadyClosed) {
+    // Si el día del link ya tiene cierre pasa al siguiente; se repite por si ese
+    // también estuviera cerrado (link enviado ayer y formulario enviado hoy).
+    let alreadyClosed = false;
+    for (let i = 0; i < 3; i++) {
+      const closed = await fastify.prisma.dailyClose.findUnique({
+        where: { org_id_fecha: { org_id: ticket.org_id, fecha: todayLocal } },
+      });
+      if (!closed) break;
+      alreadyClosed = true;
       const tomorrow = new Date(todayLocal);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
       todayLocal = tomorrow;
+    }
+    if (alreadyClosed) {
       // The ticket (chat) itself must move with its new order, or the board
       // shows two inconsistent things: the chat card sitting on today (wherever
       // the client's last WhatsApp message left it) with no order under it, and
@@ -749,8 +758,8 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // Cap NEW orders generated per form link, PER DAY - the token stays valid for 7
-    // days with no revocation, so without this a single leaked/shared link could
+    // Cap NEW orders generated per form link, PER DAY - a link stays valid 24h with
+    // no revocation, so without this a single leaked/shared link could
     // spam-create orders. Scoped to `fecha`, not the ticket's whole lifetime: a
     // ticket is one row per phone forever now (not per day, see schema.prisma), so a
     // lifetime cap meant any regular customer would eventually place their 4th-ever
@@ -950,12 +959,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // entirely (not an edit) via the form link. Same eligibility gate as everything
   // else the client can touch here (source==='form', still nuevo/preparando/listo,
   // not locked) - can't cancel an order staff typed up manually, or one already
-  // past the point of no return. Soft-deletes via the same 'papelera' status
-  // staff's own trash already uses (not a hard DELETE) - keeps the order/history
-  // for the audit trail. form-info's own `notIn: ['cerrado','papelera']` filter
-  // means the client's NEXT visit to this same link sees no active order for
-  // today and lands straight back in the fresh catalog form, same as a brand new
-  // customer - no special-casing needed there.
+  // past the point of no return. Soft-deletes by setting client_deleted (NOT
+  // the 'papelera' status: the order stays in its column, flagged, for staff to
+  // restore or leave - see the transaction below) - keeps the order/history for
+  // the audit trail. form-info excludes client_deleted orders, so the client's
+  // NEXT visit to this same link sees no active order and lands straight back in
+  // the fresh catalog form, same as a brand new customer.
   fastify.post('/order/:orderId/delete', {
     config: {
       rateLimit: {
@@ -969,7 +978,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     },
   }, async (req, reply) => {
     const { orderId } = req.params as { orderId: string };
-    const body = z.object({ token: z.string().min(1), device_token: z.string().min(1) }).safeParse(req.body);
+    const body = z.object({ token: z.string().min(1) }).safeParse(req.body);
     if (!body.success) return reply.status(400).send({ error: 'Datos inválidos', code: 'VALIDATION_ERROR' });
 
     let ticket: Awaited<ReturnType<typeof loadTicketByFormToken>>;
