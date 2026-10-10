@@ -57,17 +57,17 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-004 | **Respondida (roadmap 25 y 26):** con el día cerrado no se restaura ni se mueve nada; el crédito conserva fecha de creación y de pago pero no suma en ningún total (D-19). Queda por confirmar el cobro retroactivo y marcar crédito pagado (PREG-137). | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes); `modulos/ORD.md` (§ 3 Pendientes) |
 | PREG-005 | Reabrir un cierre solo borra `DailyClose`: no deshace `caja_cerrada`, bloqueos ni pasados a mañana, y un día pasado reabierto no se puede volver a cerrar (`NOT_TODAY`). ¿Es el uso esperado, se limpia al reabrir o se elimina la columna? | CAJ, PLT, GEN | Medio | `02-tecnico/datos-y-migraciones.md` (Preguntas/Pendientes); `04-operacion/runbooks.md` (Preguntas/Pendientes); `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-006 | **Respondida (D-19):** por ahora un crédito pagado no cuenta en ningún día. Se retoma si el cliente pide gestionarlos en el cierre. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-007 | Se puede marcar pagado un crédito que aún no está cerrado; el cierre ya no lo ve como pendiente ni lo suma. ¿Se exige que el pedido esté cerrado? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-008 | La API y la matriz de permisos dejan cerrar caja al encargado, pero la interfaz solo muestra el botón en 'Informe del día', que el encargado no ve. ¿Cuál es la intención? | CAJ, ACC | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-007 | **Respondida (D-26):** se deja como está. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-008 | **Respondida (roadmap 37):** solo el administrador cierra la caja; la API también lo debe rechazar a los demás. | CAJ, ACC | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-009 | **Respondida (D-24):** no es problema por ahora; se cierra cuando todo está listo. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-010 | La API cobra pedidos en papelera o eliminados por el cliente (solo la interfaz lo impide) y quedan fuera de los totales. ¿Debe rechazarlo la API? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-010 | **Respondida (roadmap 39):** la API no debe permitir cobrar pedidos en papelera o eliminados. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-011 | **Respondida (roadmap 25 y 34):** con el día cerrado no se edita nada; con el día abierto sí se puede y todo se recalcula y se actualiza en base y pantalla. El reparto de un pago dividido queda en PREG-138. | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 
 ## ORD — Pedidos
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-012 | El domiciliario ve botones (Guardar, Mover, observaciones, flechas, arrastre) que la API rechaza con 403. ¿Se ocultan para ese rol? | ORD, ACC | Medio | `modulos/ORD.md` (§ 3 Pendientes) |
+| PREG-012 | **Respondida (roadmap 38):** por ahora el domiciliario tiene los permisos del encargado. | ORD, ACC | Respondida | `modulos/ORD.md` (§ 3 Pendientes) |
 | PREG-013 | Los ítems se identifican por `product_name`: líneas con igual nombre se confunden en el historial y renombrar se registra como eliminar + agregar. ¿Es intencional? | ORD | Bajo | `modulos/ORD.md` (§ 3 Pendientes) |
 | PREG-014 | Ninguna pantalla crea pedidos `channel = 'call'` (sin ticket), aunque la API y el detalle los soportan. ¿Se mantiene el canal o es código heredado? | ORD, PLT | Bajo | `modulos/ORD.md` (§ 3 Pendientes); `modulos/PLT.md` (§ 3 Pendientes) |
 | PREG-015 | `GET/POST /orders` sin `fecha` usan el día UTC (entre 19:00 y 23:59 Bogotá ya es 'mañana') y una `fecha` inválida llega a la base. ¿Se alinea con Bogotá y se valida? | ORD, GEN | Medio | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `modulos/ORD.md` (§ 3 Pendientes) |
@@ -85,9 +85,9 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-022 | **Respondida (D-25):** el aviso va solo la primera vez que el cliente escribe en su historia; como está, está bien. | WPP, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-023 | `wpp_redirect_message` solo se cambia por API o base; ninguna pantalla lo muestra aunque desactiva la bienvenida. ¿Se agrega a Configuración/DevTools? | WPP, OPS | Medio | `04-operacion/runbooks.md` (Preguntas/Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-024 | En una falla de Meta cada primer mensaje deja una bienvenida con X roja y el aviso de privacidad se reintenta a diario, sin alertar a nadie. ¿Se agrega alerta o se deja de registrar el fallo automático? | WPP | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
-| PREG-025 | Entre las 21:00 y la medianoche, el chat queda en el tablero de mañana pero el pedido del formulario se crea con la fecha de hoy. ¿Es lo esperado? | WPP, FRM, ORD, DSH | Medio | `modulos/FRM.md` (§ 3 Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
-| PREG-026 | El segundo mensaje de la noche devuelve el chat al día real (hoy), contra lo que dice el commit 55de2fc. ¿Cuál es la intención? | WPP | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
-| PREG-027 | Un cliente que escribe a las 21:30 y a las 00:10 recibe dos bienvenidas para el mismo día de negocio. ¿Debe el 'primer mensaje del día' usar también el corte? | WPP | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
+| PREG-025 | **Respondida (roadmap 36):** el pedido del formulario toma el día calendario en que se envió el link. | WPP, FRM, ORD, DSH | Respondida | `modulos/FRM.md` (§ 3 Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
+| PREG-026 | **Respondida (D-28):** se deja así. | WPP | Respondida | `modulos/WPP.md` (§ 3 Pendientes) |
+| PREG-027 | **Respondida (D-28):** se deja así. | WPP | Respondida | `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-028 | Un mensaje después del cierre borra `deferred_to` y saca el chat del tablero de mañana. ¿Debe respetar el día cerrado? | WPP, CAJ | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-029 | 'Formulario enviado' se muestra aunque Meta rechace los mensajes (la API responde 201 antes de enviar). ¿Se acepta? | WPP, INB | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-030 | Los botones Formulario/Cuenta banco se desactivan en días pasados o con caja cerrada solo en la interfaz; la API envía siempre. ¿Debe la API aplicar la regla? | WPP, INB | Medio | `modulos/INB.md` (§ 3 Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
@@ -127,7 +127,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-052 | El producto agotado (`in_stock = false`) se puede pedir en el formulario del cliente; el aviso 'NO HAY' solo llega por el catálogo de WhatsApp. ¿Debe esconderse o marcarse? | FRM, CAT | Medio | `modulos/CAT.md` (§ 3 Pendientes); `modulos/FRM.md` (§ 3 Pendientes) |
+| PREG-052 | **Respondida (roadmap 40):** el formulario muestra "NO HAY" en los agotados. | FRM, CAT | Respondida | `modulos/CAT.md` (§ 3 Pendientes); `modulos/FRM.md` (§ 3 Pendientes) |
 | PREG-053 | Las rutas públicas ponen CORS `*` pero el plugin global ya rechaza orígenes no listados. ¿Cuál es la intención y qué cabecera gana? | FRM | Bajo | `modulos/FRM.md` (§ 3 Pendientes) |
 | PREG-054 | El tope de 30 mensajes automáticos por 24 h casi no limita (los enviados por personal no cuentan). ¿Se ajusta o se acepta con los otros límites? | FRM | Medio | `modulos/FRM.md` (§ 3 Pendientes) |
 | PREG-055 | La edición del formulario reemplaza los ítems sin transacción ni versión; dos pestañas pueden pisarse. ¿Se acepta? | FRM | Bajo | `modulos/FRM.md` (§ 3 Pendientes) |
@@ -164,8 +164,8 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-074 | 'Cerrados/Cobrados' cuenta pedidos cerrados sin cobrar (crédito sin pagar, cerrado sin cobro). ¿Se separan 'cobrados' de 'cerrados'? | DSH | Medio | `modulos/DSH.md` (§ 3 Pendientes) |
-| PREG-075 | 'Chats con pedidos completados' incluye créditos pendientes y cerrados sin cobro. ¿Es la intención? | DSH | Medio | `modulos/DSH.md` (§ 3 Pendientes) |
+| PREG-074 | **Respondida (D-27):** no se mueve nada. | DSH | Respondida | `modulos/DSH.md` (§ 3 Pendientes) |
+| PREG-075 | **Respondida (D-27):** no se mueve nada. | DSH | Respondida | `modulos/DSH.md` (§ 3 Pendientes) |
 | PREG-076 | El informe con `fecha` inválida da error de servidor y sin `fecha` usa el día UTC. ¿Se valida y se alinea con Bogotá? | DSH | Medio | `modulos/DSH.md` (§ 3 Pendientes) |
 | PREG-077 | El contador 'Cambios (N)' se corta en 300 sin avisar. ¿Se avisa o se pagina? | DSH | Bajo | `modulos/DSH.md` (§ 3 Pendientes) |
 | PREG-078 | El aviso/barra del día 1 sale a todo admin/dev haya pagado o no y no corresponde a ningún corte automático por impago. ¿Debe leer los cobros de plataforma y existe o se planea un corte? | DSH, PLT | Medio | `modulos/DSH.md` (§ 3 Pendientes); `modulos/PLT.md` (§ 3 Pendientes) |
@@ -257,7 +257,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-135 | La política publicada dice datos "protegidos con cifrado"; en el código solo se cifran los tokens de Meta. ¿Se ajusta el texto o se cifra más? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-136 | Sentry se inicializa sin filtro de datos personales (`beforeSend`) y recibe también los 4xx de validación. ¿Se filtra? | PLT | Medio | `04-operacion/observabilidad-y-continuidad.md` |
-| PREG-137 | **Parcialmente respondida:** pagar un crédito con el día cerrado sí se permite (roadmap 26). **Sigue abierto:** el cobro retroactivo (corregir cómo se cobró un pedido de un día cerrado) ¿se mantiene permitido o se bloquea? | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-138 | Si se edita un pedido ya cobrado con pago dividido (ej. $30.000 efectivo + $20.000 transferencia) y el total baja a $35.000, ¿cómo se reparte? Opciones: la encargada vuelve a indicar las partes, se reduce primero el efectivo, o se reparte proporcional. | CAJ, ORD | Alto | `03-plan/roadmap.md` (34) |
+| PREG-137 | **Respondida (roadmap 25):** con el día cerrado también queda bloqueado el cobro retroactivo; solo se pagan créditos y se deja una nota. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-138 | **Respondida (roadmap 34):** al modificar el pago, quien edita indica cuánto fue en cada método. | CAJ, ORD | Respondida | `03-plan/roadmap.md` (34) |
 
 Total: 138 preguntas (las respondidas por José están marcadas "Respondida").
