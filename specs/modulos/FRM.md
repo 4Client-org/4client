@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/public.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/lib/businessDate.ts, apps/web/src/pages/ClientFormPage.tsx, apps/web/public/legal/politica-privacidad.html, apps/api/test/public.test.ts]
 ---
 
@@ -11,6 +11,14 @@ fuentes: [apps/api/src/routes/public.ts, apps/api/src/lib/formLink.ts, apps/api/
 ## 1. Negocio
 
 **Propósito.** Que el cliente entregue su pedido (productos, dirección, método de pago) sin que el encargado lo transcriba del chat. El formulario nunca fija precios y nunca toca pedidos que armó el personal: todo lo que el cliente agrega o cambia queda marcado para que el encargado lo vea y le ponga precio.
+
+**Alcance y límites.**
+- *Incluye:* validar el link temporal; mostrar catálogo sin precios; crear, editar y borrar (marca `client_deleted`) el pedido del día del propio cliente; "repetir mi último pedido"; consentimiento Ley 1581 por envío; confirmación por WhatsApp; la página `ClientFormPage` y su borrador local.
+- *No incluye:* emitir, revocar o bloquear links y el aviso de privacidad en el chat (**INB**); el mensaje que lleva el link (**WPP**); poner precios, cobrar y numerar pedidos (**ORD**, **CAJ**); el congelamiento del día cerrado (**CAJ**); facturas (**FAC**); parseo con IA de mensajes (**IA**).
+
+**Dependencias.**
+- *De qué depende:* **INB** (genera y revoca el token del ticket), **ORD** (numeración `createOrderWithRetryNum`, estados), **CAJ** (`DailyClose` para pasar a mañana), **CAT** (catálogo activo), **FAC** (revoca `InvoiceLink` al editar), **WPP** (envío de la confirmación); servicio externo: WhatsApp Cloud API (Meta).
+- *Quién depende de él:* el tablero (**ORD**) muestra `client_modified`/`added_by_client`/`client_deleted`; **INB** muestra los mensajes de confirmación.
 
 **Permisos.** Es la fila "Cliente final" de `01-funcional/actores-y-permisos.md`: sin cuenta, solo sirve para su propio ticket. Emitir, revocar y bloquear links es de **INB** (aquí solo se describe lo que el formulario comprueba). La acción del cliente se atribuye en el historial al empleado que mandó el link (RN-FRM-19).
 
@@ -57,6 +65,19 @@ fuentes: [apps/api/src/routes/public.ts, apps/api/src/lib/formLink.ts, apps/api/
 
 - **RN-FRM-24 — Borrar su pedido.** `POST /order/:orderId/delete` (cuerpo `token` + `device_token`) solo borra un pedido propio con `source = 'form'`, estado `nuevo`/`preparando`/`listo` y sin bloquear. 404 `NOT_FOUND` si no es de su ticket; 400 `ALREADY_DELETED` si ya estaba borrado; 400 `NOT_EDITABLE` en cualquier otro caso. *(plataforma, código)*
 - **RN-FRM-25 — Qué hace el borrado.** Pone `client_deleted = true` y `client_modified = true` **sin cambiar el estado** (no es `papelera`: el pedido sigue en su columna, señalado en rojo), revoca las facturas vigentes y escribe historial `eliminado_cliente` ("Vía formulario del cliente"), todo en una transacción. Emite `order:updated`. El personal decide: **Restaurar** (limpia la marca) o dejarlo borrado. *(plataforma, código)*
+
+**Criterios de aceptación.** Archivo de tests: `apps/api/test/public.test.ts`.
+
+1. *Pedido nuevo.* Dado un link vivo y el catálogo con precios, cuando el cliente envía dirección, un producto y `consent: true` sin `merge_order_id`, entonces responde 201, el pedido queda `nuevo`, `source = 'form'`, método `sin_asignar` y la línea con `price = 0`. RN-FRM-08, 11, 21. `"POST /submit with no merge_order_id creates a new order (address required, payment optional), items not flagged as client-added"`
+2. *Sin consentimiento.* Dado un ticket que ya consintió antes, cuando envía sin `consent: true`, entonces 400 `CONSENT_REQUIRED` y no se crea nada. RN-FRM-10. `"POST /submit rejects with CONSENT_REQUIRED when consent is not sent as true - even on a ticket that already consented before"`
+3. *Link vencido o revocado.* Dado un link emitido hace más de 24 h (o revocado), cuando se abre cualquier endpoint público, entonces 401 `INVALID_TOKEN` idéntico en ambos casos. RN-FRM-01, 02. `"a link dies past the flat 24h cap, whether or not it was ever opened"`; `"after revoking, the previously-issued token is rejected on every public endpoint (fails closed)"`
+4. *Edición reemplaza la lista.* Dado un pedido del formulario en `nuevo` con dos ítems, cuando el cliente reenvía solo uno con otra cantidad, entonces el otro se borra, el que sigue conserva su precio, queda `added_by_client` y `client_modified`. RN-FRM-14, 16. `"POST /submit with merge_order_id replaces the order's items with the full submitted list (not append-only), flags only the new/changed line, and sets client_modified"`
+5. *Reenvío idéntico.* Dado un pedido ya enviado, cuando se reenvía exactamente igual, entonces 200 `unchanged: true` sin marcar `client_modified`. RN-FRM-15. `"resubmitting the exact same items/address/payment is a no-op - does not touch client_modified or items"`
+6. *Pedido del personal.* Dado un pedido creado por el personal en `nuevo`, cuando el cliente intenta fusionarlo, entonces 409 `ORDER_NOT_EDITABLE`, y `form-info` lo lista con `editable = false`. RN-FRM-05, 13. `"a pedido an encargado typed up manually (source !== \"form\") can never be merged into via the client form, even while it's otherwise in an editable status"`
+7. *Pedido en camino.* Dado un pedido que pasó a `camino` mientras el cliente editaba, cuando envía, entonces 409 y no se duplica. RN-FRM-13. `"POST /submit with a merge_order_id whose order became \"camino\" (out for delivery) while the client was editing is rejected with 409 - NOT silently duplicated as a new order"`
+8. *Día ya cerrado.* Dado un `DailyClose` de hoy, cuando el cliente crea un pedido nuevo, entonces el pedido y el ticket quedan con fecha de mañana. RN-FRM-18. `"POST /submit rolls the new order forward to TOMORROW if today already has a DailyClose - never lands on an already-closed day"`
+9. *Tope diario.* Dado un ticket con 3 pedidos del formulario de hoy, cuando envía un cuarto nuevo, entonces 429 `FORM_LIMIT_REACHED`; los de días anteriores no cuentan. RN-FRM-20. `"the per-link new-order cap only counts TODAY's form orders - old-day orders never count against it, and a fresh day resets it"`
+10. *Borrar.* Dado un pedido del formulario en `nuevo`, cuando el cliente lo borra, entonces queda `client_deleted` sin cambiar de estado y desaparece de `form-info`; borrarlo otra vez da 400 `ALREADY_DELETED`. RN-FRM-24, 25. `"marks client_deleted (status untouched, NOT papelera) on an editable order the client submitted, and it disappears from form-info afterward"`; `"rejects deleting the same order twice - 400 ALREADY_DELETED"`
 
 **Textos que ve el cliente final.** Pantalla de consentimiento ("Antes de continuar") con casilla y enlace a la política; errores de link (RN-FRM-01/03); errores de edición con el número de pedido (RN-FRM-13); confirmaciones por WhatsApp (RN-FRM-16, 22); "¿Efectivo o transferencia?" (RN-FRM-17).
 

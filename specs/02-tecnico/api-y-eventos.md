@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
 # API y eventos
+
+> **Resumen.** La API es REST bajo `/api/v1` (86 endpoints, 5 niveles de acceso) más Socket.IO para avisar a las pantallas abiertas. Los eventos son solo avisos: la web invalida su caché y vuelve a pedir los datos por HTTP.
 
 Catálogo completo de endpoints HTTP y eventos Socket.IO. Los parámetros y cuerpos de cada ruta están en su código (`apps/api/src/routes/<archivo>.ts`); aquí va quién puede llamarla, a qué módulo pertenece y para qué existe. Los códigos de error que devuelven están en `codigos-de-error.md`.
 
@@ -227,6 +229,22 @@ Eventos cliente → servidor: `join:org(orgId)` y `join:date(fecha)`. `MainPage`
 | `cierre:done` | `{ fecha }` | `cierre.ts › POST /` | `MainPage` (invalida todas las fechas) |
 | `product:changed` | `{ id }` o `{ bulk: true }` | `products.ts › POST /`, `PATCH /:id`, `DELETE /:id`, `PATCH /bulk-price` | `useProducts` |
 | `message-templates:changed` | sin payload | `config.ts › PUT /message-templates` | `useMessageTemplates` |
+
+Flujo típico (mensaje entrante de WhatsApp):
+
+```mermaid
+sequenceDiagram
+  participant M as Meta
+  participant A as API (webhook)
+  participant S as Socket.IO org:ID
+  participant W as Web (React Query)
+  M->>A: POST /webhook (firmado)
+  A-->>M: 200 { ok: true }
+  A->>A: guarda mensaje, sube no leídos
+  A->>S: ticket:message + ticket:unread
+  S-->>W: aviso (sin datos del chat)
+  W->>A: GET /inbox/... (refetch)
+```
 
 Reglas de uso:
 - **Los eventos son avisos, no datos.** Todos los oyentes solo invalidan consultas de React Query y vuelven a pedir por HTTP (claves en `arquitectura.md` §8). Por eso `tickets.ts` puede emitir `order:updated` con solo `{ id }` aunque el tipo diga `Order`. *(código)*

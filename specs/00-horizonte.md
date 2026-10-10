@@ -1,7 +1,7 @@
 ---
 estado: vigente
-actualizado: 2026-10-09
-verificado: 2026-10-09 @ 5d8e69d
+actualizado: 2026-10-10
+verificado: 2026-10-10 @ 1edb809
 fuentes: [conversación con José 2026-10-09, archivo/RoadMap/PLAN_IMPLEMENTACION_ORIGINAL.md, 01-funcional/vision-y-direccion.md]
 ---
 
@@ -24,8 +24,8 @@ Fruver San Gabriel usa el sistema todos los días: WhatsApp → ticket → formu
 
 ### Siguiente — Endurecer y preparar al segundo cliente *(supuesto)*
 - Quitar lo específico del primer cliente del código (cuenta bancaria en plantillas por defecto, logo y política de privacidad fijos).
-- Inicio de sesión con **nombre de usuario** en vez de correo, y **2FA también para administradores** *(José)*.
-- Que el **administrador de cada negocio** pueda borrar los datos de un cliente final (hoy solo `dev`) *(José)*.
+- Inicio de sesión con **nombre de usuario** en vez de correo (hoy el campo existe pero no sirve para entrar, `modulos/ACC.md`), y **2FA también para administradores** (hoy solo el rol `dev`, D-10) *(José)*.
+- Que el **administrador de cada negocio** pueda borrar los datos de un cliente final (hoy solo `dev`, D-17) *(José)*.
 - Alta de un negocio nuevo sin intervención manual de José (onboarding).
 
 ### Hardware: la báscula conectada *(José; también en el plan original)*
@@ -42,6 +42,10 @@ Hoy el trabajador **escribe a mano** el precio de cada línea. La visión es que
 - Tienda web pública para los clientes finales.
 - Inteligencia de negocio: clientes frecuentes, avisos de demora por WhatsApp, catálogo automático.
 - Generar el **PDF de la factura en el servidor** en vez del navegador, si conviene por consumo y eficiencia *(José, D-12)*.
+
+## Lo que el rumbo no puede romper
+
+Cualquier etapa debe respetar `00-principios.md`. Los que más a menudo chocan con las ideas de arriba: el total del pedido no se guarda (báscula, pagos), el historial es inmutable (pagos), todo se filtra por `org_id` (segundo cliente, panel de operador) y nada específico de un cliente va fijo en el código (segundo cliente).
 
 ## Cómo usar este archivo
 

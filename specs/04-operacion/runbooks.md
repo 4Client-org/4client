@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [Dockerfile, start.sh, .github/workflows/backup-prod-db.yml, apps/api/src/config.ts, apps/api/src/lib/crypto.ts, apps/api/src/routes/config.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/auth.ts, apps/api/src/update-org-wpp.ts, apps/api/src/reencrypt-wpp-tokens.ts, apps/api/prisma/schema.prisma]
 ---
 
 # Runbooks
+
+> **Resumen.** Diez procedimientos (a–j) para incidentes y operaciones delicadas. Todos siguen **síntoma → causa → pasos → verificar** y declaran su estado de prueba: solo (a) y (e) nacieron de incidentes reales, y (d), la restauración del respaldo, **nunca se ha ejecutado**. Producción tiene un cliente real: toda acción sobre ella va con OK de José.
 
 Procedimientos paso a paso para incidentes y operaciones delicadas. Formato: **síntoma → causa probable → pasos → verificar**. Infraestructura de fondo: [`entornos-y-despliegue.md`](entornos-y-despliegue.md). Proceso de git: [`flujo-de-trabajo.md`](flujo-de-trabajo.md).
 
@@ -13,20 +15,33 @@ Reglas para todos:
 - Consultas a la base de prod: **solo `SELECT`** salvo que el runbook diga otra cosa. Acceso: Coolify › recurso Postgres de prod › Terminal › `psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"`.
 - Aquí no se escriben IPs, valores de secretos ni identificadores internos de Coolify.
 
-## Índice
+## Índice y estado de prueba
 
-| | Runbook |
-|---|---|
-| a | El deploy automático no se dispara |
-| b | El build falla por red |
-| c | Rollback de API y web |
-| d | Restaurar el backup de la base desde R2 (**NO PROBADO**) |
-| e | WhatsApp: los mensajes salientes fallan con "Business eligibility payment issue" |
-| f | WhatsApp: token de Meta vencido o cambio de número |
-| g | Rotar secretos |
-| h | Reabrir un cierre de caja |
-| i | Borrar los datos de un cliente (Ley 1581) |
-| j | VPS: reiniciar servicios sin tumbar las apps |
+| | Runbook | Cuándo | Estado de prueba | Riesgo |
+|---|---|---|---|---|
+| a | El deploy automático no se dispara | Push sin deployment nuevo | Nació del incidente real del 2026-10-09; diagnóstico y corrección aplicados | Bajo |
+| b | El build falla por red | Deployment en rojo por descarga | *Inferido*: no hay incidente documentado más allá del caso general | Bajo |
+| c | Rollback de API y web | Un release rompe producción | **No probado**; el rollback de migración fallida es *inferido* de Prisma | Alto |
+| d | Restaurar el backup de la base desde R2 | Pérdida o corrupción de datos | **NO PROBADO** nunca de punta a punta (PREG-111) | Alto |
+| e | WhatsApp: "Business eligibility payment issue" | Salientes fallan, entrantes llegan | Nació del incidente real del 2026-10-07; la consulta SQL no se ha re-ejecutado | Medio |
+| f | WhatsApp: token vencido o cambio de número | Salientes con error de autenticación, o número nuevo | Cambio de número usado en septiembre (commit `7de543c`); token vencido *inferido* | Medio |
+| g | Rotar secretos | Filtración, salida de una persona, rotación | **No probado**; hay discrepancia sobre `JWT_SECRET` (PREG-112) | Alto |
+| h | Reabrir un cierre de caja | Cierre hecho por error | Acción `dev` con test (`dev-centro-mando.test.ts`) | Medio |
+| i | Borrar los datos de un cliente (Ley 1581) | Solicitud de supresión | Ruta con test (`inbox.test.ts`); el flujo humano no se ha ejecutado | Medio |
+| j | VPS: reiniciar servicios | Kernel pendiente o mantenimiento | **No ejecutado todavía** | Alto |
+
+```mermaid
+flowchart TD
+  X{¿Qué pasa?} -->|push sin deploy| A[a]
+  X -->|build rojo| B[b]
+  X -->|release rompió algo| C[c]
+  X -->|datos perdidos| D[d]
+  X -->|WhatsApp no envía| E{¿error de pago<br/>o de token?}
+  E -->|pago| E1[e]
+  E -->|token / número| F[f]
+  X -->|cierre por error| H[h]
+  X -->|supresión de datos| I[i]
+```
 
 ---
 
@@ -214,6 +229,8 @@ Extraer de `restore_check` las filas necesarias (`COPY (SELECT ...) TO STDOUT WI
 
 ## g. Rotar secretos
 
+**Síntoma / cuándo:** sospecha de filtración, salida de alguien con acceso, o rotación periódica (no hay síntoma visible). **Causa:** higiene de seguridad. **Estado:** no probado.
+
 Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Meta/Cloudflare. Un cambio de variable en Coolify requiere **redeploy** de la app para tomar efecto (inferido).
 
 | Secreto (nombre) | Dónde | Qué depende | Al rotar |
@@ -239,7 +256,7 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 
 **Síntoma:** el personal cerró la caja por error (o antes de tiempo) y necesita seguir trabajando ese día.
 
-**Herramienta:** acción dev `POST /api/v1/dev/actions/reopen-cierre` (`{orgId, fecha}`), en la web: Configuración › Dev › **Base de datos** › elegir organización › "Reabrir cierre de una fecha". Solo rol `dev`.
+**Causa:** error humano (cierre antes de tiempo). **Herramienta:** acción dev `POST /api/v1/dev/actions/reopen-cierre` (`{orgId, fecha}`), en la web: Configuración › Dev › **Base de datos** › elegir organización › "Reabrir cierre de una fecha". Solo rol `dev`.
 
 **Qué hace:** borra la fila `daily_closes` de esa fecha y guarda una foto completa de ella en `audit_logs` (`dev.cierre_reopened`). La app vuelve a considerar el día abierto (`routes/dev.ts`).
 
@@ -260,7 +277,7 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 
 **Síntoma:** un cliente final pide que se elimine su información (derecho de supresión).
 
-**Herramienta:** botón **Eliminar datos** en el chat del ticket o del pedido, visible y permitido solo para el rol `dev` (`POST /api/v1/inbox/:ticketId/erase-data`, `routes/inbox.ts`). Decisión: commit `1dce1d6`.
+**Causa:** derecho de supresión de la Ley 1581. **Herramienta:** botón **Eliminar datos** en el chat del ticket o del pedido, visible y permitido solo para el rol `dev` (`POST /api/v1/inbox/:ticketId/erase-data`, `routes/inbox.ts`). Decisión: commit `1dce1d6`.
 
 **Qué hace, en una transacción:**
 - Pedidos del ticket: se **anonimizan** (nombre "Cliente eliminado", sin contacto ni teléfono, dirección reemplazada). Número, productos y precios se conservan como soporte de la venta.
@@ -285,6 +302,8 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 ---
 
 ## j. VPS: reiniciar servicios sin tumbar las apps
+
+**Síntoma / cuándo:** kernel pendiente de aplicar (`/var/run/reboot-required`) o mantenimiento del servidor. **Causa:** actualización de sistema. **Estado:** nunca ejecutado.
 
 **Contexto (José, octubre 2026):** SSH solo con llave (`PasswordAuthentication no`, root solo con llave). El dashboard de Traefik está bloqueado desde fuera por una regla en `DOCKER-USER` (con `conntrack --ctorigdstport`) que re-aplica una unidad systemd después de `docker.service`. El dashboard de Coolify es público por HTTP (hay planes de restringirlo). Los contenedores tienen política de reinicio `unless-stopped`. El VPS lo comparten otros proyectos.
 

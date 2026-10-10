@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/vitest.config.ts, apps/api/test/globalSetup.ts, apps/api/test/helpers.ts, apps/api/test/*.test.ts, apps/api/package.json, apps/web/package.json, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/server.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations, Dockerfile, start.sh]
 ---
 
 # Calidad y pruebas
+
+> **Resumen.** Una sola suite (Vitest, 259 tests, API contra Postgres real); la web solo se verifica con tipos y build. CI corre typecheck, tests y build en cada push o PR a `dev`/`main`. El respaldo diario de la base es un workflow aparte. Los huecos conocidos están en §4 y los pendientes al final.
 
 Cómo se prueba el sistema, qué cubre y qué no la suite, qué corre en CI, cómo se respalda la base y qué requisitos no funcionales se observan en el código. Principio 11: toda regla de dinero, permisos o tenant necesita un test contra **Postgres real**; los servicios externos se simulan.
 
@@ -87,6 +89,15 @@ Conteo de bloques `it(` por archivo, hecho sobre el código: **20 archivos, 259 
 ## 5. CI (`.github/workflows/ci.yml`)
 
 Se dispara con push y pull request hacia `main` y `dev` (las ramas `docs/`, `feature/` y demás no lo disparan por sí solas). Node 20 y pnpm 10 *(código)*.
+
+```mermaid
+flowchart LR
+  PUSH[push / PR a dev o main] --> T[typecheck<br/>tsc api + web, pnpm audit]
+  T --> TE[test<br/>Postgres 16 + vitest]
+  T --> B[build<br/>api tsc + web vite]
+  TE --> B
+  B --> OK[verde: se puede integrar]
+```
 
 | Job | Depende de | Pasos |
 |---|---|---|

@@ -1,10 +1,43 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/auth.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/lib/crypto.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/routes/webhook.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/sanitize.ts, apps/api/src/lib/media.ts, apps/api/src/lib/audit.ts, apps/web/src/lib/csv.ts, apps/web/src/store/auth.ts, apps/web/public/_headers, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts, apps/api/test/public.test.ts, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
+> Ver también: `modelo-de-amenazas.md` (amenazas AM-nn), `datos-personales.md` (inventario, derechos, brechas) y `03-plan/riesgos.md` (RK-nn).
+
 # Seguridad y privacidad
+
+> **Resumen.** Sesión de 15 min con refresh rotativo en cookie, bloqueo por cuenta, 2FA solo para `dev`, aislamiento por `org_id` del JWT (404 y no 403), credenciales de Meta cifradas por organización, links públicos de 24 h con token opaco, y cumplimiento de la Ley 1581 con supresión solo por `dev`. Los puntos débiles conocidos están como PREG al final (§13).
+
+### Fronteras de confianza
+
+```mermaid
+flowchart LR
+  subgraph Internet[No confiable]
+    CF[Cliente final]
+    META[Meta]
+    ATK[Atacante / link filtrado]
+  end
+  subgraph Navegador[Navegador del personal]
+    WEB[PWA: token en memoria,<br/>perfil en sessionStorage]
+  end
+  subgraph Borde[Cloudflare]
+    PAGES[Pages + CSP]
+  end
+  subgraph VPS[VPS: zona de confianza]
+    TRF[Traefik: TLS, X-Forwarded-*]
+    API[API: JWT, roles, org_id,<br/>rate limit, HMAC]
+    DB[(Postgres)]
+  end
+  CF -->|link opaco 24 h<br/>+ consentimiento| API
+  META -->|HMAC SHA-256| API
+  ATK -.->|rate limit, 404 genérico| API
+  WEB -->|Bearer 15 min<br/>cookie rf + X-Requested-With| TRF --> API --> DB
+  PAGES --> WEB
+```
+
+Cada flecha entrante cruza una frontera donde la API valida: firma (Meta), token de link (cliente), JWT y rol (personal). Nada se confía por venir de la web propia.
 
 Cómo se autentica, se autoriza, se aísla cada organización y se protegen los datos personales. Complementa `01-funcional/actores-y-permisos.md` (qué rol puede qué) y `integraciones.md` (servicios externos). Nada aquí incluye claves, secretos ni datos reales.
 

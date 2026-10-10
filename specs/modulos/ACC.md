@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/hooks/useEmployees.ts, apps/web/src/components/ui/PasswordInput.tsx, apps/web/src/components/ui/Toast.tsx, apps/web/src/components/ui/ConfirmModal.tsx, apps/web/src/components/config/ConfirmDialog.tsx, apps/api/src/routes/auth.ts, apps/api/src/routes/users.ts, apps/api/src/routes/employees.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/plugins/socket.ts, apps/api/src/config.ts, apps/web/src/pages/LoginPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/hooks/useIdleLogout.ts, apps/web/src/components/config/UsersSection.tsx, apps/web/src/components/config/EmployeesSection.tsx, apps/web/src/components/config/ConfigTab.tsx, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts]
 ---
 
@@ -13,6 +13,14 @@ Este módulo es el **dueño funcional** de cuentas y sesión. La visión transve
 ## 1. Negocio
 
 **Propósito.** Que cada negocio (fruver) tenga su propio equipo con el rol justo, y que nadie ajeno entre. El dueño crea y desactiva cuentas sin pedir ayuda; el operador de la plataforma (`dev`) queda fuera del alcance del dueño.
+
+**Alcance y límites.**
+- *Incluye:* organizaciones como inquilino (aislamiento por `org_id`), usuarios y roles, empleados (domiciliarios sin login), login, refresh, logout, bloqueo por intentos, 2FA del `dev`, `authenticate`/`requireRole`, autenticación del socket, restauración de sesión y piezas de interfaz comunes (RN-ACC-26).
+- *No incluye:* alta de una organización y cuentas `dev` desde DevTools (PLT); qué puede hacer cada rol dentro de pedidos, caja o chat (cada módulo aplica `requireRole`; la matriz está en `actores-y-permisos.md`); cabeceras, cifrado, límites globales y auditoría general (`02-tecnico/seguridad-y-privacidad.md`); el token del link del formulario del cliente (FRM/INB).
+
+**Dependencias.**
+- *De qué depende:* PostgreSQL (`User`, `RefreshToken`, `LoginVerificationCode`); servicio de correo (código 2FA y aviso de bloqueo); variables de entorno `JWT_SECRET` y `REQUIRE_2FA`; `lib/audit.ts` (PLT).
+- *Quién depende de él:* todos los módulos (`authenticate` y `req.user.orgId`); ORD y sus modales (lista de domiciliarios); el socket de todos los módulos con eventos en vivo; PLT (crea organizaciones y primeros admins).
 
 **Permisos.** Filas "Usuarios (crear, editar, resetear contraseña)" y "Empleados (domiciliarios sin login)" de `01-funcional/actores-y-permisos.md`; ambas: admin y dev. Leer empleados (`GET /employees`) lo puede cualquier rol con sesión. Lo que esa tabla no dice y la **interfaz difiere de la API**:
 - La API acepta crear un usuario `admin`; el formulario solo ofrece Encargado y Domiciliario. Al editar, el rol `admin` de una fila existente se conserva como opción solo para no mostrar un desplegable vacío.
@@ -74,6 +82,19 @@ Un usuario nunca se borra: se desactiva. Un empleado tampoco: se desactiva y dej
 - **RN-ACC-24 — Qué pantalla sale según la dirección.** `App.tsx` no usa enrutador: `/form` muestra el formulario público del cliente (FRM) y `/factura` la factura (FAC), ambas **sin** intentar restaurar sesión; cualquier otra dirección intenta `tryRestoreSession` y muestra `MainPage` si hay token en memoria o `LoginPage` si no. Mientras se restaura la sesión no se muestra ninguna de las dos. *(plataforma, código)*
 - **RN-ACC-25 — Lista de domiciliarios en caché.** `useEmployees` pide `GET /employees` (todos los empleados activos) y la guarda 5 min (`staleTime`), a diferencia del resto de consultas de la web (30 s, `main.tsx`); alimenta los selectores de domiciliario de los modales de pedido. Un cambio hecho en Configuración puede tardar hasta 5 min en reflejarse en otra pestaña abierta. *(plataforma, código)*
 - **RN-ACC-26 — Piezas de interfaz comunes.** `PasswordInput` es el campo de contraseña con botón ojo para mostrarla u ocultarla (login, usuarios y la clave del cobro retroactivo). `Toast` muestra un aviso durante 2,8 s (rojo si es error); hay uno solo a la vez y un segundo aviso reemplaza el texto del primero pero no reinicia su temporizador. `ConfirmModal` (pedidos, chats, informe) es el diálogo de confirmación con la variante de "cambios sin guardar" de dos botones (descartar rojo, guardar verde); `ConfirmDialog` (Configuración, DevTools) es el diálogo simple Confirmar/Cancelar, con el botón rojo en Confirmar. *(plataforma, código)*
+
+**Criterios de aceptación.**
+
+1. *Dado* un usuario activo con la contraseña correcta, *cuando* inicia sesión, *entonces* recibe un access token y una cookie `httpOnly` de refresh. (RN-ACC-14; `auth.test.ts › "logs in with correct credentials -> 200, returns accessToken + user, sets rf cookie"`)
+2. *Dado* un email inexistente y otro con contraseña errónea, *cuando* ambos intentan entrar, *entonces* los dos reciben 401 `INVALID_CREDENTIALS` idéntico. (RN-ACC-11; `auth.test.ts › "rejects login with a nonexistent email using the SAME error code (timing-attack protection)"`)
+3. *Dado* una cuenta con 4 fallos, *cuando* falla un quinto intento y luego se envía la contraseña correcta, *entonces* recibe 429 `ACCOUNT_LOCKED` y el dueño recibe un correo. (RN-ACC-13; `auth.test.ts › "locks the account after 5 wrong passwords, notifies the owner by email, and rejects further attempts (even the RIGHT password) with 429 ACCOUNT_LOCKED"`)
+4. *Dado* un refresh token ya rotado, *cuando* se presenta de nuevo, *entonces* responde 401 `TOKEN_REUSE_DETECTED` y todos los refresh del usuario quedan revocados. (RN-ACC-14; `auth.test.ts › "detects refresh-token reuse: replaying a rotated-away cookie returns 401 TOKEN_REUSE_DETECTED and revokes the whole family"`)
+5. *Dado* `REQUIRE_2FA` activo, *cuando* entra un `dev`, *entonces* recibe `pending2fa` y un código por correo, y un admin o encargado entra directo. (RN-ACC-16; `auth-2fa.test.ts › "a \"dev\" role user gets pending2fa instead of a session, and a code email fires"` y `› "admin logs in directly, no 2FA prompt at all, even though REQUIRE_2FA is on"`)
+6. *Dado* un admin, *cuando* intenta desactivar su propia cuenta, *entonces* recibe 400 `SELF_DEACTIVATE`. (RN-ACC-06; *sin test*)
+7. *Dado* un admin y una cuenta `dev` de su organización, *cuando* lista usuarios o intenta editarla, *entonces* no aparece y la edición responde 404 `NOT_FOUND`. (RN-ACC-05; *sin test*)
+8. *Dado* un email ya usado en otra organización, *cuando* un admin crea un usuario con ese email, *entonces* recibe 409 `DUPLICATE_EMAIL`. (RN-ACC-02; *sin test*)
+9. *Dado* un usuario con sesiones abiertas, *cuando* un admin lo desactiva o le resetea la contraseña, *entonces* sus refresh tokens quedan revocados y su socket se desconecta; el reset además limpia el bloqueo. (RN-ACC-07, RN-ACC-09; *sin test*)
+10. *Dado* una contraseña de 8 caracteres, *cuando* un admin crea un usuario con ella, *entonces* recibe 400 `VALIDATION_ERROR` (se exigen 12 con mayúscula, minúscula y número). (RN-ACC-08; *sin test*)
 
 **Textos que ve el cliente final.** Ninguno. El único correo del módulo va al personal (código 2FA y aviso de bloqueo).
 

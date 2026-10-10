@@ -1,11 +1,26 @@
----
-estado: vigente
-verificado: 2026-10-09
----
-
 # Problemas conocidos
 
-Deuda técnica objetiva (`DT-nnn`: código muerto o duplicado, tests que faltan, comentarios desactualizados, hardcoding de un cliente) y defectos confirmados. Las preguntas que dependen de una decisión de José están en `preguntas-abiertas.md`. La correspondencia con los IDs provisionales está en `mapa-de-ids.md`.
+> **Resumen.** Lista de lo que está mal de forma objetiva o puede estarlo: ningún `BUG` confirmado, 42 deudas técnicas (`DT`), y 17 divergencias entre interfaz y API que esperan decisión de José. Cada fila lleva módulo e impacto. Las dudas de intención están en `preguntas-abiertas.md`; la correspondencia con IDs provisionales, en `mapa-de-ids.md`.
+
+## Cómo priorizar
+
+| Impacto | Criterio | Qué hacer |
+|---|---|---|
+| **Alto** | Dinero sin test, permisos o tenant sin test, datos de un cliente en otro, datos personales en el repo | Primero. Antes de un segundo cliente o de tocar ese módulo |
+| **Medio** | Cifras distintas según la pantalla, tests que faltan en un módulo no financiero, comentarios que prometen una defensa que no existe | Al tocar el módulo, en la misma rama |
+| **Bajo** | Código muerto, duplicados, comentarios viejos | Oportunista; nunca solo por limpiar si arriesga producción |
+
+Una DT con impacto Alto se resuelve con un test o un cambio clase C (principio 10 y 11). Una divergencia interfaz/API no se "arregla" sin que José diga cuál capa tiene razón (regla 4 de `AGENTS.md`).
+
+### Los Altos de un vistazo
+
+| ID | Resumen | Módulo |
+|---|---|---|
+| DT-001, DT-002 | Datos del primer cliente fijos en el código (rompen el principio 2) | WPP, PLT, FRM |
+| DT-003, DT-030 | Totales del cierre y del informe sin test | CAJ, DSH |
+| DT-010 | Reglas de tenant del webhook sin test | WPP |
+| DT-023 | Usuarios y empleados (permisos y tenant) sin test | ACC |
+| DT-033 | PDF de facturas versionados en git que podrían traer datos personales | FAC |
 
 ## Bugs confirmados
 
@@ -56,31 +71,31 @@ Ninguno todavía. José no ha confirmado ningún defecto: lo que parece mal est�
 | DT-039 | PDF huérfanos en R2: borrar un cobro no borra su PDF y `storage-test` deja archivos. | PLT, FAC | Bajo. |
 | DT-040 | Comentarios del schema sobre ventanas de link (10 min / 4 h) y `phone_last4` contradicen el vencimiento fijo de 24 h. | GEN | Bajo. |
 
-Total: 40 elementos de deuda técnica. `DT-001` y `DT-002` son las excepciones al principio 2 (multi-tenant estricto) que ya cita `00-principios.md`.
+Total: 40 elementos de deuda técnica en esta tabla (más DT-041 y DT-042 al final). `DT-001` y `DT-002` son las excepciones al principio 2 (multi-tenant estricto) que ya cita `00-principios.md`.
 
 ## Divergencias interfaz vs API
 
 Casos donde la interfaz y la API no aplican la misma regla. Hasta que José decida cuál es la correcta, el comportamiento documentado es el de cada capa.
 
-| ID | La interfaz | La API | Módulo |
-|---|---|---|---|
-| PREG-008 | Solo muestra 'Cerrar caja' en Informe del día (el encargado no lo ve) | El encargado puede cerrar caja | CAJ |
-| PREG-012 | Muestra Guardar, Mover, observaciones, flechas y arrastre al domiciliario | Responde 403 a todos esos | ORD |
-| PREG-010 | Impide cobrar pedidos en papelera o eliminados por el cliente | Los cobra | CAJ |
-| PREG-002 | La vista previa del cierre suma distinto (pago dividido, eliminados, créditos) | El cierre real aplica otra regla | CAJ |
-| PREG-030 | Desactiva Formulario/Cuenta banco en días pasados o con caja cerrada | Genera links y envía siempre | WPP, INB |
-| PREG-080 | Impide facturar pedidos cerrados, en papelera, sin ítems o cobrados | `POST /invoice` los acepta | FAC |
-| PREG-049 | Deja pulsar 'Tomar lista' en pedidos de solo lectura | Sin regla propia; no aparece 'Guardar' | IA |
-| PREG-047 | 'Tomar lista' activo desde el cierre de caja, sin manejadores | Extrae y el resultado se pierde | IA |
-| PREG-062 | Muestra desactivar en la fila propia | Responde 400 `SELF_DEACTIVATE` | ACC |
-| PREG-063 | Muestra y guarda el nombre de usuario | No sirve para iniciar sesión | ACC |
-| PREG-088 | 'Marcar pagado' no tiene vuelta atrás | Permite volver a `pendiente` | PLT |
-| PREG-091 | Oculta renombrar ticket (`RENAME_TICKET_UI_ENABLED = false`) | El admin puede renombrar | PLT, INB |
-| PREG-014 | Ninguna pantalla crea pedidos `channel = 'call'` | Acepta el canal | ORD, PLT |
-| PREG-023 | Ninguna pantalla muestra `wpp_redirect_message` | Lo devuelve y lo aplica | WPP |
-| PREG-052 | El formulario no distingue productos agotados | `in_stock` existe pero `/products` no lo envía | FRM, CAT |
-| DT-024 | Acepta contraseñas de 6 caracteres | Exige 12 con mayúscula, minúscula y número | ACC |
-| DT-013 | Muestra un aviso si `wpp_status === 'failed'` | Nunca devuelve ese valor | INB |
+| ID | La interfaz | La API | Módulo | Impacto |
+|---|---|---|---|---|
+| PREG-008 | Solo muestra 'Cerrar caja' en Informe del día (el encargado no lo ve) | El encargado puede cerrar caja | CAJ | Medio: el encargado puede cerrar caja por API aunque no vea el botón |
+| PREG-012 | Muestra Guardar, Mover, observaciones, flechas y arrastre al domiciliario | Responde 403 a todos esos | ORD | Medio: botones que fallan con 403 al domiciliario |
+| PREG-010 | Impide cobrar pedidos en papelera o eliminados por el cliente | Los cobra | CAJ | Medio: cobro de un pedido que la pantalla no deja cobrar |
+| PREG-002 | La vista previa del cierre suma distinto (pago dividido, eliminados, créditos) | El cierre real aplica otra regla | CAJ | Alto: la vista previa del cierre puede no coincidir con el cierre real (dinero) |
+| PREG-030 | Desactiva Formulario/Cuenta banco en días pasados o con caja cerrada | Genera links y envía siempre | WPP, INB | Bajo |
+| PREG-080 | Impide facturar pedidos cerrados, en papelera, sin ítems o cobrados | `POST /invoice` los acepta | FAC | Medio: facturas de pedidos que la pantalla no permite |
+| PREG-049 | Deja pulsar 'Tomar lista' en pedidos de solo lectura | Sin regla propia; no aparece 'Guardar' | IA | Bajo |
+| PREG-047 | 'Tomar lista' activo desde el cierre de caja, sin manejadores | Extrae y el resultado se pierde | IA | Bajo: resultado perdido |
+| PREG-062 | Muestra desactivar en la fila propia | Responde 400 `SELF_DEACTIVATE` | ACC | Bajo |
+| PREG-063 | Muestra y guarda el nombre de usuario | No sirve para iniciar sesión | ACC | Medio: el usuario cree que puede entrar con nombre de usuario |
+| PREG-088 | 'Marcar pagado' no tiene vuelta atrás | Permite volver a `pendiente` | PLT | Bajo |
+| PREG-091 | Oculta renombrar ticket (`RENAME_TICKET_UI_ENABLED = false`) | El admin puede renombrar | PLT, INB | Bajo |
+| PREG-014 | Ninguna pantalla crea pedidos `channel = 'call'` | Acepta el canal | ORD, PLT | Bajo |
+| PREG-023 | Ninguna pantalla muestra `wpp_redirect_message` | Lo devuelve y lo aplica | WPP | Medio: mensaje configurable que ningún admin puede ver |
+| PREG-052 | El formulario no distingue productos agotados | `in_stock` existe pero `/products` no lo envía | FRM, CAT | Medio: el cliente puede pedir un producto agotado |
+| DT-024 | Acepta contraseñas de 6 caracteres | Exige 12 con mayúscula, minúscula y número | ACC | Medio |
+| DT-013 | Muestra un aviso si `wpp_status === 'failed'` | Nunca devuelve ese valor | INB | Bajo |
 
 ## Nuevas (revisión de completitud, 2026-10-09)
 
@@ -88,3 +103,9 @@ Casos donde la interfaz y la API no aplican la misma regla. Hasta que José deci
 |---|---|---|---|
 | DT-041 | `update-org-wpp.ts` y `seed-chats.ts` traen el `slug`, un `phone_id` de Meta y la fecha `2026-06-27` escritos en el código, y nada impide correrlos contra producción | Parte de DT-002 (monoinquilino fijado) | PLT |
 | DT-042 | Los métodos de pago están repetidos en el tipo compartido, la lista de `public.ts`, los esquemas de `orders.ts` y varios modales; agregar uno obliga a tocar todos | Riesgo de olvidar un sitio | CAJ, ORD, FRM |
+| DT-043 | `Dockerfile` sin `HEALTHCHECK` y sin manejadores `unhandledRejection`/`uncaughtException`; Sentry no ve los rechazos de los `.catch` del webhook | Medio, observabilidad | PLT |
+| DT-044 | Backup R2 en la misma cuenta de Cloudflare que web, DNS y archivos; el workflow no verifica el objeto subido ni avisa si falla | Alto si se suspende la cuenta | PLT |
+| DT-045 | Sin inventario ni copia fuera de Coolify de secretos y variables por app | Medio, recuperación | PLT |
+| DT-046 | `downloadMedia` valida el host solo en la URL inicial; `fetch` sigue redirecciones sin revalidar | Bajo, por verificar | INB |
+| DT-047 | `AuditLog` sin regla de inmutabilidad y `LoginVerificationCode` nunca se purga; `wpp_meta_app_secret` sin cifrar (columna sin uso) | Bajo | PLT, ACC |
+| DT-048 | Clave de Gemini viaja en la URL; Actions fijadas por tag y sin Dependabot; `apps/api/uploads/` fuera de `.gitignore` (ver DT-033) | Bajo | PLT |

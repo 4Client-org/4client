@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/server.ts, apps/api/src/middleware/auth.ts, apps/api/src/routes/auth.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/config.ts, apps/api/src/routes/dev.ts, apps/web/src/lib/api.ts]
 ---
 
 # Catálogo de códigos de error
+
+> **Resumen.** Contrato de errores de la API: `code` estable en `SCREAMING_SNAKE`, mensaje en español que puede cambiar. Organizado por módulo (§1 genéricos, §2 cuentas, §3 pedidos y caja, §4 formulario y facturas, §5 chats e IA). Para diagnosticar un código visto en producción, ver también `04-operacion/diagnostico-de-incidentes.md`.
 
 Toda respuesta de error de la API tiene la forma `{ error: '<mensaje en español>', code: 'SCREAMING_SNAKE' }` (convención en `arquitectura.md` §9). La web lanza un `Error` con `code` y `data` (`apps/web/src/lib/api.ts`). Esta tabla lista los `code` que el código emite hoy; si agregas uno, agrégalo aquí. Los mensajes exactos viven en el código y pueden cambiar; el `code` es el contrato.
 
@@ -18,7 +20,7 @@ Toda respuesta de error de la API tiene la forma `{ error: '<mensaje en español
 | `FORBIDDEN` | 403 | `requireRole` con rol insuficiente; `POST /dev/seed` en producción | `middleware/auth.ts`, `dev.ts` |
 | `HTTPS_REQUIRED` | 400 | `NODE_ENV=production` y la petición no llegó por HTTPS (excepto `/health`) | `server.ts` |
 | `SERVER_ERROR` | 500 | Error no controlado sin `code` propio (en producción con mensaje "Error interno del servidor" si el status es 500 o más); también "No se pudo crear la organización" en `POST /dev/organizations` | `server.ts`, `dev.ts` |
-| `CONFLICT` | 409 | `POST /dev/tickets`: ya existe ese teléfono en la organización | `dev.ts` |
+| `CONFLICT` | 409 | `POST /dev/actions/create-test-ticket`: ya existe ese teléfono en la organización | `dev.ts` |
 
 Errores que llegan **sin `code` de 4Client**: los lanza Fastify o un plugin y el manejador global (`server.ts › setErrorHandler`) conserva su `statusCode` y usa `error.code ?? 'SERVER_ERROR'`. Ejemplos: `FST_ERR_CTP_EMPTY_JSON_BODY` (400, cuerpo JSON vacío con `Content-Type: application/json`) y el 429 del limitador de frecuencia: `@fastify/rate-limit` usa su respuesta por defecto (un `Error` con `statusCode` 429 y sin `code`), así que sale con `code: 'SERVER_ERROR'` y el mensaje "Rate limit exceeded, retry in …" *(código)*. Los topes están en `limites-y-tiempos.md`.
 

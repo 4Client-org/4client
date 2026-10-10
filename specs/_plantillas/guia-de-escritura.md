@@ -1,3 +1,8 @@
+---
+estado: vigente
+verificado: 2026-10-10 @ 1edb809
+---
+
 # Guía de escritura de specs
 
 Para quien escriba o actualice un archivo de `specs/` (persona o agente).
@@ -10,6 +15,14 @@ Una spec registra **intención, reglas, invariantes, flujos entre módulos, perm
 - Nada de resúmenes archivo por archivo.
 
 Si una afirmación se puede leer en cinco segundos en el código, no va. Si requiere leer tres archivos para entenderla, o es una decisión, sí va.
+
+## Estructura de un archivo
+
+- **Resumen arriba:** un párrafo con `> **Resumen.** …` justo después del título: qué cubre, qué decide y qué es lo más importante.
+- **Diagramas Mermaid** solo cuando aclaran lo que la prosa no: contexto y contenedores (`flowchart`), un flujo entre actores (`sequenceDiagram`), una máquina de estados real (`stateDiagram-v2`), un despliegue. Máximo uno o dos por archivo; no decorativos.
+- **Tablas** para listas de hechos comparables (límites, endpoints, variables, runbooks); prosa para el porqué.
+- **Pendientes al final:** solo el ID y una línea; el texto completo vive en `03-plan/`.
+- **Frontmatter:** `estado`, `verificado: AAAA-MM-DD @ sha` y `fuentes`.
 
 ## Reglas de estilo
 

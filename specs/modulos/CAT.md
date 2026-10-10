@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/products.ts, apps/api/src/lib/categoryOrder.ts, apps/api/src/routes/public.ts, apps/api/src/lib/matchProduct.ts, apps/web/src/components/config/ProductsSection.tsx, apps/web/src/lib/productExcel.ts, apps/web/src/lib/catalogImage.ts, apps/web/src/lib/categoryOrder.ts, apps/web/src/components/chat/EnviarCatalogoMenu.tsx, apps/web/src/hooks/useProducts.ts, apps/api/test/products-bulk-price.test.ts]
 ---
 
@@ -11,6 +11,26 @@ fuentes: [apps/api/src/routes/products.ts, apps/api/src/lib/categoryOrder.ts, ap
 ## 1. Negocio
 
 **Propósito.** Tener una sola lista de lo que se vende, con su precio de referencia y si hoy hay existencias, para (a) que el personal busque productos al armar un pedido, (b) que el cliente final los elija en el formulario y (c) mandarle por WhatsApp un catálogo con precios sin armarlo a mano. El precio del catálogo es solo una **referencia**: el precio real de cada línea de pedido lo escribe siempre el personal.
+
+**Alcance y límites.**
+
+| Dentro | Fuera |
+|---|---|
+| Lista de productos por negocio: nombre, categoría, unidad, precio de referencia, existencia, activo/desactivado. | Cualquier precio de línea de pedido: lo escribe siempre el personal (principio 3; ORD, CAJ). |
+| Carga y descarga de precios por Excel. | Crear o editar productos por Excel (solo se actualizan precios de ids existentes). |
+| Catálogo al cliente por el chat: una imagen por categoría o un producto por texto. | Fotos de productos, inventario con cantidades, precios por cliente o por volumen. |
+| Lectura de productos activos para el formulario público. | Mostrar precio o existencia al cliente dentro del formulario (RN-CAT-15). |
+| Aviso en vivo `product:changed`. | Historial de cambios de precio: no se guarda (PREG-068). |
+
+**Dependencias.**
+
+| Módulo | Relación |
+|---|---|
+| FRM | Lee `GET /public/products` (RN-CAT-15); los ítems del cliente nacen en $0. |
+| ORD | Busca productos al armar un pedido a mano; no copia el precio (RN-CAT-08). |
+| IA | `matchProduct.ts` resuelve nombres contra el catálogo; los precios quedan en 0. |
+| INB / WPP | El envío del catálogo usa el chat (`send-image`, `reply`); respeta el día pasado o cerrado. |
+| ACC | Define las pestañas de Configuración y el rol que escribe (RN-CAT-03). |
 
 **Permisos.** Filas "Leer productos, empleados, plantillas de mensajes" (todos los roles) y "Productos y catálogo (crear, editar, precios, Excel)" (admin y dev) de `01-funcional/actores-y-permisos.md`. Lo que esa tabla no dice:
 - Enviar el catálogo (imagen o un producto) lo puede cualquier rol con acceso al chat: usa `POST /inbox/:ticketId/send-image` y `/reply`, que solo piden sesión. El botón se deshabilita en días pasados.
@@ -46,6 +66,20 @@ fuentes: [apps/api/src/routes/products.ts, apps/api/src/lib/categoryOrder.ts, ap
 - **RN-CAT-13 — Imagen por categoría.** CUANDO el personal elige "Catálogo completo", la web DEBE dibujar y enviar **una imagen PNG por categoría** (en el orden de RN-CAT-02), una tras otra, con el nombre de la categoría como pie de foto; "Catálogo completo" no arma una sola imagen porque salía demasiado alta y la letra ilegible. También puede enviar una sola categoría. La imagen se dibuja en el navegador (no hay fotos de productos, decisión del usuario), mide 800 px de ancho, dos columnas, encabezado con el nombre del negocio y "Precios actualizados al <fecha de hoy del navegador>". Cada producto muestra `$precio/unidad` (unidad por defecto `kg`) o **"NO HAY"** en rojo si `in_stock` es falso, o **"Consultar"** si no tiene precio. Un precio `0` se muestra como `$0/kg`. Si el envío falla a mitad, las categorías ya enviadas no se retiran. *(plataforma, código)* *(sin test)*
 - **RN-CAT-14 — Un solo producto, por texto.** CUANDO el personal elige "Un producto…", busca por nombre (sin tildes ni mayúsculas, máximo 8 resultados) y la web DEBE enviar un mensaje de texto `Nombre: $precio/unidad`, `Nombre: NO HAY` (sin existencia) o `Nombre: Consultar/unidad` (sin precio). Usa la lista que ya tiene cargada el navegador. *(plataforma, código)* *(sin test)*
 - **RN-CAT-15 — El formulario del cliente no recibe precio ni existencia.** Siempre `GET /public/products` entrega solo id, nombre, categoría, unidad y orden de los productos activos. Un producto con `in_stock = false` sigue seleccionable por el cliente y su línea nace en $0 como todas (PREG-052). *(plataforma, código)* *(sin test)*
+
+**Criterios de aceptación.**
+
+| # | Escenario | Reglas | Test |
+|---|---|---|---|
+| 1 | Dado un administrador y un catálogo con ids propios y ajenos, cuando carga precios en lote, entonces se actualizan solo los ids propios en una transacción y los ajenos o inexistentes salen en `notFound`. | RN-CAT-10 | `products-bulk-price.test.ts › "updates price_per_unit for every id belonging to this org, ignores an id from another org and a nonexistent id, and reports both as notFound"` |
+| 2 | Dado un encargado, cuando intenta cargar precios en lote, entonces recibe 403 y nada cambia. | RN-CAT-03 | `products-bulk-price.test.ts › "rejects a non-admin role (encargado)"` |
+| 3 | Dado un lote con un precio negativo o sin filas, cuando se envía, entonces responde 400 `VALIDATION_ERROR` y no toca la base. | RN-CAT-10 | `products-bulk-price.test.ts › "rejects an update with a negative price (schema validation, never reaches the DB)"`; `› "rejects an empty updates array"` |
+| 4 | Dado un producto desactivado, cuando cualquier rol pide la lista, entonces no aparece (ni en el formulario del cliente). | RN-CAT-01, 04, 15 | (sin test) |
+| 5 | Dado un producto sin existencia (`in_stock = false`), cuando el personal envía el catálogo, entonces se anuncia "NO HAY", pero sigue en la lista y en el formulario. | RN-CAT-05, 13 | (sin test) |
+| 6 | Dado un producto con precio de referencia, cuando el cliente arma su pedido por el formulario o el personal usa Tomar lista, entonces la línea nace en $0. | RN-CAT-08 | (sin test) |
+| 7 | Dado el formulario de edición con el precio en blanco, cuando el administrador guarda, entonces el precio guardado no cambia. | RN-CAT-09 | (sin test) |
+| 8 | Dado un Excel con filas sin id uuid, ids repetidos o precios vacíos o negativos, cuando se sube, entonces esas filas se ignoran, se avisa cuántas y no se crea ningún producto. | RN-CAT-12 | (sin test) |
+| 9 | Dadas varias categorías, cuando se pide "Catálogo completo", entonces se envía una imagen por categoría en el orden Frutas, Verduras, Otros y luego alfabético. | RN-CAT-02, 13 | (sin test) |
 
 **Textos que ve el cliente final.** La imagen del catálogo y el texto de un producto (RN-CAT-13, RN-CAT-14): nombre del negocio, categoría, productos, precio/unidad, "NO HAY" o "Consultar". El formulario muestra nombre, categoría y unidad. Nada más.
 
@@ -108,4 +142,4 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **DT-028 — `categoryOrder.ts` duplicado** (API y web), más una tercera aplicación implícita en `ProductsSection.tsx` (`sortCategoryEntries`).
 - **DT-029 — Tipo de unidad sin catálogo cerrado:** `unit_type` es texto libre en la API y la lista de 7 opciones vive solo en `ProductsSection.tsx`.
 
-Decisiones relacionadas: la decisión de no autoasignar el precio de catálogo en pedidos (commit d64551b y comentario de `public.ts › POST /submit`); principio 3 de `00-principios.md` (el precio de una línea es del pedido, no del catálogo).
+Decisiones relacionadas: la decisión de no autoasignar el precio de catálogo en pedidos (commit d64551b y comentario de `public.ts › POST /submit`); D-02 de `05-historia/decisiones.md` y principio 3 de `00-principios.md` (el precio de una línea es del pedido, no del catálogo). Relacionadas: FRM (formulario), ORD (pedido a mano), IA (Tomar lista), INB (envío por el chat), ACC (pestañas y roles).

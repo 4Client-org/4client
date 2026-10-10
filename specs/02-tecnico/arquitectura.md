@@ -1,14 +1,18 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [package.json, pnpm-lock.yaml, Dockerfile, start.sh, apps/api/package.json, apps/api/src/server.ts, apps/api/src/config.ts, apps/api/src/plugins/socket.ts, apps/api/src/plugins/prisma.ts, apps/api/src/middleware/auth.ts, apps/api/src/services, apps/web/package.json, apps/web/vite.config.ts, apps/web/public/_headers, apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/pages/MainPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/lib/apiBase.ts, apps/web/src/lib/socket.ts, apps/web/src/lib/format.ts, apps/web/src/components/ui/UpdateBanner.tsx, apps/web/src/hooks, .github/workflows]
 ---
 
 # Arquitectura
 
-Cómo está armado el sistema, qué corre dónde y las convenciones que no se ven leyendo un solo archivo. El detalle de endpoints y eventos está en `api-y-eventos.md`; el modelo de datos en `datos-y-migraciones.md`; el despliegue paso a paso en `04-operacion/`.
+> **Resumen.** 4Client es un monolito: una API Fastify (Node 20, un solo contenedor en un VPS con Coolify) con PostgreSQL y Socket.IO, más una PWA React publicada en Cloudflare Pages. Los servicios externos son Meta (WhatsApp), Cloudflare R2, proveedores de IA, Resend y Sentry. Sin colas, sin microservicios ni caché externa: la simplicidad es deliberada (`00-horizonte.md`).
 
-## 1. Contexto del sistema
+Cómo está armado el sistema, qué corre dónde y las convenciones que no se ven leyendo un solo archivo. El detalle de endpoints y eventos está en `api-y-eventos.md`; el modelo de datos en `datos-y-migraciones.md` y `modelo-de-datos.md` (diagramas); la observabilidad y continuidad en `04-operacion/observabilidad-y-continuidad.md`; el despliegue paso a paso en `04-operacion/`.
+
+## 1. Contexto del sistema (C4 nivel 1)
+
+Actores: el cliente final (solo WhatsApp y los links `/form` y `/factura`), el personal del negocio y el operador `dev`. Todo lo demás son sistemas externos.
 
 ```mermaid
 flowchart LR
@@ -35,7 +39,9 @@ Notas que no salen del diagrama:
 - **Correo:** Resend solo se usa para el código de verificación del login `dev` (`services/email.ts`). *(código)*
 - **Backup:** `.github/workflows/backup-prod-db.yml` hace `pg_dump` diario fuera del VPS, a propósito independiente de la infraestructura. *(código)*
 
-## 2. Contenedores y red
+## 2. Contenedores y red (C4 nivel 2)
+
+Cuatro piezas propias: la PWA (estática, en el borde de Cloudflare), el contenedor de la API, PostgreSQL y el bucket R2. Un solo proceso de API atiende REST y WebSocket; por eso Socket.IO no usa adaptador. Con más de una réplica de la API las salas dejarían de verse entre procesos (hoy no se prevé; el horizonte no lo exige).
 
 ```mermaid
 flowchart TB
@@ -59,7 +65,7 @@ flowchart TB
 
 - **Imagen** (`Dockerfile`): `node:20-slim` + `openssl`, `pnpm@10` vía corepack, `pnpm install --frozen-lockfile`, `prisma generate`, `tsc` de la API. Corre como el usuario no-root `node`. Solo se construye la API; la web la construye Cloudflare Pages. *(código)*
 - **Arranque** (`start.sh`): `prisma migrate deploy` y luego `exec node`. **Cada arranque aplica las migraciones pendientes**, también en producción (ver principio 1 y `datos-y-migraciones.md`). Si una migración falla, el contenedor no arranca. *(código)*
-- **Ambientes:** dev y prod son despliegues separados (API + base aislada cada uno). La web elige a cuál hablar por el hostname (ver §6). *(código, inferido de `apiBase.ts` y README)*
+- **Ambientes:** dev y prod son despliegues separados (API + base aislada cada uno). La web elige a cuál hablar por el hostname (ver §7). *(código, inferido de `apiBase.ts` y README)*
 
 ## 3. Monorepo
 

@@ -1,10 +1,26 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/webhook.ts, apps/api/src/routes/public.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/inbox.ts, apps/api/src/server.ts, apps/api/src/config.ts, apps/api/src/lib/formLink.ts]
 ---
 
 # Diagnóstico de incidentes (árbol de decisión)
+
+> **Resumen.** Punto de entrada ante "no funciona X": primero el minuto cero (¿vive la API, qué versión, a quién le pasa), luego el árbol por síntoma (mensajes, link del formulario, deploy, cierre de caja). Diagnostica y enruta a `runbooks.md`; no repite los arreglos.
+
+```mermaid
+flowchart TD
+  S[Alguien dice: no funciona X] --> M0{Sección 0:<br/>/health ok?}
+  M0 -->|no| RB[Logs en Coolify; bucle de reinicios: runbook c]
+  M0 -->|sí| Q{¿Qué síntoma?}
+  Q -->|mensajes| M1[Sección 1: separar entrantes y salientes]
+  Q -->|link de formulario| M2[Sección 2]
+  Q -->|mi cambio no se ve| M3[Sección 3]
+  Q -->|cierre de caja| M4[Sección 4]
+  Q -->|otro| M5[Sección 5: reproducir en dev]
+  M1 -->|salientes fallan| RE[runbooks e / f]
+  M1 -->|entrantes no llegan| M11[1.1: webhook, firma, enrutamiento, ventana 10 min]
+```
 
 Punto de entrada cuando alguien dice "no funciona X". Este archivo **diagnostica y enruta**; los procedimientos de arreglo están en [`runbooks.md`](runbooks.md) (letras a–j) y no se repiten aquí. Reglas: en producción solo `SELECT`, con OK de José (`runbooks.md`, reglas generales); nunca pegues teléfonos ni nombres reales de clientes finales en specs, commits o chats con terceros.
 

@@ -1,14 +1,28 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/pages, apps/web/src/components, apps/web/src/hooks, apps/web/src/lib, apps/web/src/store/auth.ts, apps/web/vite.config.ts, apps/web/public, packages/shared]
 ---
 
 # Mapa del frontend
 
+> **Resumen.** La web es una PWA React sin librería de rutas: 4 pantallas, componentes agrupados por módulo, 11 hooks sobre React Query, un único store (sesión) y utilidades en `lib/`. Este archivo es el mapa; el comportamiento (sesión, refresh, socket, CSP) está en `arquitectura.md`.
+
 Dónde vive cada cosa en `apps/web` (React + Vite + TypeScript + Zustand + React Query). Complementa `arquitectura.md` §7 y §8, que explican el **comportamiento** (sesión, refresh, socket, PWA, cabeceras, claves de React Query); aquí está el **mapa**. Para qué hace cada pantalla para el negocio, ver `modulos/`.
 
 ## 1. Pantallas (`src/pages`)
+
+```mermaid
+flowchart TD
+  A[App.tsx<br/>lee pathname una vez] -->|/form| F[ClientFormPage]
+  A -->|/factura| FA[FacturaPage]
+  A -->|otra ruta, sin sesión| L[LoginPage]
+  A -->|otra ruta, con sesión| M[MainPage]
+  M --> T1[Tickets y Pedidos]
+  M --> T2[Chats WPP]
+  M --> T3[Informe]
+  M --> T4[Configuración]
+```
 
 | Archivo | Ruta | Quién | Notas |
 |---|---|---|---|

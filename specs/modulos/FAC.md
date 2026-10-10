@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/files.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/services/storage.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/pages/FacturaPage.tsx, apps/api/prisma/schema.prisma, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
@@ -11,6 +11,26 @@ fuentes: [apps/api/src/routes/files.ts, apps/api/src/lib/linkSecurity.ts, apps/a
 ## 1. Negocio
 
 **Propósito.** Que el cliente tenga un comprobante del pedido que le llevan, sin que el negocio tenga que armarlo a mano. La factura es una **foto fija**: el PDF se genera una vez en el navegador del personal y no se vuelve a calcular. Por eso el link muere en cuanto el pedido cambia (RN-FAC-10), para que nadie guarde un comprobante desactualizado que parezca vigente. No es factura electrónica DIAN: es un recibo informal del pedido.
+
+**Alcance y límites.**
+
+| Dentro | Fuera |
+|---|---|
+| Recibo PDF informal del pedido, armado en el navegador (D-12). | Factura electrónica DIAN y numeración autorizada. |
+| Guardar el PDF (R2 o disco) y mandar el link por el chat. | El comprobante de cobro de 4Client al negocio (eso es `PlatformCharge`, PLT). |
+| Link de 24 h con revocación inmediata. | Reimprimir una factura vieja con datos actuales: cada PDF es foto fija. |
+| Vista pública `/factura` para el cliente sin cuenta. | Retención y limpieza de PDF vencidos (PREG-084, PREG-037). |
+
+**Dependencias.**
+
+| Módulo | Relación |
+|---|---|
+| ORD | Origen de ítems, estado y precios; `PATCH /orders/:id` revoca el link (RN-FAC-10). |
+| CAJ | El cobro deja el pedido `cerrado` y por eso bloquea el envío (RN-FAC-04). |
+| INB | El mensaje sale por `POST /inbox/:ticket_id/reply`; "Bloquear link" y "Borrar datos" revocan. |
+| FRM | El cliente que edita o borra su pedido por el formulario revoca la factura. |
+| WPP | Ventana de 24 h de Meta y fallos de envío del mensaje. |
+| PLT / ACC | Bloqueo total de links de la organización; borrado de datos (Ley 1581). |
 
 **Permisos.** Fila "Subir factura (PDF) y enviarla" de `01-funcional/actores-y-permisos.md`: admin, encargado, domiciliario y dev. `POST /files/invoice` solo exige sesión (`authenticate`), sin `requireRole`. Donde la interfaz difiere de la API:
 - El botón "Enviar factura" vive en el modal del pedido y respeta el estado del pedido; la API **no** mira estado ni ítems (RN-FAC-03, PREG-080).
@@ -38,7 +58,7 @@ stateDiagram-v2
 - **RN-FAC-02 — La factura sale de la pantalla, no de la base.** CUANDO el personal pulsa "PDF", "Copiar" o "Enviar factura", el documento se arma con los ítems, el método de pago y el estado **que muestra el modal en ese momento**, aunque haya cambios sin guardar. *(plataforma, código)*
 - **RN-FAC-03 — Cuándo se puede enviar.** "Enviar factura" solo aparece si el pedido tiene al menos un ítem **y** un chat (`ticket_id`), y está deshabilitado mientras se envía, si algún precio es negativo, o si el estado del pedido es `camino`, `entregado` o `cerrado`. Se vuelve a habilitar solo si el estado vuelve atrás (por el socket, sin recargar). "PDF" y "Copiar" aparecen con ítems y se deshabilitan solo con precio negativo; no dependen del estado ni del chat. La API no repite ninguna de estas condiciones. *(plataforma, código)*
 - **RN-FAC-04 — Consecuencia: no hay factura nueva tras el cobro.** Como el cobro deja el pedido `cerrado` (CAJ-07) y `camino` ya lo bloquea, una vez en camino o cerrado no se puede generar un recibo nuevo desde la interfaz. Un link enviado antes sigue vivo hasta su expiración si nadie edita el pedido: cobrar, mover de estado o pasar a papelera **no** revocan (ver RN-FAC-10 y PREG-082). *(plataforma, código)*
-- **RN-FAC-05 — Formato del PDF.** Ancho fijo 80 mm (estilo tiquete térmico); alto de hoja 200 mm; si hay muchos ítems, se agregan hojas del mismo tamaño con el encabezado de columnas repetido ("Producto (cont.)")), margen inferior 12 mm, y el bloque Total + Pago + "Gracias por su compra!" se mantiene siempre junto en una sola hoja. Trae nombre del negocio, número y fecha del pedido, cliente, dirección y teléfono (si hay). "PDF" abre el documento en una pestaña nueva (no lo descarga). *(plataforma, código)*
+- **RN-FAC-05 — Formato del PDF.** Ancho fijo 80 mm (estilo tiquete térmico); alto de hoja 200 mm; si hay muchos ítems, se agregan hojas del mismo tamaño con el encabezado de columnas repetido ("Producto (cont.)"), margen inferior 12 mm, y el bloque Total + Pago + "Gracias por su compra!" se mantiene siempre junto en una sola hoja. Trae nombre del negocio, número y fecha del pedido, cliente, dirección y teléfono (si hay). "PDF" abre el documento en una pestaña nueva (no lo descarga). *(plataforma, código)*
 - **RN-FAC-06 — Qué recibe el cliente.** CUANDO se envía, el sistema DEBE subir el PDF y luego mandar por el chat (`POST /inbox/:ticket_id/reply`) un texto con número, fecha, cliente, total y el link `<FRONTEND_URL>/factura?f=<archivo>`. El link apunta a la **web**, no a la API; `FacturaPage` pregunta `/status` y, si está viva, redirige el navegador al PDF real. Si la subida falla, no se manda mensaje ("Error al subir la factura"). *(plataforma, código)*
 
 *Subida (API)*
@@ -69,6 +89,21 @@ stateDiagram-v2
 
 - **RN-FAC-14 — Dónde se guarda.** Con R2 configurado (`storage.isConfigured()`), el PDF va a `invoices/<archivo>` y se lee de ahí. Sin R2, va a la carpeta local `uploads/` del proceso (desarrollo o producción antes de R2). Fallo de R2: 502 `STORAGE_UPLOAD_FAILED` con el nombre del error de AWS/R2 (solo lo ve personal); fallo local: 502 `STORAGE_WRITE_FAILED`. *(plataforma, código)*
 - **RN-FAC-15 — `phone_last4` es solo metadato.** Siempre se guarda en la fila (los últimos 4 dígitos del teléfono del pedido, o `0000` si no hay 4 dígitos, p. ej. BSUID) pero ya no se exige para descargar; se pone `****` al borrar los datos del cliente. *Por qué:* los clientes se confundían con pedir los dígitos *(inferido de comentarios de `files.ts`)*. *(plataforma, código)*
+
+**Criterios de aceptación.**
+
+| # | Escenario | Reglas | Test |
+|---|---|---|---|
+| 1 | Dado un pedido de la organización, cuando el personal sube su factura, entonces la respuesta trae un link a la página `/factura` de la web, no a la API. | RN-FAC-06 | `files.test.ts › "POST /invoice stores the PDF and returns a URL pointing at the frontend /factura page, not the raw API"` |
+| 2 | Dado un pedido de otra organización, cuando se intenta subir una factura, entonces se rechaza con 404. | RN-FAC-07 | `files.test.ts › "POST /invoice for an order belonging to a different org is rejected"` |
+| 3 | Dado un pedido con una factura viva, cuando se sube una nueva del mismo pedido, entonces las anteriores quedan revocadas, pero la factura de otro pedido del mismo chat sigue viva. | RN-FAC-09 | `files.test.ts › "sending a fresh factura for the same ORDER auto-supersedes every earlier one for it, no manual block needed"`; `› "resending a factura for one order does NOT touch a different order's still-accurate factura, even in the same conversation"` |
+| 4 | Dada una factura enviada, cuando el personal edita el pedido, entonces el link responde 410 `INVOICE_EXPIRED`. | RN-FAC-10 | `files.test.ts › "editing an order (PATCH /orders/:id) invalidates its own outstanding factura - a stale PDF must not keep looking current"` |
+| 5 | Dada una factura enviada, cuando el personal pulsa "Bloquear link" del ticket o "Bloquear todos" de la organización, entonces el link muere; y una factura nueva emitida después vuelve a funcionar. | RN-FAC-10, 11 | `files.test.ts › ""Bloquear link" on a ticket also kills any factura already sent to that same conversation"`; `› "the org-wide "Bloquear todos los links" also kills every outstanding factura, and a fresh one issued afterward still works"` |
+| 6 | Dada una factura viva, cuando el cliente abre el link sin teléfono ni dígitos, entonces recibe el PDF. | RN-FAC-13, 15 | `files.test.ts › "GET serves the PDF on the link alone - no phone_last4 needed, and a wrong one in the querystring is silently ignored"` |
+| 7 | Dada una factura con más de 24 h, cuando se abre, aunque se haya abierto antes a tiempo, entonces responde 410; y sin abrir sigue viva hasta las 24 h. | RN-FAC-12 | `files.test.ts › "expires at 24h absolute, even if it was opened in time"`; `› "a link survives past the old 4-hour unopened mark whether or not it was ever opened - flat 24h cap either way"` |
+| 8 | Dado un nombre de archivo sin fila en `invoice_links`, cuando se consulta, entonces responde 404 sin error del servidor. | RN-FAC-11 | `files.test.ts › "a filename with no matching invoice_links row (bogus, or predates this protection) is a plain 404, not a crash"` |
+| 9 | Dado un pedido en `camino`, `entregado` o `cerrado`, o sin chat, cuando el personal abre su modal, entonces "Enviar factura" no está disponible. | RN-FAC-03, 04 | (sin test) |
+| 10 | Dado un archivo que no empieza por `%PDF` o pesa más de 20 MB, cuando se sube, entonces responde 400 y no se guarda. | RN-FAC-07 | (sin test) |
 
 **Textos que ve el cliente final.** El mensaje de WhatsApp con el link (RN-FAC-06); el PDF; y, si el link está muerto, la pantalla "Link inválido" de `FacturaPage` con el mensaje del servidor ("Este link de factura fue bloqueado / ya expiró (válido 24 horas). Pide que te reenvíen la factura.", "Archivo no encontrado…") o "No se pudo conectar…".
 
@@ -144,4 +179,4 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **DT-035 — Faltan tests:** firma `%PDF`, tope de tamaño y de `num`, formato del nombre, 502 de almacenamiento, `TICKET_BLOCKED`/`LINK_ATTEMPTS_EXCEEDED`, revocación por edición o borrado del cliente en el formulario, y todo el PDF/`buildPDFDoc` (total, paginación).
 - **DT-036 — Total de la factura recalculado en tres sitios** (`buildPDFDoc`, `copyInvoice`, `sendInvoiceToChat`) con la misma suma.
 
-Relacionadas: ORD (precio = total de la línea, edición de pedidos), CAJ (cobro cierra el pedido, RN-CAJ-07), FRM (link de formulario y su bloqueo, mismo patrón), WPP (envío del mensaje al chat), ACC (borrado de datos), principio 3 de `00-principios.md`.
+Decisiones: D-12 (PDF en el navegador), D-07 y D-08 (sin PIN, TTL plano de 24 h). Relacionadas: ORD (precio = total de la línea, edición de pedidos), CAJ (cobro cierra el pedido, RN-CAJ-07), FRM (link de formulario y su bloqueo, mismo patrón), WPP (envío del mensaje al chat), ACC (borrado de datos), principio 3 de `00-principios.md`.

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/seed-chats.ts, apps/api/src/seed-wpp.ts, apps/api/src/update-org-wpp.ts, apps/api/src/reencrypt-wpp-tokens.ts, apps/web/src/lib/apiBase.ts, apps/web/src/components/ui/UpdateBanner.tsx, apps/api/src/routes/dev.ts, apps/api/src/routes/billing.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/messageTemplates.ts, apps/api/src/lib/formLink.ts, apps/api/prisma/schema.prisma, apps/web/src/components/config/DevSection.tsx, apps/web/src/components/config/DevOrgsPanel.tsx, apps/web/src/components/config/DevDbPanel.tsx, apps/web/src/components/config/DevWppPanel.tsx, apps/web/src/components/config/DevBillingPanel.tsx, apps/web/src/components/config/DevSistemaPanel.tsx, apps/web/src/components/config/DevLinksPanel.tsx, apps/web/src/components/config/OrgSelector.tsx, apps/web/src/components/config/BillingSection.tsx, apps/web/src/lib/platformChargePdf.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/api/test/dev-centro-mando.test.ts, apps/api/test/billing.test.ts, apps/api/test/config.test.ts]
 ---
 
@@ -11,6 +11,27 @@ fuentes: [apps/api/src/seed-chats.ts, apps/api/src/seed-wpp.ts, apps/api/src/upd
 ## 1. Negocio
 
 **Propósito.** Operar la plataforma multi-negocio sin entrar a la base de datos a mano. Antes se hacían "favores" con SQL (reabrir un cierre, sembrar un chat de prueba, dar de alta un cliente); este módulo los convirtió en acciones concretas y limitadas, y deja rastro de las que importan en `audit_logs`. No hay SQL libre a propósito: no se puede limitar a un solo negocio de forma segura cuando varios comparten las tablas *(código, comentario de `DevDbPanel.tsx`)*. Los cobros de plataforma son el registro interno de lo que 4Client factura a cada negocio (suscripción, puesta en marcha).
+
+**Alcance y límites.**
+
+| Dentro | Fuera |
+|---|---|
+| Visor de solo lectura de 10 tablas, con auditoría. | SQL libre y escritura directa a tablas. |
+| Alta de un negocio con su primer admin. | Onboarding sin intervención del dev (horizonte, "Siguiente"); ver `04-operacion/alta-de-negocio.md`. |
+| Acciones curadas: reabrir cierre, ticket de prueba. | Cerrar caja (lo hace CAJ) y deshacer todo lo que implica reabrir (RN-CAJ-24, PREG-005). |
+| Comprobantes internos de cobro de plataforma y su vista de solo lectura para el admin. | Factura electrónica DIAN, pasarela de pagos, corte automático por impago (PREG-078). |
+| Auditoría de acciones sensibles; scripts de línea de comandos; selección de API y actualización de la web. | Cuentas de usuarios y roles (ACC); configuración de WhatsApp (WPP). |
+
+**Dependencias.**
+
+| Módulo | Relación |
+|---|---|
+| ACC | Roles, `requireRole('dev')`, 2FA del dev, `POST /users` que no crea `dev`. |
+| CAJ | `DailyClose` que borra "Reabrir cierre". |
+| INB | Tickets de prueba; el visor lee `tickets` y `ticket_messages`; borrado de datos que audita. |
+| WPP | Panel "WhatsApp" de DevTools usa `/config/*`; cifrado de tokens (RN-WPP-30). |
+| FAC | Mismo patrón de PDF en R2; el cobro de plataforma NO es la factura al cliente. |
+| Plataforma | R2 (prefijos `platform-charges/`, `_healthcheck/`), Meta, Sentry (solo se reportan como booleanos). |
 
 **Permisos.** Filas "DevTools: BD, organizaciones, cobros de plataforma, acciones", "Borrar datos de un cliente" y "Ver sus cobros de plataforma (solo lectura)" de `01-funcional/actores-y-permisos.md`.
 - Todo `/dev/*` exige `requireRole('dev')` (hook del plugin completo). Admin, encargado y domiciliario reciben 403.
@@ -56,6 +77,21 @@ fuentes: [apps/api/src/seed-chats.ts, apps/api/src/seed-wpp.ts, apps/api/src/upd
 - **RN-PLT-20 — Scripts de línea de comandos (no son rutas).** En `apps/api/src/`, además de `seed.ts` (`pnpm db:seed`, ver `/dev/seed`), hay cuatro scripts que se corren a mano con `dotenv`: `seed-chats.ts` (borra los tickets del día fijo `2026-06-27` de la organización `fruver-san-gabriel` y crea cuatro chats de ejemplo con teléfonos ficticios; exige que el seed ya exista); `seed-wpp.ts` (pone en la **primera** organización que encuentre el `phone_id`, el token y el secreto de Meta tomados de las variables `META_*`, cifrados con `encryptSecret`, y un número de WhatsApp fijo); `update-org-wpp.ts` (pone `phone_id` y token de `fruver-san-gabriel`; el token sale de `META_TOKEN` y el `phone_id` está escrito en el código); y `reencrypt-wpp-tokens.ts` (migración única idempotente: re-cifra a `enc:v2:` el token y el secreto de las organizaciones que aún estén en texto plano o `enc:v1:`; exige `WPP_TOKEN_ENC_KEY`; ver RN-WPP-30). Ninguno audita ni pasa por la API. Los de siembra no deben correrse contra producción. *(plataforma, código)*
 - **RN-PLT-21 — Qué API usa la web y la marca DEV.** La web elige la dirección de la API al ejecutarse, no al compilar (`lib/apiBase.ts › resolveApiBase`): `VITE_API_URL` si está definida; `http://localhost:3000` en `localhost`/`127.0.0.1`; la API de desarrollo (`dev-api.4client.shop`) si el host empieza por `dev.` y termina en `.pages.dev`; en cualquier otro caso (dominio real, o cualquier otra vista previa de Cloudflare Pages) la de producción (`api.4client.shop`). `isDevEnvironment()` usa la misma señal (localhost o la vista previa `dev.`) para mostrar una etiqueta roja "DEV" en el login y en el encabezado de `MainPage`, de modo que el personal distinga la copia de pruebas de la real. *Por qué:* evitar una variable por entorno en Cloudflare *(inferido del comentario)*. *(plataforma, código)*
 - **RN-PLT-22 — Actualización de la web (PWA).** CUANDO el navegador detecta una versión nueva (búsqueda cada 30 min y cada vez que la pestaña vuelve a verse), `UpdateBanner` DEBE recargar la aplicación: de inmediato en el formulario del cliente (guarda el avance en `localStorage`); en la app del personal, solo cuando no haya ninguna ventana modal abierta (comprueba cada 3 s la clase `moverlay`), y mientras tanto muestra "Hay una nueva versión - se actualizará sola en cuanto cierres esta ventana". En `/factura` no hay actualización automática. Detalle del registro del service worker en `02-tecnico/arquitectura.md` §7. *(plataforma, código)*
+
+**Criterios de aceptación.**
+
+| # | Escenario | Reglas | Test |
+|---|---|---|---|
+| 1 | Dado un usuario dev, cuando consulta una organización distinta a la propia, entonces el visor responde con sus datos. | RN-PLT-01 | `dev-centro-mando.test.ts › "permite al dev consultar una organización distinta a la propia"` |
+| 2 | Dado un `orgId` que no es UUID, cuando el dev consulta el visor, entonces responde 400. | RN-PLT-01 | `dev-centro-mando.test.ts › "400 con un orgId con formato inválido"` |
+| 3 | Dado un dev, cuando crea una organización, entonces se crean el negocio y su admin y ese admin puede iniciar sesión; con un nombre repetido el slug sale único. | RN-PLT-04 | `dev-centro-mando.test.ts › "crea una organización nueva + su admin, y ese admin puede iniciar sesión"`; `› "genera un slug único si el nombre ya existe"` |
+| 4 | Dada una contraseña que no cumple la política, cuando se crea la organización, entonces se rechaza. | RN-PLT-04 | `dev-centro-mando.test.ts › "rechaza una contraseña que no cumple la política"` |
+| 5 | Dado un cierre existente, cuando el dev lo reabre, entonces el `DailyClose` se borra y el snapshot queda en `audit_logs`; sin cierre, 404. | RN-PLT-07 | `dev-centro-mando.test.ts › "borra el DailyClose de esa fecha (reabre) y deja el snapshot en audit_logs"`; `› "404 si no hay cierre para esa fecha"` |
+| 6 | Dado un teléfono ya usado en la organización, cuando el dev crea un ticket de prueba, entonces responde 409; con un teléfono libre se crean ticket y mensajes entrantes. | RN-PLT-08 | `dev-centro-mando.test.ts › "crea un ticket + sus mensajes entrantes"`; `› "409 si ya existe un ticket con ese teléfono en la organización"` |
+| 7 | Dado un cobro con valores que no coinciden con los conceptos, o sin conceptos, cuando se crea, entonces se rechaza; con datos válidos recibe un número consecutivo creciente. | RN-PLT-09, 10 | `dev-centro-mando.test.ts › "rechaza un cobro donde amounts no coincide exactamente con los conceptos elegidos"`; `› "rechaza un cobro sin ningún concepto seleccionado"`; `› "asigna números consecutivos crecientes entre cobros"` |
+| 8 | Dado un cobro editado, cuando el dev guarda, entonces cambia conceptos, mes, valores y notas pero no el número. | RN-PLT-14 | `dev-centro-mando.test.ts › "PUT /charges/:id edita conceptos/mes/valores/notas sin cambiar el number"` |
+| 9 | Dado un admin de un negocio, cuando pide sus cobros, entonces ve solo los suyos, el mes más reciente primero; un encargado recibe 403. | RN-PLT-15 | `billing.test.ts › "el admin ve sus propias facturas, más reciente primero por mes, y nunca las de otra organización"`; `› "rechaza un rol que no sea admin/dev (encargado)"` |
+| 10 | Dado un rol que no es dev, cuando llama a cualquier ruta de `/dev/*`, entonces recibe 403. | permiso dev-only | `dev-centro-mando.test.ts › "rechaza un rol no-dev (admin)"` (y el `"rechaza un rol no-dev"` de cada grupo) |
 
 **Textos que ve el cliente final.** Ninguno. El administrador de un negocio solo ve la pestaña "Facturación" (RN-PLT-15) y la barra del día 1 (RN-PLT-17); las credenciales del primer admin se las entrega el dev fuera del sistema.
 
@@ -136,6 +172,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **PREG-088 — "Marcar pagado" sin vuelta atrás en la interfaz,** aunque la API permite volver a `pendiente`. Y la franja "al día" mira `paid_at` de cualquier cobro que incluya suscripción, sin comparar el mes cubierto (`period`). ¿Debe mirar el mes?
 - **PREG-089 — Contraseña inicial visible y elegida por el dev.** El primer admin recibe la contraseña que escribió el dev, que viaja en la respuesta y se muestra en pantalla; no se fuerza cambio en el primer ingreso. ¿Se genera aleatoria o se obliga a cambiarla?
 - **PREG-090 — Reapertura y seed no auditados.** El seed (que resetea contraseñas del admin y del dev del negocio fijo) solo deja un `warn`. Ver también PREG-005 sobre lo que reabrir no deshace.
+*Pendientes sin módulo propio, anotados aquí por la ruta o pantalla de DevTools que los muestra:*
 - **PREG-014 — Pedidos con `channel = 'call'` sin interfaz.** La API acepta `channel: 'call'` (pedido sin chat) y la pantalla del pedido sabe mostrarlo como "Llamada", pero ninguna pantalla lo crea (la interfaz no envía `channel`). ¿Es un canal por terminar o se puede quitar?
 - **PREG-091 — Renombrar ticket oculto por una constante.** `RENAME_TICKET_UI_ENABLED = false` en `InboxPanel.tsx` esconde la edición de nombre y teléfono del chat, aunque la API la permite al admin (fila "Renombrar ticket" de la matriz). ¿Se reactiva o se retira?
 - **DT-001 y DT-002 — Monoinquilino fijado en el código** (todo negocio nuevo lo hereda; principio 2 de `00-principios.md`). Las plantillas por defecto son DT-001 (ver WPP); el resto es DT-002:

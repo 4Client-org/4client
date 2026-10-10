@@ -1,10 +1,23 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/dev.ts, apps/api/src/routes/config.ts, apps/api/src/routes/users.ts, apps/api/src/lib/messageTemplates.ts, apps/api/src/routes/webhook.ts, apps/api/src/lib/formLink.ts, apps/web/src/components/config/DevOrgsPanel.tsx, apps/web/src/components/config/OrgSelector.tsx]
 ---
 
 # Alta de un negocio nuevo (segunda organización)
+
+> **Resumen.** Hoy el alta la hace el operador `dev` en siete pasos (organización y admin, WhatsApp, bienvenida, plantillas, usuarios, catálogo, prueba). **No está lista para un segundo cliente:** el negocio nuevo hereda datos fijos del primero (DT-001, DT-002) y la configuración de WhatsApp de otra organización no tiene interfaz (PREG-127). Esto es el estado actual, no una recomendación de hacerlo así.
+
+```mermaid
+flowchart LR
+  L[0. Limpiar lo del primer cliente<br/>con José] --> O[1. Organización + admin]
+  O --> W[2. WhatsApp: phone id + token]
+  W --> B[3. Bienvenida]
+  B --> P[4. Plantillas de botones]
+  P --> U[5. Usuarios]
+  U --> C[6. Catálogo]
+  C --> T[7. Prueba de punta a punta]
+```
 
 Procedimiento para dar de alta un negocio en la plataforma con lo que **existe hoy**. El alta sin intervención de José es una meta del horizonte (`../00-horizonte.md`, etapa "Siguiente"); mientras tanto la hace el operador `dev`.
 

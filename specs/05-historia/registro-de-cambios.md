@@ -1,7 +1,7 @@
 ---
 estado: vigente
 actualizado: 2026-10-09
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [git log, specs/]
 ---
 
@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0015 — Pulido profesional de las specs y siete documentos nuevos
+- **Fecha / rama:** 2026-10-10, `docs/specs-profesional`
+- **Qué cambió:** los 11 módulos ganan alcance, dependencias y criterios de aceptación; glosario reescrito; resúmenes y diagramas en los documentos técnicos, de plan, operación e historia. Nuevos: `02-tecnico/modelo-de-datos.md`, `modelo-de-amenazas.md`, `datos-personales.md`, `03-plan/riesgos.md` (RK-01..RK-24), `04-operacion/observabilidad-y-continuidad.md`, `01-funcional/pantallas-por-rol.md`, `escenarios-extremo-a-extremo.md`. Registradas PREG-130..136 y DT-043..048.
+- **Por qué:** José pidió revisar las specs a fondo, que estén completas, profesionales y con los documentos que falten.
+- **Specs tocadas:** todas las de `specs/` (revisión), `AGENTS.md` (mapa), `specs/README.md`, `00-estado-actual.md`, `seguridad-y-privacidad.md`, `arquitectura.md`.
+- **Obsoleto:** conteo de preguntas abiertas (129 → 136); "sin test" de RN-INB-01 si el verificador lo corrigió.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0014 — Horizonte, registro de cambios y revisión de completitud de las specs
 - **Fecha / rama:** 2026-10-09, `docs/horizonte-y-registro`
 - **Qué cambió:** se crearon `00-horizonte.md` (rumbo del producto: báscula conectada, pagos, siguiente etapa), este registro de cambios, `02-tecnico/frontend.md`, `codigos-de-error.md`, `04-operacion/alta-de-negocio.md`, `diagnostico-de-incidentes.md` y `_plantillas/checklist.md`; se agregaron las reglas "las specs nunca quedan viejas" y "todo cambio deja asiento"; se sumaron 14 reglas de cobertura en ACC, CAJ, INB, ORD, PLT y WPP (cifrado, sanitizado, scripts, PWA, hooks); se respondió D-17; se asignaron PREG-123 a PREG-129 y DT-041 y DT-042.
 - **Por qué:** José pidió que cualquier agente lea siempre el horizonte, que quede trazabilidad de todo cambio, que nunca haya documentación vieja y que las specs queden completas.
 - **Specs tocadas:** `00-horizonte.md`, `00-principios.md` (principios 13 y 14), `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `specs/README.md`, `00-estado-actual.md`, `01-funcional/vision-y-direccion.md`, `02-tecnico/*` (4 archivos), `03-plan/*`, `04-operacion/*`, `05-historia/decisiones.md`, `modulos/{ACC,CAJ,INB,ORD,PLT,WPP}.md`, `_plantillas/checklist.md`.
 - **Obsoleto:** las prioridades del roadmap sobre créditos pagados (ya cerradas por D-19) y la ubicación de varias ideas (login por usuario y 2FA de admins pasaron a "Siguiente").
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `1edb809` · **Prod:** pendiente
 
 ### R-0013 — Respuestas de José: price, Coolify/Cloudflare, 2FA solo dev, PDF en navegador
 - **Fecha / rama:** 2026-10-09, `docs/porques-jose` · **Commit:** `5d8e69d` · **Prod:** pendiente

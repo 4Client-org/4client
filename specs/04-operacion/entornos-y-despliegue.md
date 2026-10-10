@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [Dockerfile, start.sh, .dockerignore, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/lib/formLink.ts, apps/web/src/lib/apiBase.ts, apps/web/public/_headers, apps/web/vite.config.ts]
 ---
 
 # Entornos y despliegue
+
+> **Resumen.** Dos entornos aislados (dev y prod), cada uno con su API en un contenedor gestionado por Coolify en un VPS, su Postgres propio y su web en Cloudflare Pages. Un push a `dev` o a `main` redespliega solo (~10 min, rolling, con `prisma migrate deploy` al arrancar). No hay rollback de base: las migraciones son aditivas. Los archivos se guardan en R2 y la base de prod se respalda cada día fuera del VPS.
 
 Qué entornos existen, cómo llega un commit a cada uno y cómo se vuelve atrás. El **proceso** (ramas, merges, quién aprueba) está en [`flujo-de-trabajo.md`](flujo-de-trabajo.md); aquí solo la infraestructura. Los procedimientos de emergencia están en [`runbooks.md`](runbooks.md).
 
@@ -32,10 +34,10 @@ El VPS lo comparten otros proyectos ajenos a 4Client (José). Cualquier operaci�
 | App en Coolify | `4client-api-dev` | `4client-api-prod` | (José) |
 | URL de la API | `https://dev-api.4client.shop` | `https://api.4client.shop` | `apiBase.ts › DEV_API / PROD_API` (código) |
 | URL de la web | `https://dev.4client.pages.dev` | `https://4client.shop` | (José), `apiBase.ts` (código) |
-| Base | Postgres 16 propio (datos de prueba, migrados de Railway el 2026-09-20) | Postgres 16 propio (datos reales del cliente) | (José), commit `9672ded` |
+| Base | Postgres 16 propio (datos de prueba, migrados de Railway el 2026-09-20) | Postgres propio, datos reales del cliente (versión por confirmar, PREG-092: el respaldo usa cliente 18) | (José), commit `9672ded` |
 | `APP_ENVIRONMENT_NAME` | cualquier valor permitido distinto de `production` (se supone `dev`) | `production` | `config.ts` (código); valor de dev (inferido) |
 | Banner rojo "DEV" en la web | Sí (login y cabecera) | No | `apiBase.ts › isDevEnvironment` (código) |
-| Fuente del repo en Coolify | GitHub App `4client-deploy-org` | "Public GitHub" (se cambia esta noche, ver §6) | (José) |
+| Fuente del repo en Coolify | GitHub App `4client-deploy-org` | "Public GitHub" (cambio planeado, ver §6) | (José) |
 | Backup diario | No | Sí, 3:00 a. m. Bogotá | `backup-prod-db.yml` (código) |
 
 ### Cómo elige la web a qué API hablar
@@ -89,14 +91,22 @@ La web no tiene variables en Cloudflare Pages (ver arriba).
 
 ## 3. Pipeline de despliegue de la API
 
-```
-git push (dev o main)
-  └─▶ GitHub manda el webhook a Coolify (endpoint de webhook manual de Coolify)
-        └─▶ Coolify clona el repo (vía la fuente configurada) y construye el Dockerfile
-              └─▶ arranca el contenedor nuevo → start.sh:
-                    1. prisma migrate deploy   (migraciones pendientes)
-                    2. node apps/api/dist/server.js
-              └─▶ espera el health check → retira el contenedor viejo
+```mermaid
+flowchart TD
+  P[git push a dev o main] --> GH[GitHub]
+  GH -->|webhook manual| CO[Coolify en el VPS]
+  GH -->|integración Git| CF[Cloudflare Pages<br/>construye la web]
+  GH -->|push / PR| CI[GitHub Actions<br/>typecheck, test, build]
+  CO --> BUILD[docker build: pnpm install,<br/>prisma generate, tsc]
+  BUILD -->|falla| KEEP[el contenedor viejo sigue sirviendo]
+  BUILD --> NEW[contenedor nuevo: start.sh]
+  NEW --> MIG[prisma migrate deploy]
+  MIG -->|falla| KEEP
+  MIG --> RUN[node server.js]
+  RUN --> HC{health check<br/>GET /health}
+  HC -->|ok| SWAP[se retira el contenedor viejo]
+  HC -->|no pasa| KEEP
+  CI -.->|no bloquea el deploy| CO
 ```
 
 - **Webhook:** GitHub → endpoint `/webhooks/source/github/events/manual` de Coolify, en el puerto publicado de Coolify en el VPS (José). Si ese puerto no es alcanzable desde internet, el deploy simplemente no se dispara (incidente del 2026-10-09, `runbooks.md` › a).
@@ -131,9 +141,9 @@ Backup: `.github/workflows/backup-prod-db.yml` corre a las 08:00 UTC (3:00 a. m.
 
 ## 6. Fuente del repo y paso a privado (2026-10-09)
 
-- El repo es `4Client-org/4client`. Hasta hoy público.
+- El repo es `4Client-org/4client`. Público hasta el paso a privado planeado.
 - `4client-api-dev` ya usa como fuente la **GitHub App `4client-deploy-org`**, instalada en la organización `4Client-org` (José).
-- `4client-api-prod` todavía usa la fuente "Public GitHub", que deja de funcionar cuando el repo sea privado (Coolify no podría clonar). **Plan de esta noche** (José): hacer privado el repo y cambiar la fuente de `4client-api-prod` a la GitHub App.
+- `4client-api-prod` todavía usa la fuente "Public GitHub", que deja de funcionar cuando el repo sea privado (Coolify no podría clonar). **Plan para la noche del 2026-10-09** (José; si ya se ejecutó, `00-estado-actual.md` lo dice y esta sección debe actualizarse): hacer privado el repo y cambiar la fuente de `4client-api-prod` a la GitHub App.
 - Checklist sugerido para el cambio (inferido):
   1. Cambiar la fuente de `4client-api-prod` a la GitHub App y confirmar que la app tiene acceso al repo.
   2. Lanzar un deploy manual de prod y confirmar que clona y construye (el contenedor viejo sigue sirviendo si falla).

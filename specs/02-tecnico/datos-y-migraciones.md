@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, start.sh, apps/api/src/lib/businessDate.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts]
 ---
 
 # Datos y migraciones
+
+> **Resumen.** El modelo es multi-tenant por `org_id`, sin total de pedido guardado y con dos conceptos de día. Hay lógica que vive en la base (reglas de historial inmutable, trigger, índices trigram) que Prisma no ve. Las migraciones se aplican solas al arrancar, también en producción: deben ser aditivas (§9).
 
 Qué **significa** el modelo de datos y qué hace la base por su cuenta. Los campos están en `apps/api/prisma/schema.prisma`, que además tiene comentarios largos por columna: este archivo no los repite, explica lo que cruza varias tablas.
 

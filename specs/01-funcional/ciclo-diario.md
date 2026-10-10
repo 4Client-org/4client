@@ -1,12 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, specs/modulos/IA.md, specs/modulos/ORD.md, specs/modulos/CAJ.md, specs/modulos/DSH.md, specs/modulos/FAC.md, specs/04-operacion/runbooks.md]
+verificado: 2026-10-10 @ 1edb809
+fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, specs/modulos/IA.md, specs/modulos/ORD.md, specs/modulos/CAJ.md, specs/modulos/DSH.md, specs/modulos/FAC.md, specs/modulos/CAT.md, specs/modulos/PLT.md, specs/04-operacion/runbooks.md]
 ---
 
 # Ciclo diario
 
-Recorrido de un día de negocio, de punta a punta. Esta spec **no define reglas nuevas**: resume las de los módulos y enlaza al dueño de cada paso. Si algo difiere, gana el módulo. Horas en Bogotá (UTC-5, sin horario de verano).
+Recorrido de un día de negocio, de punta a punta. Esta spec **no define reglas nuevas**: resume las de los módulos y enlaza al dueño de cada paso. Si algo difiere, gana el módulo. Horas en Bogotá (UTC-5, sin horario de verano). Los términos están en `glosario.md`; quién puede hacer cada paso, en `actores-y-permisos.md`.
 
 ## 1. Vista general
 
@@ -35,6 +35,9 @@ flowchart LR
 | Cobro y cierre de caja | `modulos/CAJ.md` |
 | Informe | `modulos/DSH.md` |
 | Recibo PDF | `modulos/FAC.md` |
+| Lista de productos y precios de referencia | `modulos/CAT.md` |
+| Cuentas, roles y sesión | `modulos/ACC.md` |
+| Operador: altas, soporte, cobros de plataforma | `modulos/PLT.md` |
 
 ## 2. El cliente escribe: ticket, día y bienvenida
 
@@ -143,7 +146,7 @@ flowchart TD
 - En **cobro en casa** el personal elige "Completo" o "Necesita vuelta" al crear o editar el pedido, para que el domiciliario sepa cuánta vuelta lleva (RN-CAJ-05). **Pago dividido:** las dos partes suman exacto el total (RN-CAJ-06).
 - **Un solo cobro por pedido:** el segundo da 409 (RN-CAJ-08). Después del cobro solo admin/dev editan el pedido, hasta el cierre (RN-CAJ-11).
 - **Correcciones (solo admin):** "Marcar crédito pagado" y "Cobro retroactivo" para un cerrado sin cobro que sí se cobró (RN-CAJ-09, RN-CAJ-10).
-- Un crédito saldado después no suma en los totales del cierre ni del informe; la regla está pendiente de definir (`03-plan/preguntas-abiertas.md`).
+- Un crédito saldado después **no** se acomoda en los totales del cierre ni del informe: decisión D-19 de José (el cliente no lo ha pedido); se retoma si lo pide.
 
 ## 7. Cierre de caja
 
@@ -187,7 +190,7 @@ El cierre lo decide el personal; no hay hora fija. La tabla muestra qué pasa y 
 | 21:00 a 23:59 | Un primer mensaje del día cuenta para el tablero de **mañana** (`Ticket.fecha`); el pedido que se cree de noche sigue con la fecha real de hoy. | WPP |
 | 24 h después de emitidos | Mueren los links de formulario y los de factura. | INB, FAC |
 
-El "4 a. m." que se mencionó como referencia no corresponde a ninguna regla del código; la única tarea programada que las specs registran es el respaldo de las 03:00.
+No existe ninguna regla a las 04:00 ni otro corte automático: la única tarea programada que las specs registran es el respaldo de las 03:00.
 
 ## 10. Trampas del día a día
 
@@ -195,3 +198,11 @@ El "4 a. m." que se mencionó como referencia no corresponde a ninguna regla del
 - **Dos días distintos:** `Ticket.fecha` (con corte 21:00) no es `Order.fecha` (sin corte). Un chat de las 22:00 aparece mañana, pero su pedido de las 22:30 es de hoy y entra en el cierre de hoy.
 - **Mensajes con más de 10 minutos de retraso** se descartan sin rastro salvo un aviso en el log (RN-WPP-04).
 - **Pedido "Pospuesto" y su fantasma:** no se mueve ni se cuenta en el cierre del día de origen (RN-CAJ-17).
+
+## 11. Fuera del día: lo que hace el operador
+
+El ciclo diario lo vive el negocio. Alrededor de él, el operador (`dev`) hace, sin horario fijo (`modulos/PLT.md`, `04-operacion/alta-de-negocio.md`):
+
+- **Alta de un negocio nuevo:** crea la organización con su primer admin y le entrega la contraseña fuera del sistema; luego se configura WhatsApp, plantillas y catálogo (`modulos/CAT.md`).
+- **Cobro de plataforma:** cada mes registra el comprobante de suscripción; el admin lo ve en "Facturación" y, el día 1, la barra roja le recuerda pagar (RN-PLT-15, RN-PLT-17).
+- **Soporte:** reabrir un cierre, crear un ticket de prueba o borrar los datos de un cliente final (Ley 1581) son acciones solo de `dev` (RN-PLT-07, RN-PLT-08).

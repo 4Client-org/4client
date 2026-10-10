@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 066c45d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [git log y cuerpos de commit, archivo/RoadMap/PLAN_IMPLEMENTACION_ORIGINAL.md, apps/api/prisma/schema.prisma, specs/00-principios.md]
 ---
 
 # Decisiones que no se deben deshacer sin preguntar
+
+> **Resumen.** 19 decisiones vivas (`D-01` a `D-19`), cada una con fecha, evidencia (sha), el porqué y la razón para no revertirla. Se consulta **antes de cambiar un comportamiento que parezca un error**. Lectura rápida: dinero y datos (D-02, D-03, D-19), tenant e identidad (D-01, D-05), privacidad (D-04, D-15, D-17, D-18), infraestructura (D-06), links y acceso (D-07, D-08, D-09, D-10, D-16), IA y archivos (D-11, D-12), tiempo y numeración (D-13, D-14).
 
 Registro de decisiones que un agente (o una persona nueva) podría "arreglar" creyendo que son errores. Cada fila da la evidencia (sha) y el porqué. Si el porqué no aparece en ningún commit, comentario o documento, dice **(sin evidencia) → PREG** en vez de inventarlo. Deshacer cualquiera exige actualizar esta tabla y, si es un principio, `../00-principios.md`.
 

@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 066c45d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [git log origin/main --first-parent --merges, cuerpos de commit]
 ---
 
 # Changelog de producción
+
+> **Resumen.** Una línea por release a `main` (producción), del más nuevo al más viejo, solo con cambios visibles para el usuario. El último release es `a072a25` (2026-10-09); lo que `dev` tiene y `main` no, está en `00-estado-actual.md`.
 
 Un renglón por release a producción, es decir, cada merge de `dev` a `main` (`git log origin/main --first-parent --merges`), del más nuevo al más viejo. Solo cambios visibles para el usuario; el detalle técnico está en el commit (`git show <sha>`). Las decisiones de fondo están en [`decisiones.md`](decisiones.md) y la línea de tiempo en [`cronologia.md`](cronologia.md).
 
