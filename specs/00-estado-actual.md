@@ -28,6 +28,8 @@ Lo que `dev` tiene y `main` no, y viajará en el próximo release:
 - **Pulido profesional de las specs** (R-0015): cada módulo con alcance, dependencias y criterios de aceptación; siete documentos nuevos (modelo de datos, amenazas, datos personales, riesgos, observabilidad y continuidad, pantallas por rol, escenarios de punta a punta). Nuevas PREG-130 a PREG-136 y DT-043 a DT-048.
 - **Pasar el repositorio a privado** (organización `4Client-org`): planeado para la noche del 2026-10-09. Orden: cambiar la fuente de `4client-api-prod` a la GitHub App → confirmar acceso de Cloudflare Pages → hacer el repo privado → verificar deploy de dev → redesplegar prod en un momento tranquilo. Reversa: volver a hacerlo público. El repo `fruver-san-gabriel-web` (política antigua + landing) se queda público.
 
+- **Ramas:** solo existen `dev` y `main`, en local y en GitHub (limpieza del 2026-10-10, R-0016).
+
 ## Próximas prioridades (propuestas, a confirmar con José)
 
 1. Responder las preguntas abiertas prioritarias de `03-plan/preguntas-abiertas.md`. Los créditos pagados **no** se acomodan en los totales por ahora (D-19, decisión de José 2026-10-09: el cliente no lo ha pedido).

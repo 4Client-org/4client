@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0016 — Lista de pendientes de privacidad y seguridad, y limpieza de ramas
+- **Fecha / rama:** 2026-10-10, `docs/lista-pendientes`
+- **Qué cambió:** el roadmap suma los ítems 22 a 24 (solicitudes de titulares, cifrado frente a la política, bloqueo de cuenta por terceros). Se borraron las 36 ramas remotas ya integradas en `dev`; quedan solo `dev` y `main`, local y en GitHub.
+- **Por qué:** pedido de José (2026-10-10): dejar esos temas en la lista de pendientes y que solo existan las dos ramas permanentes.
+- **Specs tocadas:** `03-plan/roadmap.md`, `00-estado-actual.md`.
+- **Obsoleto:** nada.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0015 — Pulido profesional de las specs y siete documentos nuevos
 - **Fecha / rama:** 2026-10-10, `docs/specs-profesional`
 - **Qué cambió:** los 11 módulos ganan alcance, dependencias y criterios de aceptación; glosario reescrito; resúmenes y diagramas en los documentos técnicos, de plan, operación e historia. Nuevos: `02-tecnico/modelo-de-datos.md`, `modelo-de-amenazas.md`, `datos-personales.md`, `03-plan/riesgos.md` (RK-01..RK-24), `04-operacion/observabilidad-y-continuidad.md`, `01-funcional/pantallas-por-rol.md`, `escenarios-extremo-a-extremo.md`. Registradas PREG-130..136 y DT-043..048.
 - **Por qué:** José pidió revisar las specs a fondo, que estén completas, profesionales y con los documentos que falten.
 - **Specs tocadas:** todas las de `specs/` (revisión), `AGENTS.md` (mapa), `specs/README.md`, `00-estado-actual.md`, `seguridad-y-privacidad.md`, `arquitectura.md`.
 - **Obsoleto:** conteo de preguntas abiertas (129 → 136); "sin test" de RN-INB-01 si el verificador lo corrigió.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `06bd284` · **Prod:** pendiente
 
 ### R-0014 — Horizonte, registro de cambios y revisión de completitud de las specs
 - **Fecha / rama:** 2026-10-09, `docs/horizonte-y-registro`
