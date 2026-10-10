@@ -113,7 +113,7 @@ flowchart TB
 | | `jspdf` | 4.2.1 |
 | | `xlsx` (tarball de cdn.sheetjs.com, no npm) | 0.20.3 |
 | | `lucide-react` | 1.18.0 |
-| Base | PostgreSQL | ver PREG-092 |
+| Base | PostgreSQL | 16.15 (dev y prod, leído en el VPS el 2026-10-10) |
 
 `package.json › pnpm.overrides` fuerza versiones mínimas de dependencias transitivas por avisos de seguridad (`ws`, `tar`, `find-my-way`, `fast-uri`, `socket.io-parser`, `engine.io`, `dompurify`, `postcss`, `nanoid`, `browserslist`, `brace-expansion`). `onlyBuiltDependencies` limita los scripts de instalación a Prisma, bcrypt y esbuild. Quitar un override sin revisar el aviso que lo motivó reabre el hallazgo. *(código)*
 
@@ -240,7 +240,7 @@ Mapa de carpetas, componentes, hooks y utilidades: `frontend.md`. Catálogo de `
 
 ## 10. Pendientes
 
-- **PREG-092 — ¿Qué versión de PostgreSQL corre en producción?** El README dice 15, el entorno local y de tests usa 16, y el workflow de backup instala `postgresql-client-18` "para coincidir con el servidor". *(inferido)*
+- **PREG-092 — Respondida:** PostgreSQL 16.15 en dev y prod (VPS, 2026-10-10). El `README.md` raíz que dice 15 y el comentario del workflow de backup que dice que el cliente 18 coincide con el servidor están desactualizados.
 - **PREG-064 — `REQUIRE_2FA` con `z.coerce.boolean()`.** `REQUIRE_2FA=false` activa el 2FA. ¿Se cambia a un parseo explícito (`'true'`/`'false'`) o se documenta solo en la operación?
 - **PREG-015 — Fecha por defecto en UTC en `orders.ts`.** `GET /orders` y `POST /orders` sin `fecha` usan `new Date().toISOString()` (UTC); entre 19:00 y 23:59 de Bogotá eso ya es "mañana". La web siempre envía `fecha`, así que hoy no se nota. ¿Se alinea con el resto (Bogotá)?
 - **DT-002 — Logo fijo en `MainPage`.** El encabezado muestra siempre `/fruver-san-gabriel.jpeg`, sea cual sea la organización. Es una excepción multi-tenant registrada (principio 2); se trata junto con el resto del hardcoding de un solo cliente.

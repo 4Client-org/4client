@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0023 — Versiones reales del VPS y `REQUIRE_2FA`
+- **Fecha / rama:** 2026-10-10, `docs/versiones-vps`
+- **Qué cambió:** se anotan Postgres 16.15, Node 20.20.2 y Docker 29.8.0 (lectura en el VPS) y `REQUIRE_2FA=true` en dev y prod; PREG-092 y PREG-102 respondidas con el dato; el ítem 35 del roadmap ya no tiene riesgo para el login de `dev`.
+- **Por qué:** pedido de José de mantener las versiones documentadas; lectura solo-lectura hecha por la sesión del VPS.
+- **Specs tocadas:** `02-tecnico/arquitectura.md`, `calidad-y-pruebas.md`, `04-operacion/entornos-y-despliegue.md`, `03-plan/roadmap.md`, `preguntas-abiertas.md`.
+- **Obsoleto:** "versión de producción por confirmar" y "valor de `REQUIRE_2FA` desconocido".
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0022 — Caja cerrada: nada se actualiza, solo observaciones
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-6`
 - **Qué cambió:** PREG-139 y PREG-137 respondidas; roadmap 25 y 34 corregidos (con la caja cerrada el administrador tampoco corrige el método de pago; con la caja abierta sí, y se recalcula). Ningún código cambió.
 - **Por qué:** aclaración de José (2026-10-10) a la lectura de R-0021.
 - **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `00-estado-actual.md`.
 - **Obsoleto:** la lectura de R-0021 que permitía al administrador corregir el pago con la caja cerrada.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `f4a7ee9` · **Prod:** pendiente
 
 ### R-0021 — 2FA activo en dev y prod, bucket privado y corrección de pago por el administrador
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-5`

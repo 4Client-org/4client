@@ -17,7 +17,7 @@ Qué entornos existen, cómo llega un commit a cada uno y cómo se vuelve atrás
 | Pieza | Dónde vive | Fuente |
 |---|---|---|
 | API (Fastify + Prisma) | Contenedor Docker en **el VPS Contabo**, gestionado con **Coolify** (proxy Traefik delante) | (José) |
-| Base de datos | Un contenedor **Postgres 16** por entorno en el mismo VPS, gestionado por Coolify | (José) |
+| Base de datos | Un contenedor **Postgres 16** (16.15) por entorno en el mismo VPS, gestionado por Coolify. Versiones leídas el 2026-10-10: Postgres 16.15, Node 20.20.2 en las dos APIs, Docker 29.8.0 | (VPS) |
 | Web (React + Vite, PWA) | **Cloudflare Pages** | (José), `apps/web/src/lib/apiBase.ts` (código) |
 | DNS | Cloudflare | (José) |
 | Facturas y cobros de plataforma (PDF) | **Cloudflare R2** (bucket de archivos) | (José), `config.ts › R2_*` (código) |
@@ -34,7 +34,7 @@ El VPS lo comparten otros proyectos ajenos a 4Client (José). Cualquier operaci�
 | App en Coolify | `4client-api-dev` | `4client-api-prod` | (José) |
 | URL de la API | `https://dev-api.4client.shop` | `https://api.4client.shop` | `apiBase.ts › DEV_API / PROD_API` (código) |
 | URL de la web | `https://dev.4client.pages.dev` | `https://4client.shop` | (José), `apiBase.ts` (código) |
-| Base | Postgres 16 propio (datos de prueba, migrados de Railway el 2026-09-20) | Postgres propio, datos reales del cliente (versión por confirmar, PREG-092: el respaldo usa cliente 18) | (José), commit `9672ded` |
+| Base | Postgres 16 propio (datos de prueba, migrados de Railway el 2026-09-20) | Postgres propio, datos reales del cliente (misma versión 16.15; el respaldo usa cliente 18, que es compatible) | (José), commit `9672ded` |
 | `APP_ENVIRONMENT_NAME` | cualquier valor permitido distinto de `production` (se supone `dev`) | `production` | `config.ts` (código); valor de dev (inferido) |
 | Banner rojo "DEV" en la web | Sí (login y cabecera) | No | `apiBase.ts › isDevEnvironment` (código) |
 | Fuente del repo en Coolify | GitHub App `4client-deploy-org` | "Public GitHub" (cambio planeado, ver §6) | (José) |
@@ -82,7 +82,7 @@ Lista completa en `apps/api/src/config.ts › envSchema`. Se configuran en Cooli
 | `WPP_TOKEN_ENC_KEY` | Clave maestra (64 hex) para cifrar el token de WhatsApp de cada organización | ? | ✅ obligatoria |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` | Subida de facturas y cobros. Sin ellas se usa disco local del contenedor (se pierde en cada deploy) | ? | ✅ |
 | `RESEND_API_KEY` | Correo con el código de 2FA | ? | ? |
-| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | activo (José 2026-10-10: le pide el código) | activo (José 2026-10-10: le pide el código) |
+| `REQUIRE_2FA` | Activa el segundo paso por correo, **solo para el rol `dev`** | `true` (leído en el VPS, 2026-10-10) | `true` (leído en el VPS, 2026-10-10) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `CEREBRAS_API_KEY` | Tomar lista (cadena de proveedores; Cerebras desactivado en código) | ? | ? |
 | `SENTRY_DSN` | Errores a Sentry | ? | ? |
 | `SEED_ADMIN_PASS`, `SEED_DEV_PASS` | Solo para sembrar datos; no deberían existir en prod | opc. | ✗ |
