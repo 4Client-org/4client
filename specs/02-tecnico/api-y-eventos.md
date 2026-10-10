@@ -1,12 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-09 @ 5d8e69d
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
 # API y eventos
 
-Catálogo completo de endpoints HTTP y eventos Socket.IO. Los parámetros y cuerpos de cada ruta están en su código (`apps/api/src/routes/<archivo>.ts`); aquí va quién puede llamarla, a qué módulo pertenece y para qué existe.
+Catálogo completo de endpoints HTTP y eventos Socket.IO. Los parámetros y cuerpos de cada ruta están en su código (`apps/api/src/routes/<archivo>.ts`); aquí va quién puede llamarla, a qué módulo pertenece y para qué existe. Los códigos de error que devuelven están en `codigos-de-error.md`.
 
 ## 1. Endpoints HTTP
 

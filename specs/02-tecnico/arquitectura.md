@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-09 @ 5d8e69d
 fuentes: [package.json, pnpm-lock.yaml, Dockerfile, start.sh, apps/api/package.json, apps/api/src/server.ts, apps/api/src/config.ts, apps/api/src/plugins/socket.ts, apps/api/src/plugins/prisma.ts, apps/api/src/middleware/auth.ts, apps/api/src/services, apps/web/package.json, apps/web/vite.config.ts, apps/web/public/_headers, apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/pages/MainPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/lib/apiBase.ts, apps/web/src/lib/socket.ts, apps/web/src/lib/format.ts, apps/web/src/components/ui/UpdateBanner.tsx, apps/web/src/hooks, .github/workflows]
 ---
 
@@ -70,6 +70,17 @@ flowchart TB
 | `apps/web` | PWA React. `src/pages` (4 pantallas), `src/components/<área>`, `src/hooks`, `src/lib`, `src/store`. |
 | `packages/shared` | Solo tipos TypeScript (`src/types/*.types.ts`): payload del JWT, roles, eventos Socket.IO. Se consume como fuente (`main: ./src/index.ts`), sin build. |
 | `pnpm-workspace.yaml` | `apps/*`, `packages/*`. |
+
+**Scripts de mantenimiento** (`apps/api/src`, se corren a mano con `tsx` desde `apps/api`; nada los ejecuta solo ni el despliegue) *(código)*:
+
+| Script | Qué hace | Trampas |
+|---|---|---|
+| `seed.ts` (`pnpm db:seed`) | Crea o actualiza (upsert) la organización de ejemplo, un admin, un dev y productos. Exige `SEED_ADMIN_PASS` y `SEED_DEV_PASS`; sin ellas termina | Usa datos del cliente real; solo para bases locales. Nunca en producción (allí `POST /dev/seed` responde 403). |
+| `seed-chats.ts` | Crea chats de ejemplo | Fecha fija 2026-06-27 (PREG-110). |
+| `seed-wpp.ts` | Copia `META_PHONE_NUMBER_ID`, `META_ACCESS_TOKEN` y `META_APP_SECRET` a la primera organización, cifrados con `encryptSecret` | Toma `findFirst()` sin orden: depende de qué organización exista. Teléfono de prueba fijo. |
+| `update-org-wpp.ts` | Actualiza `wpp_meta_phone_id` y `wpp_meta_token` de la organización con slug del primer cliente, leyendo el token de la variable `META_TOKEN` | `META_TOKEN` no está en `config.ts` (la lee directo de `process.env`); el slug y el `phone_id` están fijos en el código (DT-001). |
+| `reencrypt-wpp-tokens.ts` | Migración única: re-cifra con el formato actual (`enc:v2:`, clave derivada por organización) los `wpp_meta_token` y `wpp_meta_app_secret` que sigan en claro o en `enc:v1:`. Exige `WPP_TOKEN_ENC_KEY` | Idempotente: lo que ya es `enc:v2:` no se toca. |
+| `test-prisma.ts`, `test-wpp-save.ts` (en `apps/api/`, fuera de `src`) | Pruebas manuales sueltas; no son parte de la suite de Vitest | No se ejecutan en CI. |
 
 ## 4. Stack (versiones resueltas en `pnpm-lock.yaml`)
 
@@ -155,6 +166,8 @@ y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIR
 
 **Trampa `REQUIRE_2FA`:** se valida con `z.coerce.boolean()`, que convierte con `Boolean(valor)`. Cualquier texto no vacío es `true`: `REQUIRE_2FA=false` o `REQUIRE_2FA=0` **activan** el 2FA. Para apagarlo hay que dejar la variable sin definir o vacía. *(código)* → PREG-064.
 
+**Variables fuera de `config.ts`:** `META_TOKEN` (solo `update-org-wpp.ts`); `VITE_API_URL` (web, ver abajo); en GitHub Actions, la variable de repositorio `VITE_API_URL` (build de CI) y los secretos del respaldo `PROD_DATABASE_BACKUP_URL`, `BACKUP_R2_ACCESS_KEY_ID`, `BACKUP_R2_SECRET_ACCESS_KEY`, `BACKUP_R2_BUCKET_NAME` y `BACKUP_R2_ACCOUNT_ID` (`calidad-y-pruebas.md` §6). El `Dockerfile` y `start.sh` no declaran variables: todo llega por el entorno del contenedor en Coolify. Quién las lee: `config.ts` (todas las del servidor; el resto del código importa `config`), salvo `seed.ts` (`SEED_*`) y `update-org-wpp.ts` (`META_TOKEN`), que leen `process.env` directo. *(código)*
+
 **Web:** `VITE_API_URL` (opcional, se fija en build). Debe quedar **sin definir** en Cloudflare Pages para que funcione la selección en tiempo de ejecución; sirve para desarrollo local (`apps/web/.env.local`).
 
 ## 7. Web: build, PWA y cabeceras
@@ -166,6 +179,8 @@ y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIR
 - **Cabeceras** (`apps/web/public/_headers`, aplicadas por Cloudflare): `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` sin cámara/micrófono/ubicación, y CSP con `script-src 'self'` (sin scripts en línea ni CDNs), estilos y fuentes solo de Google Fonts, `img-src` con `https: data: blob:`, `media-src 'self' blob:` y `connect-src 'self' wss: https:`. Agregar un script externo o un `<script>` en línea exige tocar la CSP. *(código)*
 
 ## 8. Web: arquitectura del frontend
+
+Mapa de carpetas, componentes, hooks y utilidades: `frontend.md`. Catálogo de `code` de error de la API: `codigos-de-error.md`.
 
 **Enrutamiento sin librería** (`App.tsx`): se mira `window.location.pathname` una vez.
 

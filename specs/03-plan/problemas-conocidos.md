@@ -81,3 +81,10 @@ Casos donde la interfaz y la API no aplican la misma regla. Hasta que José deci
 | PREG-052 | El formulario no distingue productos agotados | `in_stock` existe pero `/products` no lo envía | FRM, CAT |
 | DT-024 | Acepta contraseñas de 6 caracteres | Exige 12 con mayúscula, minúscula y número | ACC |
 | DT-013 | Muestra un aviso si `wpp_status === 'failed'` | Nunca devuelve ese valor | INB |
+
+## Nuevas (revisión de completitud, 2026-10-09)
+
+| ID | Qué | Impacto | Módulo |
+|---|---|---|---|
+| DT-041 | `update-org-wpp.ts` y `seed-chats.ts` traen el `slug`, un `phone_id` de Meta y la fecha `2026-06-27` escritos en el código, y nada impide correrlos contra producción | Parte de DT-002 (monoinquilino fijado) | PLT |
+| DT-042 | Los métodos de pago están repetidos en el tipo compartido, la lista de `public.ts`, los esquemas de `orders.ts` y varios modales; agregar uno obliga a tocar todos | Riesgo de olvidar un sitio | CAJ, ORD, FRM |

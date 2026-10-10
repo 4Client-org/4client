@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [specs/00-estado-actual.md, specs/modulos/*.md, specs/04-operacion/runbooks.md, specs/01-funcional/vision-y-direccion.md]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [specs/00-horizonte.md, specs/00-estado-actual.md, specs/modulos/*.md, specs/04-operacion/runbooks.md, specs/01-funcional/vision-y-direccion.md]
 ---
 
 # Roadmap
@@ -33,10 +33,12 @@ Preparar el sistema para un segundo cliente y endurecer la operación.
 | 10 | **Regenerar el manual de usuario** desde `01-funcional`. | El manual actual está desactualizado; las specs ya son la fuente. | `archivo/Requerimientos/` |
 | 11 | Alinear **interfaz y API** donde difieren (botones que la API rechaza, cierre de caja del encargado). | Reduce confusión del personal; cada caso necesita decisión de José. | ORD, CAJ, INB |
 | 12 | Script de **detección de deriva** (drift) entre specs y código. | Las specs citan `ruta › símbolo` y tests por título; un script puede avisar cuando ya no existen. | `specs/`, `.github/` |
+| 19 | **Inicio de sesión con nombre de usuario** (en vez de correo) y **2FA también para administradores**. | Plan gradual de José: hoy se mantiene lo más simple posible para el primer cliente; el campo `username` ya existe pero no sirve para entrar. | ACC |
+| 21 | Que el **administrador de cada negocio** pueda borrar datos de un cliente final (hoy solo `dev`). | Decisión de José: se abrirá cuando haya más clientes (D-17). | INB, ACC |
 
 ## Después
 
-Mejoras de proceso e ideas de producto, sin fecha.
+Mejoras de proceso e ideas de producto, sin fecha. (Los items numerados no van en orden: la numeración es estable y no se reutiliza.)
 
 | # | Item | Por qué | Módulo / área |
 |---|---|---|---|
@@ -46,7 +48,7 @@ Mejoras de proceso e ideas de producto, sin fecha.
 | 16 | Ideas de fases del README (panel de super-admin ampliado, onboarding automático, cobro a clientes, dominio propio por cliente). | *Ideas, no compromisos* (*inferido*): se definen con cada negocio cuando la fase actual opere bien. | PLT, ACC |
 | 17 | Ideas de inteligencia de negocio: clientes frecuentes, avisos de demora por WhatsApp, catálogo automático. | Igual: *ideas, no compromisos* (*inferido*); toda feature grande necesita su `CH`. | INB, CAT |
 | 18 | Tienda web pública y pasarela de pagos en línea. | Explícitamente fuera de alcance hoy (`vision-y-direccion.md`); solo si el negocio lo pide. | fuera de alcance |
-| 19 | **Inicio de sesión con nombre de usuario** (en vez de correo) y **2FA también para administradores**. | Plan gradual de José: hoy se mantiene lo más simple posible para el primer cliente; el campo `username` ya existe pero no sirve para entrar. | ACC |
+| 22 | **Báscula conectada** que llene el precio de cada línea, y después impresora de etiquetas y pasarela de pagos. | Rumbo del producto (José); ver `00-horizonte.md`. Hoy el trabajador digita el precio. La báscula debe llenar el total de la línea (D-02), sin cambiar esa regla. | ORD, CAT |
 | 20 | Evaluar **generar el PDF de la factura en el servidor** (hoy se genera en el navegador). | Posible mejora de consumo, eficiencia y profesionalismo; sin fecha. | FAC |
 
 ## Cómo usar este archivo
@@ -54,3 +56,7 @@ Mejoras de proceso e ideas de producto, sin fecha.
 - Cada vez que José confirme, cambie o descarte un item, actualizar este archivo y `00-estado-actual.md` en el mismo commit.
 - Un item que se empiece a ejecutar y sea clase C obtiene su `03-plan/cambios/CH-nnnn-*.md`; aquí queda solo la referencia.
 - Esta lista no sustituye las prioridades de `00-estado-actual.md`: si difieren, manda ese archivo hasta que José decida.
+
+## Cambios propuestos (CH) que surgen de la revisión
+
+- **CH propuesto:** panel de WhatsApp que actúe sobre la **organización elegida** (hoy solo la de la sesión) y desactivar una organización desde DevTools, necesarios para el segundo cliente (PREG-127, PREG-128).

@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [apps/api/src/routes/orders.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/lib/clientChangedFlags.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations/20260628023857_add_order_history_immutability, apps/web/src/components/orders/Swimlane.tsx, apps/web/src/components/orders/ProductSearch.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/hooks/useOrders.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/lib/format.ts, apps/api/test/orders.test.ts, apps/api/test/orderNumbering.test.ts, apps/api/test/tickets.test.ts]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [apps/web/src/hooks/useOrders.ts, apps/web/src/components/ui/HistoryTable.tsx, apps/web/src/components/ui/DatePickerES.tsx, apps/api/src/routes/orders.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/lib/clientChangedFlags.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations/20260628023857_add_order_history_immutability, apps/web/src/components/orders/Swimlane.tsx, apps/web/src/components/orders/ProductSearch.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/hooks/useOrders.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/lib/format.ts, apps/api/test/orders.test.ts, apps/api/test/orderNumbering.test.ts, apps/api/test/tickets.test.ts]
 ---
 
 # ORD — Pedidos
@@ -105,6 +105,8 @@ La API acepta pasar de cualquier estado a cualquiera de `nuevo`, `preparando`, `
 *Tiempo real*
 
 - **RN-ORD-36 — Eventos.** CUANDO se crea un pedido, se emite `order:created` a la sala `org:<id>`; al editar, tocar observaciones o restaurar, `order:updated` con el pedido completo; al mover de estado, `order:moved` (`orderId`, `newStatus`) seguido de `order:updated`. El navegador reacciona recargando pedidos, tickets e informe del día; los eventos de cobro (`order:paid`) son de **CAJ**. *(plataforma, código)*
+- **RN-ORD-37 — Caché del tablero tras cada cambio.** Crear, editar, mover y cobrar un pedido invalidan la consulta del tablero (`orders`) y también la de los chats (`ticket`; al crear, además `tickets`), para que reabrir un chat enseguida no muestre la lista vieja. Mover una tarjeta es optimista: la columna cambia al soltarla y se revierte si la API falla. *(plataforma, código)*
+- **RN-ORD-38 — Tabla de historial y selector de fecha.** `HistoryTable` es la misma tabla en el detalle del pedido y en el informe (con columna "Pedido" solo en el informe): traduce los valores internos a texto (`cod` → "Cobro en casa", `cash` → "Pagado en tienda", `transfer` → "Transferencia", estados y canal), pinta en rojo "producto eliminado" y en verde "producto agregado", y muestra "Cliente" como autor cuando la nota contiene "formulario" (el `actor_id` es quien envió el link, no el cliente) y "Sistema" si no hay autor. Las horas van en `America/Bogota`. `DatePickerES` es el calendario en español que sustituye al nativo (el nativo muestra los textos en el idioma del navegador): botón "Hoy", ventana ajustada al ancho de pantalla; lo usan el tablero, el informe y la búsqueda de chats. *(plataforma, código)*
 
 **Textos que ve el cliente final.** Ninguno: crear, editar, mover o restaurar un pedido no manda mensajes por WhatsApp. El cliente solo ve el estado de su pedido si abre su link de formulario (**FRM**).
 
@@ -147,6 +149,8 @@ La API acepta pasar de cualquier estado a cualquiera de `nuevo`, `preparando`, `
 | RN-ORD-28 a 35 | `Swimlane.tsx`, `DetallePedidoModal.tsx`, `NuevoPedidoModal.tsx`, `ProductSearch.tsx` | *(sin test; la web no tiene pruebas de estos componentes)* |
 | Permisos de API | `requireRole('admin','encargado')` | `orders.test.ts › "forbids creating an order as domiciliario -> 403"` |
 | RN-ORD-36 | `fastify.io.to('org:<id>').emit(…)` | *(sin test)* |
+| RN-ORD-37 | web `hooks/useOrders.ts` (`useCreateOrder`, `usePatchOrder`, `useMoveOrder`, `useCobroOrder`) | *(sin test)* |
+| RN-ORD-38 | web `ui/HistoryTable.tsx`, `ui/DatePickerES.tsx` | *(sin test)* |
 
 `tickets.test.ts` (`"a returning customer (old created_at, fresh first_message_today_at) sorts by when they FIRST wrote TODAY…"`, `"a ticket that already wrote earlier today stays ahead of a newer arrival…"`) prueba el orden de `GET /tickets`, que determina el orden de las filas del tablero; el comportamiento pertenece a **INB**.
 

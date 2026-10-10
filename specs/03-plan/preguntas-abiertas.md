@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09
+verificado: 2026-10-09 @ 5d8e69d
 ---
 
 # Preguntas abiertas
@@ -132,7 +132,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-060 | Cambiar el email de un usuario no revoca sus sesiones y la auditoría guarda el cuerpo recibido tal cual. ¿Se corrige? | ACC | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-061 | Los empleados desactivados no se pueden reactivar ni ver. ¿Se necesita reactivar? | ACC | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-062 | El botón de desactivar aparece en la fila propia aunque la API responde 400. ¿Se oculta? | ACC | `modulos/ACC.md` (§ 3 Pendientes) |
-| PREG-063 | El nombre de usuario se muestra y guarda pero no sirve para entrar. ¿Se activa login por usuario o se oculta el campo? | ACC | `modulos/ACC.md` (§ 3 Pendientes) |
+| PREG-063 | **Parcialmente respondida (D-10, `roadmap.md` #19):** José planea el inicio de sesión con nombre de usuario más adelante, por pasos. **Sigue abierto:** mientras tanto, ¿se oculta el campo, que se muestra y guarda pero no sirve para entrar? | ACC | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-064 | `REQUIRE_2FA=false` (texto) activa el 2FA por `z.coerce.boolean()`. ¿Se corrige el parseo o se documenta que debe quedar vacía? | ACC, GEN, OPS | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-065 | Desactivar o bajar de rol a un usuario no invalida su access token hasta 15 min. ¿Se acepta o `authenticate` consulta `active`/`role`? | ACC, GEN | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-066 | `/login/verify-code` no respeta `locked_until`. ¿Debe cortar también durante el bloqueo? | ACC, GEN | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
@@ -226,6 +226,18 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-119 | **Respondida (D-06):** precio y control; Cloudflare le parece más robusto y profesional que Vercel. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
 | PREG-120 | **Respondida (D-10):** simplicidad para el primer cliente; el 2FA de admins y el login por nombre de usuario vienen después. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
 | PREG-121 | **Respondida (D-12):** fue la solución de momento; podría pasar al servidor más adelante. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
-| PREG-122 | ¿Por qué 'Eliminar datos' pasó a ser solo para `dev` (D-17)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
+| PREG-122 | **Respondida (D-17):** hoy José opera la plataforma; se abrirá al administrador de cada negocio cuando haya más clientes. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
 
-Total: 122 preguntas abiertas.
+## Nuevas (revisión de completitud, 2026-10-09)
+
+| ID | Pregunta | Módulo(s) | Dónde está el detalle |
+|---|---|---|---|
+| PREG-123 | Un aviso (toast) nuevo no cancela el temporizador del anterior: si llegan dos seguidos, el segundo puede desaparecer antes de 2,8 s. ¿Se corrige? | ACC | `modulos/ACC.md` (RN-ACC-26) |
+| PREG-124 | La lista de empleados se guarda en caché 5 min (el resto de la web, 30 s): un domiciliario recién creado o desactivado tarda en verse en otra pestaña abierta. ¿Es aceptable? | ACC, ORD | `modulos/ACC.md` (RN-ACC-25) |
+| PREG-125 | `reencrypt-wpp-tokens.ts` omite en silencio una organización cuya clave no puede descifrar, y `seed-wpp.ts` escribe sobre la primera organización que encuentra. ¿Se protegen estos scripts? | PLT, WPP | `modulos/PLT.md` (RN-PLT-20) |
+| PREG-126 | Sin `WPP_TOKEN_ENC_KEY` fuera de producción los tokens se guardan en texto plano (solo un aviso en consola). ¿Staging también lo asume? | WPP | `modulos/WPP.md` (RN-WPP-30) |
+| PREG-127 | `DevWppPanel` y `PATCH /config/wpp` actúan solo sobre la organización de la sesión: no hay pantalla para configurar WhatsApp de otro negocio. ¿Cómo se hará al dar de alta el segundo cliente? | PLT, WPP | `04-operacion/alta-de-negocio.md` |
+| PREG-128 | No hay forma en la interfaz de desactivar una organización (el login ya rechaza `active = false`). ¿Hace falta? | PLT, ACC | `04-operacion/alta-de-negocio.md` |
+| PREG-129 | Un hotfix urgente no se puede aislar: `main` recibe todo lo que hay en `dev`. ¿Se acepta, o se define un flujo de hotfix? | flujo | `04-operacion/flujo-de-trabajo.md` |
+
+Total: 129 preguntas (las respondidas por José están marcadas "Respondida").

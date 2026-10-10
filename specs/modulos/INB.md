@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/lib/media.ts, apps/api/src/lib/businessDate.ts, apps/api/prisma/migrations/20260802000000_ticket_last_activity/migration.sql, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/ui/ForwardMessageModal.tsx, apps/web/src/components/ui/DeliveryStatus.tsx, apps/web/src/hooks/useChatScroll.ts, apps/web/src/hooks/useSendChatMedia.ts, apps/web/src/hooks/useChatMediaBlob.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/styles/global.css, apps/api/test/inbox.test.ts, apps/api/test/tickets.test.ts, apps/api/test/files.test.ts, apps/api/test/public.test.ts]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatPhone.ts, apps/web/src/lib/fileToBase64.ts, apps/web/src/components/ui/ChatImage.tsx, apps/web/src/components/ui/ChatAudio.tsx, apps/web/src/components/ui/ChatVideo.tsx, apps/web/src/components/ui/ChatDocument.tsx, apps/web/src/components/ui/ChatLocation.tsx, apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/lib/media.ts, apps/api/src/lib/businessDate.ts, apps/api/prisma/migrations/20260802000000_ticket_last_activity/migration.sql, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/ui/ForwardMessageModal.tsx, apps/web/src/components/ui/DeliveryStatus.tsx, apps/web/src/hooks/useChatScroll.ts, apps/web/src/hooks/useSendChatMedia.ts, apps/web/src/hooks/useChatMediaBlob.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/styles/global.css, apps/api/test/inbox.test.ts, apps/api/test/tickets.test.ts, apps/api/test/files.test.ts, apps/api/test/public.test.ts]
 ---
 
 # INB — Chats (bandeja, mensajes, links de formulario)
@@ -78,6 +78,9 @@ fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api
 
 - **RN-INB-27 — Encabezado unificado.** `TicketModal`, `DetallePedidoModal` y `NuevoPedidoModal` DEBEN mostrar el chat en una columna de **660 px** con la misma fila de botones en este orden: Cuenta banco, Formulario, Bloquear Link, Eliminar datos (solo `dev`), Catálogo, Tomar lista (admin, encargado, dev). En celular la fila se vuelve un menú hamburguesa. Cuenta banco, Formulario, Bloquear Link y Catálogo se deshabilitan si el día es anterior o la caja está cerrada (`isPastDay`), solo en la interfaz: la API no lo exige. Commits `1dce1d6` y `39d96a3` (2026-10-06). *(plataforma, código)*
 - **RN-INB-28 — Desplazamiento.** `useChatScroll` carga los anteriores al pedirlo sin saltar de posición, solo sigue al final si el usuario ya estaba abajo, y cuenta "N mensajes nuevos" si hay mensajes nuevos mientras lee arriba. Lo comparten los cuatro chats. *(plataforma, código)*
+- **RN-INB-29 — Cómo se muestra un teléfono.** Siempre la web muestra el teléfono con `lib/formatPhone.ts › formatPhoneDisplay`: si son 12 dígitos que empiezan por 57 quita el 57 (el personal no marca el indicativo); cualquier otra forma se deja igual; un BSUID (`CC.` + alfanuméricos) o un relleno `no-<hex>` nunca son números reales y se muestran como "Sin teléfono" (`looksFake`). Lo usan el tablero, la bandeja, los modales, el reenvío, el cierre y el PDF de la factura. El almacenamiento no cambia (`Ticket.phone` guarda el valor tal cual llegó). *(plataforma, código)*
+- **RN-INB-30 — Fotos desde el navegador.** `lib/fileToBase64.ts` fija el tope de la foto de chat en 5 MiB y los tipos `image/jpeg`, `image/png` e `image/webp` (iguales a los de `inbox.ts`, RN-INB-11; es una de las constantes duplicadas de DT-016) y entrega el archivo como base64 sin el prefijo `data:`, que es lo que espera la API. *(plataforma, código)*
+- **RN-INB-31 — Cómo se ve cada tipo de mensaje.** La imagen, el audio y el video se piden con el token de sesión a `GET /inbox/media/:token` al montarse y se muestran desde un enlace local temporal; la imagen se amplía dentro de la aplicación al tocarla. El documento solo se pide al hacer clic y se abre en una pestaña nueva (se libera a los 60 s). La ubicación es un enlace directo a Google Maps ("Ver ubicación"). Si la carga falla, el texto es "No se pudo cargar la imagen/audio/video" o "No se pudo abrir el documento". Las marcas de entrega (`DeliveryStatus`): una marca "Enviado"; doble gris "Entregado"; doble azul "Leído"; icono rojo con el motivo si `failed_reason`. *(plataforma, código)*
 
 **Textos que ve el cliente final.** Lo que escribe el personal tal cual; el formulario (advertencia, link, seguimiento) y la cuenta bancaria salen de las plantillas editables de la organización (`Organization.message_templates`). El link pasa a ser inválido para el cliente según RN-INB-18 a 20 (mensaje genérico "Link inválido o expirado").
 
@@ -129,6 +132,9 @@ fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api
 | RN-INB-26 | `tickets.ts › PATCH /:id` | *(sin test)* |
 | RN-INB-27 | `TicketModal.tsx`, `DetallePedidoModal.tsx`, `NuevoPedidoModal.tsx`; `global.css › .tk-modal-chat` | *(sin test)* |
 | RN-INB-28 | `hooks/useChatScroll.ts` | *(sin test)* |
+| RN-INB-29 | `apps/web/src/lib/formatPhone.ts › formatPhoneDisplay`, `› looksFake` | *(sin test)* |
+| RN-INB-30 | `apps/web/src/lib/fileToBase64.ts` | *(sin test)* |
+| RN-INB-31 | `ui/ChatImage.tsx`, `ChatAudio.tsx`, `ChatVideo.tsx`, `ChatDocument.tsx`, `ChatLocation.tsx`, `DeliveryStatus.tsx` | *(sin test)* |
 
 **Datos y eventos socket** (sala `org:<orgId>`):
 

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-09 @ 5d8e69d
 fuentes: [apps/api/vitest.config.ts, apps/api/test/globalSetup.ts, apps/api/test/helpers.ts, apps/api/test/*.test.ts, apps/api/package.json, apps/web/package.json, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/server.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations, Dockerfile, start.sh]
 ---
 
@@ -158,6 +158,20 @@ cd ../.. && pnpm --filter api test             # desde la raíz, como en CI
 ```
 
 Antes de integrar, el resto de la verificación (tipos y builds) está en `04-operacion/flujo-de-trabajo.md` §3.
+
+## 9. Cómo escribir un test nuevo
+
+Receta que siguen los archivos existentes (`orders.test.ts` es el modelo) *(código)*:
+
+1. Un `describe` por recurso. En `beforeAll`: `app = await buildTestServer()`, luego `createTestOrg(app.prisma)` y un `createTestUser(app.prisma, org.id, 'admin' | 'encargado' | 'domiciliario' | 'dev', password)` por rol que necesites. En `afterAll`: `app.close()`. No hace falta limpiar filas: cada corrida usa organizaciones con sufijo aleatorio.
+2. Inicia sesión con `app.inject({ method: 'POST', url: '/api/v1/auth/login', payload })` y usa `res.json().data.accessToken` como `authorization: Bearer …`. `getRfCookie(res)` extrae la cookie `rf` del refresh.
+3. Crea **dos organizaciones** cuando pruebes aislamiento: la regla de tenant exige comprobar que la organización B recibe 404 sobre datos de A (principio 2).
+4. Una regla de dinero, permisos o tenant sin test viola el principio 11. Cubre al menos: caso feliz, rol no permitido (403), recurso de otra organización (404) y el borde de la regla.
+5. Servicios externos: no los llames. Simula `global.fetch` (Meta, IA), `vi.mock` el correo, y `vi.spyOn(Date, 'now')` para el reloj; restaura en `afterEach`.
+6. Cuando agregues un test a una regla documentada, actualiza la tabla "regla → cumplimiento → test" del módulo (cita `archivo › "título"`) y, si cierra un hueco, quita el `DT-nnn` correspondiente.
+7. Recuerda las diferencias de `buildTestServer` frente al servidor real (§2): no cubre `users`, `employees`, HSTS, HTTPS ni la firma del webhook; para esas hay que ampliar el helper.
+
+Datos ficticios siempre (`@example.com`, `+57 300 000 0000`).
 
 ## Pendientes
 

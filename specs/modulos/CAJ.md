@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/dashboard.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/public.ts, apps/web/src/components/orders/CodPaymentField.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/CierreCajaModal.tsx, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/lib/csv.ts, apps/web/src/lib/format.ts, apps/api/test/cierre.test.ts, apps/api/test/orders.test.ts, apps/api/test/orderNumbering.test.ts, apps/api/test/dashboard.test.ts, apps/api/test/public.test.ts, apps/api/test/dev-centro-mando.test.ts]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [apps/web/src/hooks/useCierre.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/dashboard.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/public.ts, apps/web/src/components/orders/CodPaymentField.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/CierreCajaModal.tsx, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/lib/csv.ts, apps/web/src/lib/format.ts, apps/api/test/cierre.test.ts, apps/api/test/orders.test.ts, apps/api/test/orderNumbering.test.ts, apps/api/test/dashboard.test.ts, apps/api/test/public.test.ts, apps/api/test/dev-centro-mando.test.ts]
 ---
 
 # CAJ — Cobros y cierre de caja
@@ -73,6 +73,7 @@ stateDiagram-v2
 - **RN-CAJ-22 — Aviso en vivo.** CUANDO el cierre termina, el sistema DEBE emitir `cierre:done` a toda la organización; los navegadores recargan pedidos, tickets, informe y estado de cierre de todas las fechas. *(plataforma, código)*
 - **RN-CAJ-23 — CSV del cierre.** El CSV tiene columnas #, Cliente, Teléfono, Dirección, Productos, Total, Pago, Estado y Acción cierre. "Acción cierre" es "Completado" solo si el pedido está pagado; crédito sin pagar dice "Pendiente por cobrar (crédito)"; si no, la decisión ("Pasar a mañana" / "Cerrar sin cobro") o "Sin decidir". Los campos se protegen contra inyección de fórmulas. Se puede volver a descargar desde "Informe del día" con las decisiones guardadas en `DailyClose`. *(plataforma, código)*
 - **RN-CAJ-24 — Reabrir un día.** Solo `dev` reabre un día cerrado: se borra la fila `DailyClose` y su contenido queda en `audit_logs`. No hay acción para "cerrar" desde DevTools, para no inventar totales. *(plataforma, código)*
+- **RN-CAJ-25 — La web sabe si el día está cerrado.** `GET /cierre/status?fecha=` (cualquier rol con sesión) devuelve `cerrado` y `closedAt`; el hook `useDiaCerrado` lo consulta (y no consulta hasta tener fecha). Con día cerrado, el tablero, `TicketModal`, `NuevoPedidoModal` y `DetallePedidoModal` pasan a solo lectura/pasado, admin incluido, igual que el 409 `DAY_CLOSED` de RN-CAJ-21. La consulta se guarda 30 s, pero el evento de socket `cierre:done` la invalida (`MainPage`), así que otra pestaña conectada ve el cierre enseguida; sin socket, puede tardar hasta esos 30 s. *(plataforma, código)*
 
 Nada de este módulo es configurable por negocio: no hay reglas *(cliente)*.
 
@@ -124,6 +125,7 @@ Nada de este módulo es configurable por negocio: no hay reglas *(cliente)*.
 | RN-CAJ-22 | `cierre.ts › POST /`; web `MainPage.tsx › onCierreDone` | *(sin test)* |
 | RN-CAJ-23 | `csv.ts › downloadCierreCSV` | *(sin test)* |
 | RN-CAJ-24 | `dev.ts › POST /actions/reopen-cierre` | `apps/api/test/dev-centro-mando.test.ts › "borra el DailyClose de esa fecha (reabre) y deja el snapshot en audit_logs"` |
+| RN-CAJ-25 | `cierre.ts › GET /status`; web `hooks/useCierre.ts › useDiaCerrado` | *(sin test)* |
 
 **Datos y eventos socket.** Cobro, crédito pagado y cobro retroactivo emiten `order:paid` (`{ orderId }`). El cierre emite `cierre:done` (`{ fecha }`). El borrador de decisiones del modal de cierre vive en `localStorage` del navegador (clave `4client_cierre_draft_<fecha>`), no se comparte entre usuarios y se borra al cerrar.
 
