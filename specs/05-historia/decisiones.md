@@ -6,7 +6,7 @@ fuentes: [git log y cuerpos de commit, archivo/RoadMap/PLAN_IMPLEMENTACION_ORIGI
 
 # Decisiones que no se deben deshacer sin preguntar
 
-> **Resumen.** 25 decisiones vivas (`D-01` a `D-25`), cada una con fecha, evidencia (sha), el porqué y la razón para no revertirla. Se consulta **antes de cambiar un comportamiento que parezca un error**. Lectura rápida: dinero y datos (D-02, D-03, D-19), tenant e identidad (D-01, D-05), privacidad (D-04, D-15, D-17, D-18), infraestructura (D-06), links y acceso (D-07, D-08, D-09, D-10, D-16), IA y archivos (D-11, D-12), tiempo y numeración (D-13, D-14).
+> **Resumen.** 28 decisiones vivas (`D-01` a `D-28`), cada una con fecha, evidencia (sha), el porqué y la razón para no revertirla. Se consulta **antes de cambiar un comportamiento que parezca un error**. Lectura rápida: dinero y datos (D-02, D-03, D-19), tenant e identidad (D-01, D-05), privacidad (D-04, D-15, D-17, D-18), infraestructura (D-06), links y acceso (D-07, D-08, D-09, D-10, D-16), IA y archivos (D-11, D-12), tiempo y numeración (D-13, D-14).
 
 Registro de decisiones que un agente (o una persona nueva) podría "arreglar" creyendo que son errores. Cada fila da la evidencia (sha) y el porqué. Si el porqué no aparece en ningún commit, comentario o documento, dice **(sin evidencia) → PREG** en vez de inventarlo. Deshacer cualquiera exige actualizar esta tabla y, si es un principio, `../00-principios.md`.
 
@@ -39,6 +39,9 @@ Fuentes: *(código)* leído en el repo, *(José)* dicho por José, *(inferido)* 
 | D-23 | Los datos personales se acumulan sin plazo de retención, por ahora | 2026-10-10 | (decisión de José en conversación) | No hay plazo definido; se planea conforme a la ley (roadmap 32). | José | Dejarlo indefinido es un riesgo legal (RK, `datos-personales.md`); no se da por resuelto. |
 | D-24 | Dos operaciones simultáneas en el cierre de caja (un cobro justo al cerrar, o dos cierres a la vez) no se tratan como problema por ahora | 2026-10-10 | (decisión de José en conversación) | Se cierra cuando ya todo está listo para cerrar; con un solo local y una persona cerrando no ocurre. | José | Reabrirlo al tener varios negocios o varias personas cerrando (PREG-009). |
 | D-25 | El aviso de privacidad va una sola vez, la primera vez que el cliente escribe en toda su historia, y no se repite | 2026-10-10 | (decisión de José en conversación) | Es lo que exige la ley según José; coincide con "una vez por ticket" (un ticket por teléfono, para siempre). | José | Cambiarlo exige revisar el principio 6 (PREG-022). |
+| D-26 | Se puede marcar pagado un crédito aunque su pedido aún no esté cerrado; se deja como está | 2026-10-10 | (decisión de José en conversación) | No es necesario exigirlo. | José | Ver PREG-007. |
+| D-27 | El informe del día deja "Cerrados/Cobrados" y "Chats con pedidos completados" como están (incluyen créditos sin pagar y cerrados sin cobro) | 2026-10-10 | (decisión de José en conversación) | "No movamos nada": el cliente ya lo entiende así. | José | Ver PREG-074, PREG-075. |
+| D-28 | Un cliente que escribe a las 21:30 y de nuevo a las 00:10 puede recibir dos bienvenidas, y el segundo mensaje de la noche devuelve el chat al día real; se deja así | 2026-10-10 | (decisión de José en conversación) | Es la regla que ya se estableció: lo escrito desde las 21:00 crea el ticket del día siguiente. | José | Ver PREG-026, PREG-027. |
 
 ## Notas
 

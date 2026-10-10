@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0020 — Respuestas de José: permisos, pago dividido, hora de corte y formulario
+- **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-4`
+- **Qué cambió:** 12 PREG respondidas (007, 008, 010, 012, 025, 026, 027, 052, 074, 075, 137, 138); D-26 a D-28; roadmap 25 y 34 precisados y nuevos 36 a 40. Ningún código cambió.
+- **Por qué:** respuestas de José (2026-10-10).
+- **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
+- **Obsoleto:** nada (lo decidido es futuro).
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0019 — Más respuestas de José: cierre, crédito, edición de cobrados, aviso de privacidad
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-3` y `docs/respuestas-jose-3b`
 - **Qué cambió:** PREG-009, 011, 022 y 064 respondidas; PREG-137 queda solo con el cobro retroactivo; nueva PREG-138 (reparto de un pago dividido al editar); D-24 y D-25; roadmap 25 a 27 precisados y nuevos 34 y 35. Ningún código cambió.
 - **Por qué:** respuestas de José (2026-10-10).
 - **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
 - **Obsoleto:** nada (lo decidido es futuro).
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `65f004e` · **Prod:** pendiente
 
 ### R-0018 — Respuestas de José a las preguntas prioritarias y nuevos ítems del roadmap
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-2`
