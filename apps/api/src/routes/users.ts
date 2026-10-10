@@ -130,6 +130,9 @@ export default async function userRoutes(fastify: FastifyInstance) {
     // abierto de esa cuenta - seguía recibiendo en vivo cada order:*/ticket:*
     // del org, sin límite de tiempo, pese a estar desactivada. Mismo lugar
     // donde ya se revocan sus refresh tokens en reset-password de abajo.
+    // Cambiar el rol también corta sus sockets abiertos: el cliente reconecta con un
+    // token refrescado (rol nuevo) y el handshake contrasta rol/active contra la BD.
+    if (body.data.role !== undefined) fastify.disconnectUserSockets(id);
     if (body.data.active === false) {
       fastify.disconnectUserSockets(id);
       // Sin esto, al reactivar la cuenta sus refresh tokens viejos (vigentes hasta

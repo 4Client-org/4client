@@ -18,7 +18,7 @@ export default fp(async (fastify) => {
   });
 
   // Verify JWT on every socket connection
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token =
       (socket.handshake.auth as Record<string, string>)?.token ??
       (socket.handshake.headers?.authorization ?? '').replace('Bearer ', '');
@@ -31,6 +31,15 @@ export default fp(async (fastify) => {
       // (no userId/role). Without this, a client's form link could open a socket and join
       // their org's room, eavesdropping on every order/ticket event in real time.
       if (!payload.userId || !payload.role) return next(new Error('Token inválido'));
+      // Mismo contraste que middleware/auth.ts: un usuario desactivado, o con rol
+      // distinto al del token, no puede abrir socket aunque su JWT siga vigente.
+      const current = await fastify.prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { active: true, role: true, org_id: true },
+      });
+      if (!current || !current.active || current.role !== payload.role || current.org_id !== payload.orgId) {
+        return next(new Error('Token inválido'));
+      }
       socket.data.user = payload;
       next();
     } catch {
