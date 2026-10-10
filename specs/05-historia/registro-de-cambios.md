@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0018 — Respuestas de José a las preguntas prioritarias y nuevos ítems del roadmap
+- **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-2`
+- **Qué cambió:** 11 PREG respondidas (002, 004, 011 en parte, 035, 037, 042, 051, 065, 081, 085, 097); decisiones D-21 a D-23; ítems 25 a 33 en el roadmap (cierre que congela todo, crédito con fechas, vista previa del cierre = servidor, quitar `device_token`, desactivar corta al instante, párrafo de IA en la política, selector de organización para `dev`, plazo de retención, borrado más completo); nueva PREG-137. Ningún código cambió.
+- **Por qué:** respuestas de José a las preguntas prioritarias (2026-10-10).
+- **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
+- **Obsoleto:** nada (el comportamiento actual no cambió; lo decidido es futuro).
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0017 — Flujo: se prueba solo en dev (D-20)
 - **Fecha / rama:** 2026-10-10, `docs/flujo-sin-previews`
 - **Qué cambió:** nueva decisión D-20 (José solo prueba en `dev`, no en vistas previas de rama); PREG-131 queda respondida; `flujo-de-trabajo.md` lo dice en el paso 1.
 - **Por qué:** respuesta de José a PREG-131.
 - **Specs tocadas:** `05-historia/decisiones.md`, `03-plan/preguntas-abiertas.md`, `04-operacion/flujo-de-trabajo.md`.
 - **Obsoleto:** nada.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `c08d59a` · **Prod:** pendiente
 
 ### R-0016 — Lista de pendientes de privacidad y seguridad, y limpieza de ramas
 - **Fecha / rama:** 2026-10-10, `docs/lista-pendientes`
