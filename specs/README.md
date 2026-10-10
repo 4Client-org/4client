@@ -8,7 +8,7 @@ Aquí vive todo lo que una persona o una IA necesita para entender 4Client sin l
 
 | Nivel | Qué leer | Cuándo |
 |---|---|---|
-| **T0** (siempre, ~350 líneas) | `../AGENTS.md`, `00-estado-actual.md`, `00-principios.md` | Antes de cualquier tarea |
+| **T0** (siempre) | `../AGENTS.md`, `00-horizonte.md`, `00-estado-actual.md`, `00-principios.md` | Antes de cualquier tarea |
 | **T1** | `modulos/<MOD>.md` del área (mapa en `AGENTS.md`) + los pendientes de ese módulo en `03-plan/` | Tareas sobre una parte del sistema |
 | **T2** | `01-funcional/glosario.md`, `actores-y-permisos.md`; `02-tecnico/*` según la tarea; `04-operacion/*` | Datos, API, seguridad, infraestructura, deploy |
 | **T3** | `05-historia/decisiones.md` | Antes de revertir o cambiar un comportamiento existente |
@@ -17,14 +17,26 @@ Aquí vive todo lo que una persona o una IA necesita para entender 4Client sin l
 
 | Carpeta | Contenido |
 |---|---|
-| `00-*.md` | Estado actual (foto viva) y principios no negociables |
+| `00-*.md` | Horizonte (hacia dónde va), estado actual (foto viva) y principios no negociables |
 | `01-funcional/` | **Qué y por qué.** Visión, actores y permisos, glosario, ciclo del día |
 | `02-tecnico/` | **Cómo está construido.** Arquitectura, datos, API y eventos, integraciones, seguridad y privacidad, calidad |
 | `modulos/` | Un archivo por módulo, con tres secciones: 1 Negocio · 2 Técnico · 3 Pendientes |
 | `03-plan/` | **Hacia dónde.** Roadmap, problemas conocidos, preguntas abiertas y cambios (`CH-nnnn`) |
-| `04-operacion/` | Flujo de trabajo (ramas y deploys), entornos, desarrollo local, runbooks |
-| `05-historia/` | Cronología, decisiones y changelog |
-| `_plantillas/` | Plantillas y guía de escritura de specs |
+| `04-operacion/` | Flujo de trabajo (ramas y deploys), entornos y despliegue, desarrollo local, runbooks, **diagnóstico de incidentes** y **alta de un negocio nuevo** |
+| `05-historia/` | Cronología, decisiones, changelog por release y **registro de cambios** (un asiento por cambio) |
+| `_plantillas/` | Plantillas (`modulo.md`, `cambio.md`), guía de escritura y **`checklist.md`** (qué specs tocar según el tipo de cambio) |
+
+## Archivos (índice completo)
+
+| Carpeta | Archivos |
+|---|---|
+| raíz | `00-horizonte.md`, `00-estado-actual.md`, `00-principios.md` |
+| `01-funcional/` | `vision-y-direccion.md`, `actores-y-permisos.md`, `glosario.md`, `ciclo-diario.md` |
+| `02-tecnico/` | `arquitectura.md`, `datos-y-migraciones.md`, `api-y-eventos.md`, `integraciones.md`, `seguridad-y-privacidad.md`, `limites-y-tiempos.md`, `calidad-y-pruebas.md`, `frontend.md`, `codigos-de-error.md` |
+| `03-plan/` | `roadmap.md`, `problemas-conocidos.md` (BUG/DT), `preguntas-abiertas.md` (PREG), `mapa-de-ids.md`, `cambios/README.md` (+ un `CH-nnnn-*.md` por cambio clase C) |
+| `04-operacion/` | `flujo-de-trabajo.md`, `entornos-y-despliegue.md`, `desarrollo-local.md`, `runbooks.md`, `diagnostico-de-incidentes.md`, `alta-de-negocio.md` |
+| `05-historia/` | `registro-de-cambios.md`, `changelog.md`, `decisiones.md`, `cronologia.md` |
+| `_plantillas/` | `modulo.md`, `cambio.md`, `guia-de-escritura.md`, `checklist.md` |
 
 ## Módulos
 
@@ -57,6 +69,7 @@ Los IDs no se reutilizan; lo obsoleto se tacha con un puntero a su reemplazo. La
 
 ## Reglas de mantenimiento
 
+0. **Todo cambio que llega a `dev` deja un asiento** en `05-historia/registro-de-cambios.md` (misma rama, antes de integrar; reglas en ese archivo) y **corrige en el mismo cambio** cualquier spec que deje de ser verdad: nunca documentación vieja. Qué archivos tocar según el cambio: `_plantillas/checklist.md`.
 1. Cada archivo lleva `verificado: fecha @ sha`. Para saber si puede estar desactualizado: `git log <sha>..HEAD -- <fuentes>`; si hay commits, revisar.
 2. Un cambio de comportamiento actualiza la spec del módulo **en el mismo commit**.
 3. Lo que parece mal se registra como `PREG`, no se "arregla" en la spec. Solo José lo convierte en `BUG`.

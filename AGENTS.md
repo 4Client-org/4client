@@ -9,18 +9,21 @@ SaaS multi-tenant para gestionar pedidos por WhatsApp de fruvers (tiendas de fru
 1. **`main` = producción con un cliente real.** Nunca hagas merge ni push a `main` sin OK explícito de José, cada vez. El deploy de `main` ejecuta migraciones al arrancar (`start.sh`): toda migración debe ser aditiva.
 2. **Una rama por trabajo, desde `dev`** (`feature/`, `fix/`, `chore/`, `docs/`). Se integra a `dev` con merge y **se borra la rama** en local y en GitHub. Solo existen `dev` y `main`. Detalle y comandos: `specs/04-operacion/flujo-de-trabajo.md`.
 3. **Verifica antes de integrar:** `tsc --noEmit` en api y web, `vitest run` en api (Postgres local), `vite build` en web.
-4. **La spec dice lo que debe ser; el código, lo que es.** (Los archivos de las specs describen el comportamiento actual verificado; las dudas de intención están como PREG.) Si difieren y no hay un BUG registrado, **para**: anótalo como PREG en `specs/03-plan/preguntas-abiertas.md` y pregunta a José. No "arregles" lo que podría ser intencional.
+4. **Las specs describen el comportamiento actual verificado; las dudas de intención están como PREG.** Si el código difiere de la spec y no hay un BUG registrado, **para**: anótalo como PREG en `specs/03-plan/preguntas-abiertas.md` y pregunta a José; no "arregles" lo que podría ser intencional. Si la spec no dice algo, dilo: no lo inventes.
 5. **Cambios clase C** (feature, esquema, API, dinero, privacidad): escribe `specs/03-plan/cambios/CH-nnnn-*.md` y espera aprobación **antes** del código.
-6. **Definición de terminado:** spec del módulo actualizada (y su `verificado`), BUG cerrado con sha, sospechas nuevas como PREG, `specs/00-estado-actual.md` actualizado al cerrar la sesión.
-7. **Nunca** escribas en el repo secretos, tokens, URLs de base con credenciales ni datos reales de clientes finales.
-8. Si tu memoria o contexto previo contradice `specs/`, **gana `specs/`**; reporta la contradicción.
-9. Commits en español (`tipo: descripción`); documentación e interfaz en español; identificadores de código en inglés.
+6. **Definición de terminado** (todo en la misma rama, antes de integrar a `dev`): spec del módulo actualizada y su `verificado`; BUG cerrado con sha; sospechas nuevas como PREG; **asiento nuevo `R-nnnn` en `specs/05-historia/registro-de-cambios.md`** (también si el cambio es solo de docs, clase A o una reversa; el campo "Prod" se completa cuando viaje a `main`); `specs/00-estado-actual.md` actualizado. Qué archivos tocar según el cambio: `specs/_plantillas/checklist.md`.
+7. **Las specs nunca quedan viejas.** Si tu cambio vuelve falsa cualquier parte de las specs (lenguaje, regla, infraestructura, permisos…), corrígela **en el mismo cambio**, en todos los archivos afectados, y anota en el asiento cuáles y qué decían. Si no toca ninguna spec, igual hay asiento ("ninguna (clase A)").
+8. **Lee siempre el horizonte** (`specs/00-horizonte.md`): hacia dónde va el producto (báscula conectada, pagos, segundo cliente). Antes de implementar, comprueba que no le cierras el camino; si choca, pregunta a José. Si tu cambio cumple o desvía algo del horizonte, actualízalo.
+9. **Nunca** escribas en el repo secretos, tokens, URLs de base con credenciales ni datos reales de clientes finales.
+10. Si tu memoria o contexto previo contradice `specs/`, **gana `specs/`**; reporta la contradicción.
+11. Commits en español (`tipo: descripción`); documentación e interfaz en español; identificadores de código en inglés.
 
 ## Orden de lectura (según presupuesto de contexto)
 
-- **Siempre:** este archivo, `specs/00-estado-actual.md`, `specs/00-principios.md` (Claude los carga solo vía `CLAUDE.md`; con otra herramienta, léelos tú).
+- **Siempre:** este archivo, `specs/00-horizonte.md`, `specs/00-estado-actual.md`, `specs/00-principios.md` (Claude los carga solo vía `CLAUDE.md`; con otra herramienta, léelos tú).
 - **Según la tarea:** `specs/modulos/<MOD>.md` del área (mapa abajo), y `specs/01-funcional/glosario.md` si dudas de un término.
-- **Transversal:** esquema o datos → `specs/02-tecnico/datos-y-migraciones.md`; endpoint o evento → `specs/02-tecnico/api-y-eventos.md`; seguridad o privacidad → `specs/02-tecnico/seguridad-y-privacidad.md`; infraestructura, deploy o backups → `specs/04-operacion/entornos-y-despliegue.md` y `runbooks.md`; cuánto dura / cuántos permite algo → `specs/02-tecnico/limites-y-tiempos.md`.
+- **Tareas operativas:** alta de un negocio nuevo → `specs/04-operacion/alta-de-negocio.md`; algo falla → `specs/04-operacion/diagnostico-de-incidentes.md` y `runbooks.md`; desplegar → `flujo-de-trabajo.md`; qué specs tocar → `specs/_plantillas/checklist.md`.
+- **Transversal:** esquema o datos → `specs/02-tecnico/datos-y-migraciones.md`; endpoint o evento → `specs/02-tecnico/api-y-eventos.md`; seguridad o privacidad → `specs/02-tecnico/seguridad-y-privacidad.md`; infraestructura, deploy o backups → `specs/04-operacion/entornos-y-despliegue.md` y `runbooks.md`; cuánto dura / cuántos permite algo → `specs/02-tecnico/limites-y-tiempos.md`; código de error → `specs/02-tecnico/codigos-de-error.md`; la web (componentes, hooks, PWA) → `specs/02-tecnico/frontend.md`; alta de un negocio nuevo o un incidente → `specs/04-operacion/alta-de-negocio.md`, `diagnostico-de-incidentes.md`; qué specs tocar al agregar algo → `specs/_plantillas/checklist.md`.
 - **Antes de revertir un comportamiento:** `specs/05-historia/decisiones.md`.
 - Índice completo: `specs/README.md`.
 
@@ -34,6 +37,8 @@ SaaS multi-tenant para gestionar pedidos por WhatsApp de fruvers (tiendas de fru
 | ¿Cómo es un día de punta a punta? | `specs/01-funcional/ciclo-diario.md` |
 | ¿Qué está pendiente o dudoso? | `specs/03-plan/preguntas-abiertas.md`, `problemas-conocidos.md` |
 | ¿Por qué se hizo así? | `specs/05-historia/decisiones.md` |
+| ¿Hacia dónde va el producto? | `specs/00-horizonte.md` |
+| ¿Qué se cambió y cuándo? | `specs/05-historia/registro-de-cambios.md` |
 
 ## Mapa código → módulo
 

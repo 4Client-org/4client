@@ -1,7 +1,7 @@
 ---
 estado: vigente
 actualizado: 2026-10-09 (sesión de adopción de SDD)
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-09 @ 5d8e69d
 fuentes: [git log, estado de Coolify y Cloudflare Pages]
 ---
 
@@ -23,7 +23,7 @@ Lo que `dev` tiene y `main` no, y viajará en el próximo release:
 
 ## En curso
 
-- **Adopción de Spec Driven Development** (esta carpeta): escrita y **verificada contra el código** (11 módulos, documentos técnicos, operación e historia) y probada con un agente que solo leyó `AGENTS.md` y `specs/` (15/15 respuestas correctas, 3/3 "no especificado" en lo que no está documentado). Solo en `dev`. **Falta:** que José responda las preguntas de `03-plan/preguntas-abiertas.md` (122; 12 prioritarias) y confirme la columna "por qué" de `05-historia/decisiones.md`.
+- **Adopción de Spec Driven Development** (esta carpeta): escrita y **verificada contra el código** (11 módulos, documentos técnicos, operación e historia) y probada con un agente que solo leyó `AGENTS.md` y `specs/` (15/15 respuestas correctas, 3/3 "no especificado" en lo que no está documentado). Solo en `dev`. **Falta:** que José responda las preguntas de `03-plan/preguntas-abiertas.md` (129; 12 prioritarias; varias ya respondidas) y confirme la columna "por qué" de `05-historia/decisiones.md`.
 - **Pasar el repositorio a privado** (organización `4Client-org`): planeado para la noche del 2026-10-09. Orden: cambiar la fuente de `4client-api-prod` a la GitHub App → confirmar acceso de Cloudflare Pages → hacer el repo privado → verificar deploy de dev → redesplegar prod en un momento tranquilo. Reversa: volver a hacerlo público. El repo `fruver-san-gabriel-web` (política antigua + landing) se queda público.
 
 ## Próximas prioridades (propuestas, a confirmar con José)
@@ -40,4 +40,4 @@ Ver `03-plan/problemas-conocidos.md` y `03-plan/preguntas-abiertas.md`.
 
 ## Cómo está organizado el contexto
 
-`AGENTS.md` (reglas) → este archivo → `00-principios.md` → módulo según el mapa de `AGENTS.md`. Índice completo en `specs/README.md`.
+`AGENTS.md` (reglas) → `00-horizonte.md` (rumbo) → este archivo → `00-principios.md` → módulo según el mapa de `AGENTS.md`. Índice completo en `specs/README.md`.

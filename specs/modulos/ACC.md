@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [apps/api/src/routes/auth.ts, apps/api/src/routes/users.ts, apps/api/src/routes/employees.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/plugins/socket.ts, apps/api/src/config.ts, apps/web/src/pages/LoginPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/hooks/useIdleLogout.ts, apps/web/src/components/config/UsersSection.tsx, apps/web/src/components/config/EmployeesSection.tsx, apps/web/src/components/config/ConfigTab.tsx, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/hooks/useEmployees.ts, apps/web/src/components/ui/PasswordInput.tsx, apps/web/src/components/ui/Toast.tsx, apps/web/src/components/ui/ConfirmModal.tsx, apps/web/src/components/config/ConfirmDialog.tsx, apps/api/src/routes/auth.ts, apps/api/src/routes/users.ts, apps/api/src/routes/employees.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/plugins/socket.ts, apps/api/src/config.ts, apps/web/src/pages/LoginPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/hooks/useIdleLogout.ts, apps/web/src/components/config/UsersSection.tsx, apps/web/src/components/config/EmployeesSection.tsx, apps/web/src/components/config/ConfigTab.tsx, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts]
 ---
 
 # ACC — Cuentas, roles y acceso
@@ -71,6 +71,9 @@ Un usuario nunca se borra: se desactiva. Un empleado tampoco: se desactiva y dej
 *Empleados (domiciliarios sin login)*
 
 - **RN-ACC-23 — Empleado ≠ usuario.** Un empleado es un registro aparte sin login ni rol de acceso; solo sirve para asignar un pedido (`Order.employee_id`). Crear, editar y desactivar es solo admin (dev pasa). Desactivar es suave (`active = false`) y solo lista los activos; no hay forma de reactivar ni de listar inactivos (PREG-061). El campo `role` del empleado es texto libre con valor por defecto `domiciliario` y la interfaz no lo muestra. *(plataforma, código)* *(sin test)*
+- **RN-ACC-24 — Qué pantalla sale según la dirección.** `App.tsx` no usa enrutador: `/form` muestra el formulario público del cliente (FRM) y `/factura` la factura (FAC), ambas **sin** intentar restaurar sesión; cualquier otra dirección intenta `tryRestoreSession` y muestra `MainPage` si hay token en memoria o `LoginPage` si no. Mientras se restaura la sesión no se muestra ninguna de las dos. *(plataforma, código)*
+- **RN-ACC-25 — Lista de domiciliarios en caché.** `useEmployees` pide `GET /employees` (todos los empleados activos) y la guarda 5 min (`staleTime`), a diferencia del resto de consultas de la web (30 s, `main.tsx`); alimenta los selectores de domiciliario de los modales de pedido. Un cambio hecho en Configuración puede tardar hasta 5 min en reflejarse en otra pestaña abierta. *(plataforma, código)*
+- **RN-ACC-26 — Piezas de interfaz comunes.** `PasswordInput` es el campo de contraseña con botón ojo para mostrarla u ocultarla (login, usuarios y la clave del cobro retroactivo). `Toast` muestra un aviso durante 2,8 s (rojo si es error); hay uno solo a la vez y un segundo aviso reemplaza el texto del primero pero no reinicia su temporizador. `ConfirmModal` (pedidos, chats, informe) es el diálogo de confirmación con la variante de "cambios sin guardar" de dos botones (descartar rojo, guardar verde); `ConfirmDialog` (Configuración, DevTools) es el diálogo simple Confirmar/Cancelar, con el botón rojo en Confirmar. *(plataforma, código)*
 
 **Textos que ve el cliente final.** Ninguno. El único correo del módulo va al personal (código 2FA y aviso de bloqueo).
 
@@ -117,6 +120,9 @@ Un usuario nunca se borra: se desactiva. Un empleado tampoco: se desactiva y dej
 | RN-ACC-21 | `lib/api.ts › tryRefresh`, `› request` | *(sin test)* |
 | RN-ACC-22 | `hooks/useIdleLogout.ts` (`IDLE_LIMIT_MS`) | *(sin test)* |
 | RN-ACC-23 | `employees.ts`; `EmployeesSection.tsx` | *(sin test)* |
+| RN-ACC-24 | `apps/web/src/App.tsx` | *(sin test)* |
+| RN-ACC-25 | `hooks/useEmployees.ts`; `main.tsx` (`QueryClient`) | *(sin test)* |
+| RN-ACC-26 | `components/ui/PasswordInput.tsx`, `ui/Toast.tsx`, `ui/ConfirmModal.tsx`, `config/ConfirmDialog.tsx` | *(sin test)* |
 
 **Datos y eventos socket.** Sala `user:<id>` (para cortar a una persona) y `org:<id>` (eventos de negocio). Este módulo no emite eventos de negocio.
 

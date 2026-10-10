@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-09 @ 5d8e69d
 fuentes: [start.sh, apps/api/prisma/schema.prisma, apps/api/src/lib/businessDate.ts, apps/api/src/config.ts]
 ---
 
@@ -20,5 +20,8 @@ Reglas que no se rompen sin una decisión explícita de José, registrada en `05
 10. **Spec antes que código en cambios grandes** (clase C: feature, esquema, API, dinero o privacidad). Se escribe y aprueba `03-plan/cambios/CH-nnnn-*.md` antes de programar. Los hotfix urgentes escriben el CH después.
 11. **Toda regla de dinero, permisos o tenant tiene un test contra Postgres real** (`apps/api/test`). Los servicios externos se simulan; la base no.
 12. **Idioma:** documentación, interfaz y commits en español; identificadores de código en inglés. Los términos de negocio en español (`cierre`, `pospuesto`, `encargado`) se mapean a su identificador en `01-funcional/glosario.md`.
+
+13. **Las specs nunca quedan viejas.** Todo cambio que vuelve falsa una parte de la documentación (otro lenguaje, otra regla, otra infraestructura) corrige **en ese mismo cambio** todos los archivos afectados; no se deja documentación que describa lo anterior. El estado anterior vive en git. Lista de qué tocar según el tipo de cambio: `_plantillas/checklist.md`.
+14. **Todo cambio deja trazabilidad y mira al horizonte.** Todo lo que se integra a `dev` (código, esquema, infraestructura, solo docs, reversas) lleva un asiento en `05-historia/registro-de-cambios.md`, escrito en la misma rama antes de integrar, con el campo "Prod" completado cuando viaje a `main` (reglas exactas en ese archivo). Y todo trabajo se hace con la vista puesta en `00-horizonte.md`: no cerrar el camino a lo que viene.
 
 Cambiar uno de estos principios exige registrar la decisión (`D-nn`) y actualizar este archivo en el mismo commit.

@@ -1,7 +1,7 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
-fuentes: [archivo/Requerimientos/Propuesta - 4Client - FruverSanGabriel.md, archivo/RoadMap/ROADMAP_PROYECTO_GENERAL.md, README.md, specs/00-estado-actual.md, specs/modulos/*.md]
+verificado: 2026-10-09 @ 5d8e69d
+fuentes: [specs/00-horizonte.md, archivo/Requerimientos/Propuesta - 4Client - FruverSanGabriel.md, archivo/RoadMap/ROADMAP_PROYECTO_GENERAL.md, README.md, specs/00-estado-actual.md, specs/modulos/*.md]
 ---
 
 # Visión y dirección
@@ -71,7 +71,7 @@ La conclusión de la Propuesta, que sigue orientando el producto: el problema no
 ### Fuera (explícito)
 
 - **Tienda web pública** para que los clientes compren en línea. La Propuesta la deja para fases posteriores si el negocio la necesita. *(inferido)*
-- **Pasarela de pagos en línea** (Wompi, Nequi, Daviplata, tarjetas): igualmente fuera. *(inferido)*
+- **Pasarela de pagos en línea** (Wompi, Nequi, Daviplata, tarjetas): fuera de alcance hoy; José la contempla como rumbo si el negocio la pide (`00-horizonte.md`). *(inferido)*
 - **Factura electrónica DIAN:** la factura de 4Client es un recibo; no reemplaza la factura electrónica (`modulos/FAC.md`).
 - Quién recibe cada plata es siempre humano: el sistema registra el cobro, no lo ejecuta.
 
@@ -101,12 +101,14 @@ El soporte incluye corrección de errores, actualizaciones de seguridad, atenci�
 Todo lo de esta sección es **propuesto, a confirmar con José**. El orden y los plazos están en `03-plan/roadmap.md`.
 
 1. **Segundo cliente.** El sistema es multi-tenant desde el principio, pero quedan restos de un solo cliente en el código (cuenta bancaria en plantillas por defecto, logo y política fijos). Generalizarlos es el requisito previo; la lista está en `03-plan/problemas-conocidos.md`.
-2. **Reglas de dinero pendientes**, sobre todo qué pasa con un crédito saldado después del cierre (`modulos/CAJ.md`, `03-plan/preguntas-abiertas.md`).
+2. **Reglas de dinero pendientes** (`modulos/CAJ.md`, `03-plan/preguntas-abiertas.md`). El crédito pagado después del cierre queda fuera de los totales por ahora (D-19); se retoma si el cliente lo pide.
 3. **Operación sólida:** probar la restauración de respaldos, ventana de reinicio del VPS, repositorio privado (`00-estado-actual.md`).
-4. **Ideas de fases del README** (*ideas, no compromisos*; vienen de un README antiguo, *inferido*):
+4. **Endurecer la plataforma, por pasos** *(José)*: inicio de sesión con nombre de usuario en vez de correo, 2FA también para administradores, y que el administrador de cada negocio pueda borrar los datos de un cliente final (hoy solo `dev`; D-10, D-17).
+5. **Hardware y pagos** *(José; el rumbo completo está en `00-horizonte.md`)*: báscula digital conectada que llene el precio de la línea (sin cambiar que `price` es el total de la línea, D-02), impresora de etiquetas y, solo si el negocio lo pide, pasarela de pagos. Además, evaluar generar el PDF de la factura en el servidor (D-12).
+6. **Ideas de fases del README** (*ideas, no compromisos*; vienen de un README antiguo, *inferido*):
    - Fase 2, escalabilidad multi-cliente: panel super-admin (en parte cubierto por PLT), onboarding automático de negocios, página pública de 4Client, cobro a clientes, dominio propio por cliente.
    - Fase 3, inteligencia de negocio: historial de clientes frecuentes, avisos de demora por WhatsApp, catálogo automático por WhatsApp.
-5. La Propuesta dice que las fases siguientes se definen **en conjunto con el negocio** una vez la Fase 1 opere bien; ninguna idea de arriba se construye sin ese acuerdo y, si es grande, sin un `CH-nnnn` previo (principio 10).
+7. La Propuesta dice que las fases siguientes se definen **en conjunto con el negocio** una vez la Fase 1 opere bien; ninguna idea de arriba se construye sin ese acuerdo y, si es grande, sin un `CH-nnnn` previo (principio 10).
 
 ## 8. Qué no cubre esta spec
 
