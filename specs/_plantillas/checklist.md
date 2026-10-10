@@ -27,7 +27,7 @@ Antes de empezar: ¿es clase C (feature, esquema, API, dinero, privacidad)? Ento
 | **Dinero / totales / privacidad** | Principios 3, 6, 11; `decisiones.md` si cambia una decisión (`D-nn`); `CH-nnnn` aprobado antes |
 | **Límite o tiempo (horas, cuántos)** | `02-tecnico/limites-y-tiempos.md` con el número exacto verificado |
 | **Pantalla / componente web** | `modulos/<MOD>.md` (mapa de código) y, si cambia lo que ve el usuario, `01-funcional/ciclo-diario.md` |
-| **Infra, deploy, CI** | `04-operacion/entornos-y-despliegue.md`, `runbooks.md` si hay procedimiento nuevo, `flujo-de-trabajo.md` si cambia el proceso |
+| **Infra, deploy, CI** | `04-operacion/entornos-y-despliegue.md` (incluidas las versiones de PostgreSQL, Node y el sistema del VPS cuando se actualicen), `runbooks.md` si hay procedimiento nuevo, `flujo-de-trabajo.md` si cambia el proceso |
 | **Un módulo nuevo** | Copia `_plantillas/modulo.md` a `modulos/<COD>.md`; añádelo a la tabla de módulos de `specs/README.md`, al mapa código → módulo de `AGENTS.md` y a `01-funcional/actores-y-permisos.md` |
 | **Un PREG / BUG / DT / D nuevo** | Su archivo en `03-plan/` o `05-historia/decisiones.md`; puntero de una línea en la sección 3 del módulo; `03-plan/mapa-de-ids.md` si el ID era provisional |
 | **Solo documentación** (specs, `AGENTS.md`, archivo) | Igual que el resto: asiento `R-nnnn` ("ninguna (clase A)" si no corrige specs), `verificado:` de lo tocado y `00-estado-actual.md`. Viaja a `main` con el siguiente release real, no sola |

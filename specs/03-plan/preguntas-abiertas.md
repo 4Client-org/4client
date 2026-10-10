@@ -197,10 +197,10 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-092 | ¿Qué versión de PostgreSQL corre en producción? El README dice 15, local y CI usan 16 y el respaldo instala el cliente 18. | GEN, OPS | Medio | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
+| PREG-092 | **Respondida (roadmap 42):** se lee la versión real (VPS Manager, solo lectura) y se mantiene documentada. | GEN, OPS | Respondida | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
 | PREG-093 | La sala `join:date` no la usa ningún emisor. ¿Se elimina o se planea usar? | GEN | Bajo | `02-tecnico/api-y-eventos.md` (Preguntas/Pendientes) |
 | PREG-094 | `order:updated` desde `tickets.ts › PATCH /:id` manda solo `{ id }` con `as any`. ¿Se ajusta el tipo o el emisor? | GEN | Bajo | `02-tecnico/api-y-eventos.md` (Preguntas/Pendientes) |
-| PREG-095 | ¿El bucket de R2 permite lectura pública? Si sí, `invoices/` se descarga sin el control de 24 h ni la revocación. | GEN, FAC | Medio | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
+| PREG-095 | **Respondida (roadmap 41):** el bucket no debe ser público; hay que revisarlo y servir los PDF solo por la aplicación. | GEN, FAC | Respondida | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
 | PREG-096 | Sentry usa `NODE_ENV` (`production` en todos los despliegues). ¿Debe usar `APP_ENVIRONMENT_NAME`? | GEN, OPS | Bajo | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
 | PREG-097 | **Respondida (D-23, roadmap 32):** por ahora se acumulan sin plazo; hay que planear el plazo según la ley. | GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-098 | La auditoría no registra bloqueos de links, catálogo y precios, empleados ni `/dev/seed`. ¿Hace falta? | GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
@@ -212,7 +212,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
 | PREG-101 | ¿El health check de Coolify usa `GET /health`, que no toca la base? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
-| PREG-102 | ¿En qué entorno está `REQUIRE_2FA=true`? El commit habla de prod y `LoginPage.tsx` dice 'dev-only'. | OPS, ACC | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
+| PREG-102 | **Respondida:** el 2FA de `dev` está activo en dev y en prod (José 2026-10-10). El texto exacto del valor se lee antes del ítem 35 del roadmap. | OPS, ACC | Respondida | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-103 | ¿Qué variables opcionales (Meta, R2, IA, Resend, Sentry) tiene cada app y dev y prod usan buckets de archivos distintos? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-104 | Con la GitHub App como fuente, ¿el auto-deploy de dev llega por el webhook manual o por la App? ¿Se elimina el webhook manual de prod? | OPS | Medio | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
 | PREG-105 | ¿Cloudflare Pages construye vistas previas de ramas distintas de `dev` que hablarían con la API de prod? | OPS | Bajo | `04-operacion/entornos-y-despliegue.md` (Preguntas/Pendientes) |
@@ -257,7 +257,8 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-135 | La política publicada dice datos "protegidos con cifrado"; en el código solo se cifran los tokens de Meta. ¿Se ajusta el texto o se cifra más? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-136 | Sentry se inicializa sin filtro de datos personales (`beforeSend`) y recibe también los 4xx de validación. ¿Se filtra? | PLT | Medio | `04-operacion/observabilidad-y-continuidad.md` |
-| PREG-137 | **Respondida (roadmap 25):** con el día cerrado también queda bloqueado el cobro retroactivo; solo se pagan créditos y se deja una nota. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-137 | **Respondida (roadmap 25), con una lectura por confirmar en PREG-139:** con el día cerrado el cobro retroactivo no se usa; solo el administrador corrige el método de pago. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-138 | **Respondida (roadmap 34):** al modificar el pago, quien edita indica cuánto fue en cada método. | CAJ, ORD | Respondida | `03-plan/roadmap.md` (34) |
+| PREG-139 | Con el día ya cerrado, ¿el administrador puede cambiar el método de pago de un pedido (indicando cuánto en cada método) y el sistema recalcula el informe y la foto del cierre? Es la lectura que hice de lo que José dijo el 2026-10-10; contradice "con el día cerrado ni el admin edita nada". | CAJ, ORD | Alto | `03-plan/roadmap.md` (25, 34) |
 
-Total: 138 preguntas (las respondidas por José están marcadas "Respondida").
+Total: 139 preguntas (las respondidas por José están marcadas "Respondida").
