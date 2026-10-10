@@ -183,7 +183,7 @@ function buildOrderSelect(includeHistory = false) {
     channel: true, payment_method: true, status: true, source: true,
     employee_id: true, registered_by: true, fecha: true, order_hour: true,
     paid: true, paid_at: true, paid_by: true, amount_received: true,
-    change_amount: true, cod_choice: true, split_cash: true, split_transfer: true, locked: true, caja_cerrada: true, notes: true,
+    change_amount: true, cod_choice: true, split_cash: true, split_transfer: true, credit_paid_at: true, locked: true, caja_cerrada: true, notes: true,
     client_modified: true, client_deleted: true,
     papelera_reason: true, papelera_by: true, status_before_papelera: true,
     created_at: true, updated_at: true,
@@ -1011,10 +1011,11 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       // time/actor from POST /:id/cobro above; overwriting them with this later
       // settlement moment would lose "Cerrado por"/"Hora cierre"'s actual answer.
       // Who/when this settlement itself happened is still recorded below, in
-      // OrderHistory.
+      // OrderHistory. The settlement moment goes to its own column,
+      // credit_paid_at ("Crédito creado el <fecha>, pagado el <credit_paid_at>").
       const order = await tx.order.update({
         where: { id },
-        data: { paid: true },
+        data: { paid: true, credit_paid_at: new Date() },
         select: buildOrderSelect(false),
       });
       await tx.orderHistory.create({
