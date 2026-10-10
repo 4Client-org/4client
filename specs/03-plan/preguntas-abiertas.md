@@ -59,9 +59,9 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-006 | **Respondida (D-19):** por ahora un crédito pagado no cuenta en ningún día. Se retoma si el cliente pide gestionarlos en el cierre. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-007 | Se puede marcar pagado un crédito que aún no está cerrado; el cierre ya no lo ve como pendiente ni lo suma. ¿Se exige que el pedido esté cerrado? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-008 | La API y la matriz de permisos dejan cerrar caja al encargado, pero la interfaz solo muestra el botón en 'Informe del día', que el encargado no ve. ¿Cuál es la intención? | CAJ, ACC | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-009 | Los totales y la comprobación 'ya cerrado' ocurren fuera de la transacción: un cobro concurrente queda fuera de la foto y dos cierres simultáneos se pisan. ¿Vale la pena cerrar esa ventana? | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-009 | **Respondida (D-24):** no es problema por ahora; se cierra cuando todo está listo. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-010 | La API cobra pedidos en papelera o eliminados por el cliente (solo la interfaz lo impide) y quedan fuera de los totales. ¿Debe rechazarlo la API? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-011 | **Respondida en parte (roadmap 25):** con el día cerrado ni el admin edita nada. Queda por definir si un pedido ya cobrado se puede editar el mismo día, con el día abierto. | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-011 | **Respondida (roadmap 25 y 34):** con el día cerrado no se edita nada; con el día abierto sí se puede y todo se recalcula y se actualiza en base y pantalla. El reparto de un pago dividido queda en PREG-138. | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 
 ## ORD — Pedidos
 
@@ -82,7 +82,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 |---|---|---|---|---|
 | PREG-020 | Cada mensaje sin remitente genera un ticket 'sin número' distinto. ¿Se agrupan o se acepta por lo raro del caso? | WPP | Bajo | `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-021 | El nombre de perfil de WhatsApp pisa el nombre que el admin puso a mano en el siguiente mensaje. ¿Se conserva el nombre editado? | WPP, INB | Bajo | `modulos/WPP.md` (§ 3 Pendientes) |
-| PREG-022 | El aviso de privacidad (Ley 1581) solo sale si hay `welcome_message` y no hay redirección, y los pedidos a mano no registran consentimiento. ¿Debe enviarse aparte y basta para la ley? | WPP, GEN | Alto | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
+| PREG-022 | **Respondida (D-25):** el aviso va solo la primera vez que el cliente escribe en su historia; como está, está bien. | WPP, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-023 | `wpp_redirect_message` solo se cambia por API o base; ninguna pantalla lo muestra aunque desactiva la bienvenida. ¿Se agrega a Configuración/DevTools? | WPP, OPS | Medio | `04-operacion/runbooks.md` (Preguntas/Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-024 | En una falla de Meta cada primer mensaje deja una bienvenida con X roja y el aviso de privacidad se reintenta a diario, sin alertar a nadie. ¿Se agrega alerta o se deja de registrar el fallo automático? | WPP | Medio | `modulos/WPP.md` (§ 3 Pendientes) |
 | PREG-025 | Entre las 21:00 y la medianoche, el chat queda en el tablero de mañana pero el pedido del formulario se crea con la fecha de hoy. ¿Es lo esperado? | WPP, FRM, ORD, DSH | Medio | `modulos/FRM.md` (§ 3 Pendientes); `modulos/WPP.md` (§ 3 Pendientes) |
@@ -144,7 +144,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-061 | Los empleados desactivados no se pueden reactivar ni ver. ¿Se necesita reactivar? | ACC | Bajo | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-062 | El botón de desactivar aparece en la fila propia aunque la API responde 400. ¿Se oculta? | ACC | Bajo | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-063 | **Parcialmente respondida (D-10, `roadmap.md` #19):** José planea el inicio de sesión con nombre de usuario más adelante, por pasos. **Sigue abierto:** mientras tanto, ¿se oculta el campo, que se muestra y guarda pero no sirve para entrar? | ACC | Medio | `modulos/ACC.md` (§ 3 Pendientes) |
-| PREG-064 | `REQUIRE_2FA=false` (texto) activa el 2FA por `z.coerce.boolean()`. ¿Se corrige el parseo o se documenta que debe quedar vacía? | ACC, GEN, OPS | Alto | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
+| PREG-064 | **Respondida (roadmap 35):** se corrige sin dañar lo actual, revisando antes el valor real en cada entorno (PREG-102). | ACC, GEN, OPS | Respondida | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-065 | **Respondida (roadmap 29):** al desactivar el perfil el acceso se corta al instante. | ACC, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-066 | `/login/verify-code` no respeta `locked_until`. ¿Debe cortar también durante el bloqueo? | ACC, GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-067 | `POST /tickets` (cualquier rol) sobrescribe `customer_name` de un ticket existente, esquivando el `PATCH` solo de admin. ¿Es intencional? | ACC, INB, GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
@@ -257,6 +257,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-135 | La política publicada dice datos "protegidos con cifrado"; en el código solo se cifran los tokens de Meta. ¿Se ajusta el texto o se cifra más? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-136 | Sentry se inicializa sin filtro de datos personales (`beforeSend`) y recibe también los 4xx de validación. ¿Se filtra? | PLT | Medio | `04-operacion/observabilidad-y-continuidad.md` |
-| PREG-137 | El cobro retroactivo y marcar un crédito como pagado sobre un pedido de un día ya cerrado: ¿se siguen permitiendo? José pidió que con el día cerrado no se mueva nada, pero el crédito pagado después es la liquidación de un crédito (D-19) y el cobro retroactivo se hizo a propósito. | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-137 | **Parcialmente respondida:** pagar un crédito con el día cerrado sí se permite (roadmap 26). **Sigue abierto:** el cobro retroactivo (corregir cómo se cobró un pedido de un día cerrado) ¿se mantiene permitido o se bloquea? | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-138 | Si se edita un pedido ya cobrado con pago dividido (ej. $30.000 efectivo + $20.000 transferencia) y el total baja a $35.000, ¿cómo se reparte? Opciones: la encargada vuelve a indicar las partes, se reduce primero el efectivo, o se reparte proporcional. | CAJ, ORD | Alto | `03-plan/roadmap.md` (34) |
 
-Total: 137 preguntas (las respondidas por José están marcadas "Respondida").
+Total: 138 preguntas (las respondidas por José están marcadas "Respondida").
