@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0022 — Caja cerrada: nada se actualiza, solo observaciones
+- **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-6`
+- **Qué cambió:** PREG-139 y PREG-137 respondidas; roadmap 25 y 34 corregidos (con la caja cerrada el administrador tampoco corrige el método de pago; con la caja abierta sí, y se recalcula). Ningún código cambió.
+- **Por qué:** aclaración de José (2026-10-10) a la lectura de R-0021.
+- **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `00-estado-actual.md`.
+- **Obsoleto:** la lectura de R-0021 que permitía al administrador corregir el pago con la caja cerrada.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0021 — 2FA activo en dev y prod, bucket privado y corrección de pago por el administrador
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-5`
 - **Qué cambió:** PREG-092, 095, 102 y 137 respondidas; nueva PREG-139 (lectura por confirmar); roadmap 25, 34 y 35 precisados y nuevos 41 y 42; `entornos-y-despliegue.md` anota `REQUIRE_2FA` activo en dev y prod; el checklist pide actualizar versiones al cambiar la infraestructura. Ningún código cambió.
 - **Por qué:** respuestas de José (2026-10-10).
 - **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `04-operacion/entornos-y-despliegue.md`, `_plantillas/checklist.md`, `00-estado-actual.md`.
 - **Obsoleto:** `entornos-y-despliegue.md` decía que el valor de `REQUIRE_2FA` por entorno era desconocido.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `ec479c3` · **Prod:** pendiente
 
 ### R-0020 — Respuestas de José: permisos, pago dividido, hora de corte y formulario
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-4`
