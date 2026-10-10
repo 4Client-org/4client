@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/src/routes/auth.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/lib/crypto.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/routes/webhook.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/sanitize.ts, apps/api/src/lib/media.ts, apps/api/src/lib/audit.ts, apps/web/src/lib/csv.ts, apps/web/src/store/auth.ts, apps/web/public/_headers, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts, apps/api/test/public.test.ts, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
@@ -146,8 +146,8 @@ Verificación HMAC-SHA256 con el `META_APP_SECRET` global y comparación de tiem
 - Ya no se pide confirmar los últimos 4 dígitos del teléfono: el link es la única barrera. Las rutas que todavía reciben `phone_last4` lo ignoran *(código; test `public.test.ts › "phone_last4 is no longer checked at all …"`)*.
 - **Topes contra el abuso de un link filtrado:** como máximo 3 pedidos nuevos por ticket y día desde el formulario (`MAX_FORM_ORDERS_PER_TICKET`), y 30 mensajes automáticos por ticket en 24 h (`MAX_AUTOMATED_FORM_MSGS_PER_DAY`). Pasado ese tope, la confirmación se guarda con `failed_reason` y no se envía *(código)*.
 - **Endurecimiento muerto** *(código)*:
-  - `device_token` es obligatorio en las peticiones del formulario, pero **nunca se compara** con nada. `FormLinkSession` nunca se escribe (solo se borra) *(test `public.test.ts › "the link is not locked to whichever device opened/submitted it first …"`)*.
-  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Ver PREG-035.
+  - ~~`device_token`~~: quitado el 2026-10-10. Las rutas públicas ya no lo exigen ni lo guardan (una página vieja que lo mande se ignora) y la página no lo envía. El link no está atado a un dispositivo *(tests `public.test.ts › "the link is not locked to whichever device opened/submitted it first …"`, `"an old client still sending device_token is accepted and it is ignored; omitting it also works"`)*. La tabla `FormLinkSession` sigue en el esquema, sin uso (solo `erase-data` hace un `deleteMany` inofensivo); se borrará en un release posterior.
+  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Código dormido a propósito (DT-012).
 - Las rutas `GET` públicas no tienen límite propio (300/min por IP); con 160 bits de entropía en el token, adivinarlo no es viable *(inferido)*.
 
 ## 8. Validación y saneamiento de entradas
@@ -186,8 +186,8 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 | Requisito | Cómo se cumple | Fuente |
 |---|---|---|
 | Aviso de privacidad | Se pega al mensaje de bienvenida **una sola vez por ticket**; `privacy_notice_sent_at` se sella solo si el envío a Meta tuvo éxito. Enlaza a `/legal/politica-privacidad` en la propia web | `webhook.ts`, `formLink.ts › buildPrivacyNoticeMessage` *(test `webhook.test.ts › "a SECOND message from the same ticket … does NOT repeat the privacy notice …"`)* |
-| Consentimiento | Casilla obligatoria en **cada** envío del formulario (también al editar): sin `consent: true` → 400 `CONSENT_REQUIRED`. Se sella `Order.consent_confirmed_at` y `privacy_policy_version` (hoy `v1`); `Ticket.consent_given_at` solo la primera vez | `public.ts › POST /submit` *(tests en `public.test.ts`, bloque "consentimiento de tratamiento de datos")* |
-| Versión de la política | `PRIVACY_POLICY_VERSION` se sube a mano cuando cambia el texto de `apps/web/public/legal/politica-privacidad.html` | `formLink.ts` |
+| Consentimiento | Casilla obligatoria en **cada** envío del formulario (también al editar): sin `consent: true` → 400 `CONSENT_REQUIRED`. Se sella `Order.consent_confirmed_at` y `privacy_policy_version` (hoy `v2`; los consentimientos anteriores conservan `v1`); `Ticket.consent_given_at` solo la primera vez | `public.ts › POST /submit` *(tests en `public.test.ts`, bloque "consentimiento de tratamiento de datos")* |
+| Versión de la política | `PRIVACY_POLICY_VERSION` se sube a mano cuando cambia el texto de `apps/web/public/legal/politica-privacidad.html` (`v2` desde 2026-10-10: agrega el uso de IA sobre productos y cantidades) | `formLink.ts` |
 | Multimedia del chat | Nunca se guarda; solo el id de Meta (30 días) | `integraciones.md` §1.3 |
 | Supresión | Solo rol `dev`, con `POST /inbox/:ticketId/erase-data` (ver abajo) | `inbox.ts` *(test `inbox.test.ts › "anonimiza TODOS los pedidos del ticket …"`)* |
 
@@ -231,14 +231,14 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 - **Pérdida de multimedia a los 30 días** (decisión de negocio, `lib/media.ts`).
 - **2FA solo para `dev`:** las cuentas admin, que pueden resetear contraseñas y ver todo el negocio, entran solo con contraseña (decisión explícita, comentada en `auth.ts`).
 
-**Hallazgos de esta lectura** (ver Pendientes): un access token sigue valiendo hasta 15 min tras desactivar o cambiar el rol; cualquier rol puede renombrar un ticket por `POST /tickets`; `REQUIRE_2FA="false"` lo enciende; el endurecimiento de links está muerto (`device_token`, escalera de bloqueos); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
+**Hallazgos de esta lectura** (ver Pendientes): un access token sigue valiendo hasta 15 min tras desactivar o cambiar el rol; cualquier rol puede renombrar un ticket por `POST /tickets`; `REQUIRE_2FA="false"` lo enciende; el endurecimiento de links está muerto (escalera de bloqueos; el `device_token` ya se quitó); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
 
 ## Pendientes
 
 - **PREG-064** — `REQUIRE_2FA` usa `z.coerce.boolean()`, así que `REQUIRE_2FA=false` (texto) **lo activa**. ¿Corregir el parseo o documentar que la variable debe quedar vacía?
 - **PREG-067** — `POST /tickets` (cualquier rol) sobrescribe el `customer_name` de un ticket existente, lo que esquiva el `PATCH` que es solo de admin. ¿Es intencional?
 - **PREG-065** — Desactivar a un usuario o bajarle el rol no invalida su access token (hasta 15 min). ¿Se acepta o `authenticate` debe consultar `active`/`role`?
-- **PREG-035** — `device_token`, `FormLinkSession` y `registerFailedLinkAttempt` son código muerto (se exigen o se comprueban, pero nada los activa). ¿Se borran o se reactivan?
+- **PREG-035** — Resuelta en parte (2026-10-10): `device_token` se quitó. Quedan `FormLinkSession` (tabla sin uso, a borrar en un release posterior) y `registerFailedLinkAttempt` (sin llamadores, DT-012).
 - **PREG-042** — `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización?
 - **PREG-037** — `erase-data` no limpia `Order.notes` (y no puede tocar `order_history`). ¿Se acepta, o hay que redactar las notas?
 - **PREG-097** — No hay purga automática de datos personales (mensajes, `raw_payload`, pedidos, `audit_logs`). ¿Cuál es el plazo de retención según la política?
