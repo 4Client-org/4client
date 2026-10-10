@@ -222,10 +222,10 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-115 | ¿Cuándo y cómo se resolvió el incidente de Meta del 2026-10-07 y cuántos mensajes se perdieron? | HIS | `05-historia/cronologia.md` (Preguntas/Pendientes) |
 | PREG-116 | ¿Es correcto que la puesta en vivo fue el 2026-07-25 (el primer merge posterior a `main` es del 07-26)? | HIS | `05-historia/cronologia.md` (Preguntas/Pendientes) |
 | PREG-117 | No hay commits en mayo. ¿Hubo trabajo previo (otro repo, mockup) que deba mencionarse? | HIS | `05-historia/cronologia.md` (Preguntas/Pendientes) |
-| PREG-118 | ¿Por qué `OrderItem.price` es el total de la línea y no el unitario (D-02)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
-| PREG-119 | ¿Por qué Coolify/VPS en vez de Railway (costo, control; D-06)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
-| PREG-120 | ¿Por qué el 2FA aplica solo al rol `dev` (D-10)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
-| PREG-121 | ¿Por qué el PDF de factura se genera en el navegador contra el plan original de PDFKit (D-12)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
+| PREG-118 | **Respondida (D-02):** cada línea guarda el total de ese producto y el total del pedido es la suma de las líneas. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
+| PREG-119 | **Respondida (D-06):** precio y control; Cloudflare le parece más robusto y profesional que Vercel. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
+| PREG-120 | **Respondida (D-10):** simplicidad para el primer cliente; el 2FA de admins y el login por nombre de usuario vienen después. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
+| PREG-121 | **Respondida (D-12):** fue la solución de momento; podría pasar al servidor más adelante. | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
 | PREG-122 | ¿Por qué 'Eliminar datos' pasó a ser solo para `dev` (D-17)? | HIS | `05-historia/decisiones.md` (Preguntas/Pendientes) |
 
 Total: 122 preguntas abiertas.
