@@ -518,7 +518,12 @@ describe('PATCH /orders/:id/cobro-retroactivo - fixing a "cerrado sin cobro" mis
     return { orgId: org.id, userId: user.id, token };
   }
 
-  async function forzarCierreSinCobro() {
+  // "Cerrar sin cobro" solo ocurre en el cierre, y con el día cerrado el cobro
+  // retroactivo responde DAY_CLOSED (RN-CAJ-21, decisión de José 2026-10-10). La
+  // única forma de llegar a corregirlo es que `dev` reabra el día (RN-CAJ-24,
+  // borra la fila DailyClose); `reopen` simula eso, salvo en el test que
+  // comprueba justamente el 409.
+  async function forzarCierreSinCobro({ reopen = true }: { reopen?: boolean } = {}) {
     const { orgId, token: adminToken } = await orgWithDirectToken('admin');
     const fecha = todayColombiaStr();
     const create = await app.inject({
@@ -532,8 +537,21 @@ describe('PATCH /orders/:id/cobro-retroactivo - fixing a "cerrado sin cobro" mis
       payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
     });
     expect(cierre.statusCode).toBe(200);
+    if (reopen) await app.prisma.dailyClose.deleteMany({ where: { org_id: orgId, fecha: new Date(fecha) } });
     return { orgId, adminToken, orderId: order.id as string };
   }
+
+  it('with the day still closed -> 409 DAY_CLOSED and the order stays unpaid (cobro retroactivo also respects the frozen day)', async () => {
+    const { adminToken, orderId } = await forzarCierreSinCobro({ reopen: false });
+    const fix = await app.inject({
+      method: 'PATCH', url: `/api/v1/orders/${orderId}/cobro-retroactivo`, headers: authHeader(adminToken),
+    });
+    expect(fix.statusCode).toBe(409);
+    expect(fix.json().code).toBe('DAY_CLOSED');
+    const after = await app.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.paid).toBe(false);
+    expect(after.paid_at).toBeNull();
+  });
 
   it('marks it paid, stamps paid_at/paid_by (both null coming in), and leaves total/change consistent', async () => {
     const { adminToken, orderId } = await forzarCierreSinCobro();
@@ -607,6 +625,8 @@ describe('PATCH /orders/:id/cobro-retroactivo - fixing a "cerrado sin cobro" mis
       method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
       payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
     });
+    // Día reabierto por dev (ver forzarCierreSinCobro) - si no, DAY_CLOSED gana.
+    await app.prisma.dailyClose.deleteMany({ where: { org_id: orgId, fecha: new Date(fecha) } });
 
     const fix = await app.inject({
       method: 'PATCH', url: `/api/v1/orders/${order.id}/cobro-retroactivo`, headers: authHeader(adminToken),

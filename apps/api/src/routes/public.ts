@@ -7,6 +7,7 @@ import { MAX_ATTEMPTS_SOFT } from '../lib/linkSecurity.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
 import { PRIVACY_POLICY_VERSION } from '../lib/formLink.js';
+import { findDayClose } from '../lib/dayClose.js';
 
 // Tope de confirmaciones automáticas por ticket (24 h): un link de formulario
 // filtrado no debe poder usarse para spamear al cliente desde el número del negocio.
@@ -497,6 +498,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Día cerrado = congelado también para el cliente (RN-CAJ-21).
+      if (await findDayClose(fastify.prisma, ticket.org_id, target.fecha)) {
+        return reply.status(409).send({
+          error: `Tu pedido #${target.num} es de un día que ya se cerró y no se puede modificar. Si necesitas hacer un cambio, contáctanos directamente.`,
+          code: 'DAY_CLOSED',
+        });
+      }
+
       {
         const priorByName = new Map(target.items.map(i => [i.product_name, i]));
         const submittedNames = new Set(body.data.items.map(i => i.product_name));
@@ -730,9 +739,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // forward one day mirrors exactly what cierre.ts's own "mañana" deferral
     // already does for a pending order at cierre time - this order genuinely
     // belongs to the next open business day, not a closed one.
-    const alreadyClosed = await fastify.prisma.dailyClose.findUnique({
-      where: { org_id_fecha: { org_id: ticket.org_id, fecha: todayLocal } },
-    });
+    const alreadyClosed = await findDayClose(fastify.prisma, ticket.org_id, todayLocal);
     if (alreadyClosed) {
       const tomorrow = new Date(todayLocal);
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -990,6 +997,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({
         error: 'Este pedido ya no se puede eliminar - contáctanos directamente si necesitas cambiar algo.',
         code: 'NOT_EDITABLE',
+      });
+    }
+
+    // Día cerrado = congelado también para el cliente (RN-CAJ-21).
+    if (await findDayClose(fastify.prisma, ticket.org_id, order.fecha)) {
+      return reply.status(409).send({
+        error: 'Este pedido es de un día que ya se cerró y no se puede eliminar - contáctanos directamente si necesitas cambiar algo.',
+        code: 'DAY_CLOSED',
       });
     }
 

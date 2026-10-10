@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
-import type { PrismaClient } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { clientChangedFlags } from '../lib/clientChangedFlags.js';
 import { createOrderWithRetryNum } from '../lib/orderNumbering.js';
+import { dayClosedError } from '../lib/dayClose.js';
+import { settleLockedOrderEdit, paymentSummary, type PaymentFields } from '../lib/paymentEdit.js';
 
 // Same shape meta-cloud.ts's toOrRecipient checks - a WhatsApp Business-Scoped
 // User ID ("CC.<alphanumeric>", WhatsApp usernames rollout) is not a real phone
@@ -96,6 +97,15 @@ const updateOrderSchema = z.object({
   // since - the final /cobro re-validates against the total lit AT that time too).
   amount_received: z.number().min(0).max(99_999_999).nullable().optional(),
   cod_choice:      z.enum(['completo', 'vuelta']).nullable().optional(),
+  // Solo para un pedido YA COBRADO (locked) con el día abierto, y solo admin/dev:
+  // cuánto fue en efectivo y cuánto en transferencia, la misma forma que `split`
+  // de POST /:id/cobro. Obligatorio si se cambia el método de pago o si el total
+  // cambia; debe sumar exactamente el total nuevo (lib/paymentEdit.ts ›
+  // settleLockedOrderEdit). En un pedido abierto se rechaza (aún no hay cobro).
+  payment_breakdown: z.object({
+    cash:     z.number().min(0).max(99_999_999),
+    transfer: z.number().min(0).max(99_999_999),
+  }).optional(),
 });
 
 const observationSchema = z.object({
@@ -107,6 +117,7 @@ const ORDER_FIELD_LABELS: Record<string, string> = {
   address: 'dirección', channel: 'canal', payment_method: 'método de pago',
   employee_id: 'domiciliario', notes: 'notas', fecha: 'fecha', items: 'productos',
   amount_received: 'monto de pago', cod_choice: 'completo o vuelta',
+  payment_breakdown: 'desglose de pago',
 };
 
 // A blanket "Datos inválidos" doesn't tell anyone which field actually failed - turns
@@ -125,15 +136,6 @@ function orderValidationMessage(error: z.ZodError): string {
   }
   if (parts.length === 0) return 'Datos inválidos';
   return 'Revisa: ' + parts.join(', ');
-}
-
-// A day with a DailyClose row is a frozen, closed-out snapshot - cierre.ts already
-// forced a decision on every order that was open when it ran, so nothing on that day
-// should change afterward, no matter which specific decision an order got (even
-// "dejar_activo", deliberately left as-is at the time). Mirrors the `existing.locked`
-// check already on these routes, just scoped to the whole day instead of one order.
-async function findDayClose(prisma: PrismaClient, orgId: string, fecha: Date) {
-  return prisma.dailyClose.findUnique({ where: { org_id_fecha: { org_id: orgId, fecha } } });
 }
 
 // Shared by POST / and PATCH /:id - validates the "¿con cuánto paga?" amount for a
@@ -174,6 +176,18 @@ function codDisplay(choice: string | null | undefined, amount: any, total: numbe
   if (!choice) return 'Sin definir';
   if (choice === 'completo') return `Completo ($${Number(amount ?? total).toLocaleString('es-CO')})`;
   return `Necesita vuelta - paga con $${Number(amount).toLocaleString('es-CO')} (vuelta $${(Number(amount) - total).toLocaleString('es-CO')})`;
+}
+
+// RN-CAJ-29 - un pedido en papelera o eliminado por el cliente no se cobra. Devuelve
+// el cuerpo del 409 o null.
+function cobroBlockedByDeletion(o: { status: string; client_deleted: boolean }): { error: string; code: string } | null {
+  if (o.status === 'papelera') {
+    return { error: 'El pedido está en la papelera - restáuralo antes de cobrarlo', code: 'ORDER_IN_PAPELERA' };
+  }
+  if (o.client_deleted) {
+    return { error: 'El cliente eliminó este pedido - restáuralo antes de cobrarlo', code: 'ORDER_CLIENT_DELETED' };
+  }
+  return null;
 }
 
 function buildOrderSelect(includeHistory = false) {
@@ -268,9 +282,8 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const todayUTC = new Date().toISOString().split('T')[0];
     const fechaDate = new Date(fecha ?? todayUTC);
 
-    if (await findDayClose(fastify.prisma, req.user.orgId, fechaDate)) {
-      return reply.status(409).send({ error: 'Ese día ya fue cerrado - no se pueden crear pedidos en él', code: 'DAY_CLOSED' });
-    }
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, fechaDate, 'Ese día ya fue cerrado - no se pueden crear pedidos en él');
+    if (dayClosed) return reply.status(409).send(dayClosed);
 
     const order = await createOrderWithRetryNum(fastify.prisma, req.user.orgId, fechaDate, (tx, num) =>
       tx.order.create({
@@ -375,14 +388,24 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     // needing a carve-out here.
     const isAdminOrDev = req.user.role === 'admin' || req.user.role === 'dev';
 
-    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
-      return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
-    }
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, existing.fecha);
+    if (dayClosed) return reply.status(409).send(dayClosed);
+
+    const { items, payment_breakdown, ...fields } = body.data;
+
+    // Cambiar cómo se pagó un pedido ya cobrado (método o desglose) es solo del
+    // administrador (RN-CAJ-26): el encargado recibe 403, no el 409 genérico de
+    // pedido bloqueado, para que la interfaz pueda decir por qué.
+    const methodChangeRequested = fields.payment_method !== undefined && fields.payment_method !== existing.payment_method;
     if (existing.locked && !isAdminOrDev) {
+      if (methodChangeRequested || payment_breakdown !== undefined) {
+        return reply.status(403).send({ error: 'Solo el administrador puede cambiar el pago de un pedido ya cobrado', code: 'PAYMENT_CHANGE_ADMIN_ONLY' });
+      }
       return reply.status(409).send({ error: 'Pedido bloqueado - solo el administrador puede modificarlo. Puedes agregar una observación.', code: 'ORDER_LOCKED' });
     }
-
-    const { items, ...fields } = body.data;
+    if (!existing.locked && payment_breakdown !== undefined) {
+      return reply.status(400).send({ error: 'El desglose de pago solo aplica a un pedido ya cobrado', code: 'VALIDATION_ERROR' });
+    }
 
     // customer_phone only ever settable when this order has no ticket (channel
     // 'call' - see updateOrderSchema's comment) OR its ticket has no REAL phone
@@ -398,10 +421,40 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       delete fields.customer_phone;
     }
 
-    const totalForCodCheck = (items ?? await fastify.prisma.orderItem.findMany({ where: { order_id: id }, select: { price: true } }))
+    const storedTotal = async () => (await fastify.prisma.orderItem.findMany({ where: { order_id: id }, select: { price: true } }))
       .reduce((s, i) => s + Number(i.price), 0);
-    const codError = validateCodAmount(fields.amount_received, fields.cod_choice, fields.payment_method ?? existing.payment_method, totalForCodCheck);
-    if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
+    const totalForCodCheck = items ? items.reduce((s, i) => s + Number(i.price), 0) : await storedTotal();
+
+    // Pedido ya cobrado (solo llega aquí admin/dev, ver arriba): amount_received,
+    // change_amount, split_* y cod_choice son datos del cobro y los recalcula
+    // settleLockedOrderEdit con el total nuevo (RN-CAJ-26 a RN-CAJ-28). Lo que el
+    // navegador mande en amount_received/cod_choice se ignora aquí: antes un
+    // guardado del admin enviaba amount_received:null y borraba el "Recibido".
+    let lockedPayment: PaymentFields | null = null;
+    if (existing.locked) {
+      delete fields.amount_received;
+      delete fields.cod_choice;
+      const oldTotal = items ? await storedTotal() : totalForCodCheck;
+      const settle = settleLockedOrderEdit({
+        existing: {
+          payment_method: existing.payment_method,
+          amount_received: existing.amount_received != null ? Number(existing.amount_received) : null,
+          change_amount: existing.change_amount != null ? Number(existing.change_amount) : null,
+          cod_choice: existing.cod_choice,
+          split_cash: existing.split_cash != null ? Number(existing.split_cash) : null,
+          split_transfer: existing.split_transfer != null ? Number(existing.split_transfer) : null,
+        },
+        newMethod: fields.payment_method ?? existing.payment_method,
+        oldTotal,
+        newTotal: totalForCodCheck,
+        breakdown: payment_breakdown,
+      });
+      if (!settle.ok) return reply.status(400).send({ error: settle.error, code: settle.code });
+      lockedPayment = settle.data;
+    } else {
+      const codError = validateCodAmount(fields.amount_received, fields.cod_choice, fields.payment_method ?? existing.payment_method, totalForCodCheck);
+      if (codError) return reply.status(400).send({ error: codError, code: 'VALIDATION_ERROR' });
+    }
 
     // Same cross-org guard as POST / - employee_id is a bare UUID from the request
     // body, and Employee.id is globally unique (not scoped per org), so an id
@@ -468,6 +521,24 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           action_type: 'edit', field: label,
           value_before: displayVal(key, oldVal),
           value_after: displayVal(key, newVal),
+          notes: postLockNote,
+        });
+      }
+    }
+
+    if (lockedPayment) {
+      const before = paymentSummary(existing.payment_method, {
+        amount_received: existing.amount_received != null ? Number(existing.amount_received) : null,
+        change_amount: existing.change_amount != null ? Number(existing.change_amount) : null,
+        split_cash: existing.split_cash != null ? Number(existing.split_cash) : null,
+        split_transfer: existing.split_transfer != null ? Number(existing.split_transfer) : null,
+      });
+      const after = paymentSummary(fields.payment_method ?? existing.payment_method, lockedPayment);
+      if (before !== after) {
+        historyEntries.push({
+          org_id: req.user.orgId, order_id: id, actor_id: req.user.userId,
+          action_type: 'edit', field: 'Cobro',
+          value_before: before, value_after: after,
           notes: postLockNote,
         });
       }
@@ -555,7 +626,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         // client_modified is never cleared by a staff save (per updated user
         // direction - it must stay visible permanently, same as each item's own
         // added_by_client flag, not just until someone opens and saves the order).
-        data: { ...fields, updated_at: new Date() },
+        data: { ...fields, ...(lockedPayment ?? {}), updated_at: new Date() },
       });
       if (writeResult.count === 0) {
         throw new Error('ORDER_LOCKED_RACE');
@@ -722,10 +793,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
 
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    // El día cerrado se revisa primero, igual que en PATCH /:id: DAY_CLOSED gana.
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, existing.fecha);
+    if (dayClosed) return reply.status(409).send(dayClosed);
     if (existing.locked) return reply.status(409).send({ error: 'Pedido bloqueado', code: 'ORDER_LOCKED' });
-    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
-      return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
-    }
 
     const toPapelera = body.data.status === 'papelera';
 
@@ -787,6 +858,10 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     if (!existing.client_deleted && !wasPapelera) {
       return reply.status(400).send({ error: 'Este pedido no está eliminado ni en papelera', code: 'NOT_DELETED' });
     }
+    // Restaurar en un día cerrado dejaba un pedido abierto que ya no se podía
+    // cobrar, mover ni decidir en el cierre (RN-CAJ-21, antes PREG-004).
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, existing.fecha, 'Ese día ya fue cerrado - el pedido no se puede restaurar');
+    if (dayClosed) return reply.status(409).send(dayClosed);
 
     const updated = await fastify.prisma.$transaction(async (tx) => {
       const order = await tx.order.update({
@@ -859,10 +934,14 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       include: { items: true },
     });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, existing.fecha);
+    if (dayClosed) return reply.status(409).send(dayClosed);
     if (existing.locked) return reply.status(409).send({ error: 'Pedido ya cobrado', code: 'ORDER_LOCKED' });
-    if (await findDayClose(fastify.prisma, req.user.orgId, existing.fecha)) {
-      return reply.status(409).send({ error: 'Ese día ya fue cerrado - el pedido quedó congelado', code: 'DAY_CLOSED' });
-    }
+    // Un pedido en papelera o eliminado por el cliente no se cobra (RN-CAJ-29):
+    // antes solo lo impedía la interfaz, y un eliminado cobrado quedaba pagado
+    // pero fuera de todos los totales. Hay que restaurarlo primero.
+    const notCobrable = cobroBlockedByDeletion(existing);
+    if (notCobrable) return reply.status(409).send(notCobrable);
 
     // A pedido must be fully filled in before it can be closed - required so orders
     // created from the client form (which starts with a placeholder address, no
@@ -940,7 +1019,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       // último detecta el caso "cierre lo movió de día mientras esperábamos
       // el bcrypt.compare de arriba") en el propio WHERE.
       const result = await tx.order.updateMany({
-        where: { id, locked: false, fecha: existing.fecha },
+        where: { id, locked: false, fecha: existing.fecha, status: { not: 'papelera' }, client_deleted: false },
         data: {
           // paid_at/paid_by always set here, crédito included - they record WHO
           // CLOSED the order and WHEN, which is what "Cerrado por"/"Hora cierre"
@@ -980,6 +1059,12 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     });
 
     if (updated === null) {
+      // La escritura atómica no afectó filas: otro cobro le ganó, el cierre lo
+      // pasó de día, o lo mandaron a papelera / el cliente lo eliminó mientras
+      // tanto. Se relee para responder con el motivo real.
+      const now = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId }, select: { status: true, client_deleted: true, locked: true } });
+      const deletedNow = now && !now.locked ? cobroBlockedByDeletion(now) : null;
+      if (deletedNow) return reply.status(409).send(deletedNow);
       return reply.status(409).send({ error: 'Pedido ya cobrado', code: 'ORDER_LOCKED' });
     }
 
@@ -1050,6 +1135,11 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await fastify.prisma.order.findFirst({ where: { id, org_id: req.user.orgId }, include: { items: true } });
     if (!existing) return reply.status(404).send({ error: 'Pedido no encontrado', code: 'NOT_FOUND' });
+    // Con el día cerrado tampoco se corrige (RN-CAJ-21): como "cerrar sin cobro"
+    // solo ocurre en el cierre, en la práctica esta corrección solo sirve después
+    // de que `dev` reabre el día (RN-CAJ-24).
+    const dayClosed = await dayClosedError(fastify.prisma, req.user.orgId, existing.fecha);
+    if (dayClosed) return reply.status(409).send(dayClosed);
     if (existing.payment_method === 'credito') {
       return reply.status(400).send({ error: 'Un crédito se marca pagado desde "Marcar crédito pagado", no aquí', code: 'VALIDATION_ERROR' });
     }
