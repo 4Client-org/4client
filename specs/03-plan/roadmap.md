@@ -46,6 +46,8 @@ Mejoras de proceso e ideas de producto, sin fecha.
 | 16 | Ideas de fases del README (panel de super-admin ampliado, onboarding automático, cobro a clientes, dominio propio por cliente). | *Ideas, no compromisos* (*inferido*): se definen con cada negocio cuando la fase actual opere bien. | PLT, ACC |
 | 17 | Ideas de inteligencia de negocio: clientes frecuentes, avisos de demora por WhatsApp, catálogo automático. | Igual: *ideas, no compromisos* (*inferido*); toda feature grande necesita su `CH`. | INB, CAT |
 | 18 | Tienda web pública y pasarela de pagos en línea. | Explícitamente fuera de alcance hoy (`vision-y-direccion.md`); solo si el negocio lo pide. | fuera de alcance |
+| 19 | **Inicio de sesión con nombre de usuario** (en vez de correo) y **2FA también para administradores**. | Plan gradual de José: hoy se mantiene lo más simple posible para el primer cliente; el campo `username` ya existe pero no sirve para entrar. | ACC |
+| 20 | Evaluar **generar el PDF de la factura en el servidor** (hoy se genera en el navegador). | Posible mejora de consumo, eficiencia y profesionalismo; sin fecha. | FAC |
 
 ## Cómo usar este archivo
 
