@@ -257,8 +257,8 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-135 | La política publicada dice datos "protegidos con cifrado"; en el código solo se cifran los tokens de Meta. ¿Se ajusta el texto o se cifra más? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-136 | Sentry se inicializa sin filtro de datos personales (`beforeSend`) y recibe también los 4xx de validación. ¿Se filtra? | PLT | Medio | `04-operacion/observabilidad-y-continuidad.md` |
-| PREG-137 | **Respondida (roadmap 25), con una lectura por confirmar en PREG-139:** con el día cerrado el cobro retroactivo no se usa; solo el administrador corrige el método de pago. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-137 | **Respondida (roadmap 25):** con la caja cerrada también queda bloqueado el cobro retroactivo; solo se pagan créditos y se deja una observación. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-138 | **Respondida (roadmap 34):** al modificar el pago, quien edita indica cuánto fue en cada método. | CAJ, ORD | Respondida | `03-plan/roadmap.md` (34) |
-| PREG-139 | Con el día ya cerrado, ¿el administrador puede cambiar el método de pago de un pedido (indicando cuánto en cada método) y el sistema recalcula el informe y la foto del cierre? Es la lectura que hice de lo que José dijo el 2026-10-10; contradice "con el día cerrado ni el admin edita nada". | CAJ, ORD | Alto | `03-plan/roadmap.md` (25, 34) |
+| PREG-139 | **Respondida (roadmap 25 y 34):** pedido cerrado con la caja abierta: se edita el método de pago (solo el administrador) y todo se recalcula; con la caja cerrada nada se actualiza, solo se deja una observación. | CAJ, ORD | Respondida | `03-plan/roadmap.md` (25, 34) |
 
 Total: 139 preguntas (las respondidas por José están marcadas "Respondida").
