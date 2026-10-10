@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [AGENTS.md, specs/README.md, apps/api/src/server.ts, packages/shared/src/types, apps/api/src/config.ts]
 ---
 
 # Checklist: qué archivos de `specs/` tocar según lo que cambies
+
+> **Resumen.** Tabla de consulta: dado un tipo de cambio, qué specs hay que actualizar además de lo común (asiento `R-nnnn`, `verificado:` y estado actual). Se usa antes de dar por terminado un trabajo.
 
 Úsala **antes de dar por terminado** un cambio (regla 6 y 7 de `AGENTS.md`). Para cualquier cambio, siempre: asiento en `05-historia/registro-de-cambios.md`, campo `verificado:` de cada archivo tocado, y `00-estado-actual.md` si cambia lo que hay en dev/prod.
 
@@ -28,6 +30,9 @@ Antes de empezar: ¿es clase C (feature, esquema, API, dinero, privacidad)? Ento
 | **Infra, deploy, CI** | `04-operacion/entornos-y-despliegue.md`, `runbooks.md` si hay procedimiento nuevo, `flujo-de-trabajo.md` si cambia el proceso |
 | **Un módulo nuevo** | Copia `_plantillas/modulo.md` a `modulos/<COD>.md`; añádelo a la tabla de módulos de `specs/README.md`, al mapa código → módulo de `AGENTS.md` y a `01-funcional/actores-y-permisos.md` |
 | **Un PREG / BUG / DT / D nuevo** | Su archivo en `03-plan/` o `05-historia/decisiones.md`; puntero de una línea en la sección 3 del módulo; `03-plan/mapa-de-ids.md` si el ID era provisional |
+| **Solo documentación** (specs, `AGENTS.md`, archivo) | Igual que el resto: asiento `R-nnnn` ("ninguna (clase A)" si no corrige specs), `verificado:` de lo tocado y `00-estado-actual.md`. Viaja a `main` con el siguiente release real, no sola |
+| **Una dependencia o versión de runtime** | `02-tecnico/arquitectura.md` (tabla de stack y `pnpm.overrides`); `04-operacion/desarrollo-local.md` (requisitos); `calidad-y-pruebas.md` si cambia CI |
+| **Un release a `main`** | `05-historia/changelog.md` (línea), campo "Prod" de los asientos incluidos y `00-estado-actual.md`, en una rama `docs/` (sin asiento propio) |
 | **Un término de negocio nuevo** | `01-funcional/glosario.md` |
 | **Algo que ya está en `00-horizonte.md` o `03-plan/roadmap.md`** | Actualiza el horizonte/roadmap: no deben describir como futuro lo que ya es presente |
 

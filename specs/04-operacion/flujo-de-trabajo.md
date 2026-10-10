@@ -1,10 +1,25 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [.github/workflows/ci.yml, start.sh, Dockerfile]
 ---
 
 # Flujo de trabajo (git, deploys, verificación)
+
+> **Resumen.** Dos ramas permanentes (`dev` y `main`); cada trabajo vive en una rama corta desde `dev`, se verifica, se integra con merge a `dev` y se borra. `main` es producción con un cliente real: solo se toca con OK explícito de José. Todo cambio cierra con spec, asiento `R-nnnn` y estado actual en la misma rama.
+
+```mermaid
+gitGraph
+  commit id: "main = producción"
+  branch dev
+  commit id: "dev = integración"
+  branch feature/x
+  commit id: "trabajo + specs + asiento"
+  checkout dev
+  merge feature/x id: "merge --no-ff, rama borrada"
+  checkout main
+  merge dev id: "release (OK de José)"
+```
 
 Aplica a cualquier persona o agente que modifique el repo. Solo existen dos ramas permanentes: **`dev`** (integración y entorno dev) y **`main`** (producción).
 

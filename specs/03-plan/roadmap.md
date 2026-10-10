@@ -1,10 +1,18 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [specs/00-horizonte.md, specs/00-estado-actual.md, specs/modulos/*.md, specs/04-operacion/runbooks.md, specs/01-funcional/vision-y-direccion.md]
 ---
 
 # Roadmap
+
+> **Resumen.** Ordenación propuesta en tres franjas (Ahora, Siguiente, Después) de 22 ítems numerados de forma estable. "Ahora" protege el dinero y la producción del cliente actual; "Siguiente" prepara al segundo cliente; "Después" son mejoras e ideas sin compromiso. La dirección de fondo (báscula, pagos, multi-negocio) está en `00-horizonte.md`.
+
+```mermaid
+flowchart LR
+  A[Ahora<br/>respaldos probados, repo privado,<br/>Meta facturación, specs revisadas] --> B[Siguiente<br/>quitar lo del primer cliente,<br/>alta de negocio probada,<br/>login por usuario + 2FA admin]
+  B --> C[Después<br/>CI de specs, báscula,<br/>etiquetas, pagos, PDF en servidor]
+```
 
 > **Todo propuesto, a confirmar con José.** Es una ordenación sugerida a partir de `00-estado-actual.md` y de los pendientes que se ven en los módulos; no hay compromisos de fecha. Los textos completos de cada pregunta, bug o deuda viven en `preguntas-abiertas.md` y `problemas-conocidos.md`, y los cambios grandes necesitan su `CH-nnnn` antes de programar (principio 10).
 

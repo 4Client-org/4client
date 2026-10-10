@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/web/src/hooks/useOrders.ts, apps/web/src/components/ui/HistoryTable.tsx, apps/web/src/components/ui/DatePickerES.tsx, apps/api/src/routes/orders.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/lib/clientChangedFlags.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations/20260628023857_add_order_history_immutability, apps/web/src/components/orders/Swimlane.tsx, apps/web/src/components/orders/ProductSearch.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/hooks/useOrders.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/lib/format.ts, apps/api/test/orders.test.ts, apps/api/test/orderNumbering.test.ts, apps/api/test/tickets.test.ts]
 ---
 
@@ -10,7 +10,15 @@ fuentes: [apps/web/src/hooks/useOrders.ts, apps/web/src/components/ui/HistoryTab
 
 ## 1. Negocio
 
-**Propósito.** Que cada pedido del día tenga un número propio, un estado visible en el tablero y un rastro de quién cambió qué. El pedido se puede abrir incompleto (sin dirección, sin domiciliario, sin método de pago) y solo se exige completo al cobrarlo (`modulos/CAJ.md`). Lo que no vive aquí: el cobro, el crédito, el cierre y el congelamiento del día (**CAJ**), el pedido que arma el cliente en el formulario (**FRM**), "Tomar lista" (**IA**), la factura (**FAC**), los chats y tickets (**INB**, **WPP**).
+**Propósito.** Que cada pedido del día tenga un número propio, un estado visible en el tablero y un rastro de quién cambió qué. El pedido se puede abrir incompleto (sin dirección, sin domiciliario, sin método de pago) y solo se exige completo al cobrarlo (`modulos/CAJ.md`).
+
+**Alcance y límites.**
+- *Incluye:* crear y editar pedidos del personal; numeración por día; ítems con precio de línea; tablero (`Swimlane`) y ventanas de detalle/nuevo; mover de estado; papelera y restaurar; observaciones; historial inmutable y su tabla; consulta del día.
+- *No incluye:* cobro, crédito, cierre y congelamiento del día (**CAJ**); el pedido que arma el cliente en el formulario (**FRM**); "Tomar lista" (**IA**); la factura (**FAC**); chats y tickets (**INB**, **WPP**); el informe del día (**DSH**).
+
+**Dependencias.**
+- *De qué depende:* **INB** (el ticket aporta teléfono y nombre; la fila del tablero es el ticket), **CAJ** (`findDayClose` y bloqueo por cobro), **ACC** (roles y usuarios), **CAT** (buscador de productos); PostgreSQL (candado asesor y reglas de inmutabilidad); Socket.IO para el tiempo real.
+- *Quién depende de él:* **CAJ** (cobra y cierra sobre estos pedidos), **FRM** e **IA** (crean pedidos con su numeración), **FAC** (factura de un pedido), **DSH** (suma sus ítems).
 
 **Permisos.** Filas "Ver tablero, tickets, pedidos…", "Crear/editar pedidos, mover estado, papelera, restaurar", "Observaciones en pedidos" y "Editar un pedido ya bloqueado" de `01-funcional/actores-y-permisos.md`. Lo que esa tabla no dice, verificado en `orders.ts`:
 - Leer (`GET /`, `GET /:id`) lo puede cualquier rol autenticado; crear, editar, mover, restaurar y las tres rutas de observaciones exigen `admin` o `encargado` (`dev` pasa todo). El domiciliario recibe 403.
@@ -107,6 +115,19 @@ La API acepta pasar de cualquier estado a cualquiera de `nuevo`, `preparando`, `
 - **RN-ORD-36 — Eventos.** CUANDO se crea un pedido, se emite `order:created` a la sala `org:<id>`; al editar, tocar observaciones o restaurar, `order:updated` con el pedido completo; al mover de estado, `order:moved` (`orderId`, `newStatus`) seguido de `order:updated`. El navegador reacciona recargando pedidos, tickets e informe del día; los eventos de cobro (`order:paid`) son de **CAJ**. *(plataforma, código)*
 - **RN-ORD-37 — Caché del tablero tras cada cambio.** Crear, editar, mover y cobrar un pedido invalidan la consulta del tablero (`orders`) y también la de los chats (`ticket`; al crear, además `tickets`), para que reabrir un chat enseguida no muestre la lista vieja. Mover una tarjeta es optimista: la columna cambia al soltarla y se revierte si la API falla. *(plataforma, código)*
 - **RN-ORD-38 — Tabla de historial y selector de fecha.** `HistoryTable` es la misma tabla en el detalle del pedido y en el informe (con columna "Pedido" solo en el informe): traduce los valores internos a texto (`cod` → "Cobro en casa", `cash` → "Pagado en tienda", `transfer` → "Transferencia", estados y canal), pinta en rojo "producto eliminado" y en verde "producto agregado", y muestra "Cliente" como autor cuando la nota contiene "formulario" (el `actor_id` es quien envió el link, no el cliente) y "Sistema" si no hay autor. Las horas van en `America/Bogota`. `DatePickerES` es el calendario en español que sustituye al nativo (el nativo muestra los textos en el idioma del navegador): botón "Hoy", ventana ajustada al ancho de pantalla; lo usan el tablero, el informe y la búsqueda de chats. *(plataforma, código)*
+
+**Criterios de aceptación.** Archivo de tests: `apps/api/test/orders.test.ts` (salvo indicación).
+
+1. *Crear.* Dado un encargado y un ticket, cuando crea un pedido con nombre y un ítem, entonces 201 y el `num` es `001`; el siguiente del día es `002`. RN-ORD-01, 02, 10. `"creates an order as encargado -> 201, with sequential num"`
+2. *Sin dirección.* Dado un pedido sin dirección, cuando se crea, entonces 201 con la dirección "Pendiente de confirmar" (solo el cobro la exige). RN-ORD-10. `"creates an order with no address -> 201 with a placeholder - address is only required to close (cobro), not to open a pedido"`
+3. *Rellena huecos.* Dado un día con números 13 y 24 ocupados, cuando se crean pedidos, entonces reciben 1–12, luego 14–23 y 25, sin chocar. RN-ORD-02, 03, 04 (la concurrencia: `"concurrent order creation on the same day never produces a duplicate or crossed number"`). `orderNumbering.test.ts › "multiple gaps (13 and 24 both carried in) fill 1-12, then 14-23, then 25 - never touching 13 or 24"`
+4. *Domiciliario.* Dado un domiciliario, cuando intenta crear un pedido, entonces 403. Permisos. `"forbids creating an order as domiciliario -> 403"`
+5. *Editar ítems.* Dado un pedido con ítems, cuando admin guarda otra lista (quita, agrega y cambia uno), entonces el historial trae `producto_eliminado`, `producto_agregado` y `producto_modificado`. RN-ORD-08, 09, 25. `"PATCH /orders/:id with a changed items list logs producto_agregado/producto_eliminado/producto_modificado in OrderHistory"`
+6. *Pedido bloqueado.* Dado un pedido cobrado (`locked`), cuando un encargado cambia un campo, entonces 409 `ORDER_LOCKED`; cuando lo hace un admin con el día abierto, se guarda. RN-ORD-13. `"encargado (non-admin) trying to change a real field on a locked order -> 409 ORDER_LOCKED"`; `"admin CAN fully edit a locked order (day not closed) - not just observacion"`
+7. *Día cerrado.* Dado un `DailyClose` del día, cuando un admin edita un pedido de ese día, entonces 409 `DAY_CLOSED`. RN-ORD-13. `"admin CANNOT edit a locked order once the whole day has been cerrado (caja cerrada) - DAY_CLOSED wins even for admin"`
+8. *Observación ajena.* Dada una observación de otro empleado, cuando alguien más la edita, entonces 403 `NOT_AUTHOR` y el texto no cambia; agregar una observación en un pedido bloqueado sí funciona. RN-ORD-22, 23. `"a DIFFERENT staff member cannot edit someone else's observation -> 403 NOT_AUTHOR, text unchanged"`; `"encargado (non-admin) CAN add an observation on a locked order -> 201, logged to history with their own actor id"`
+9. *Papelera.* Dado un pedido abierto, cuando se pasa a `papelera` sin motivo, entonces 400 `REASON_REQUIRED`; con motivo queda en rojo en su columna y se puede restaurar. RN-ORD-18, 19, 20. (sin test)
+10. *Aislamiento.* Dados pedidos de otra organización con la misma fecha, cuando se consulta `GET /orders?fecha=`, entonces solo se devuelven los propios. RN-ORD-27, principio 2. `"GET /orders?fecha=X only returns orders for the requesting user org (multi-tenant isolation)"`
 
 **Textos que ve el cliente final.** Ninguno: crear, editar, mover o restaurar un pedido no manda mensajes por WhatsApp. El cliente solo ve el estado de su pedido si abre su link de formulario (**FRM**).
 

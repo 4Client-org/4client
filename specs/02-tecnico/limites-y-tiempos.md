@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/lib/businessDate.ts, apps/api/src/services/ai/*]
 ---
 
 # Límites, tiempos y umbrales
+
+> **Resumen.** Consulta rápida de todo número del sistema: vigencias, horarios, topes de cantidad, rate limits, bloqueos, tamaños de archivo y umbrales de la IA. Un valor por fila, con su módulo dueño. Si el valor cambia en el código, cambia aquí y en el módulo (principio 13).
 
 Tabla de consulta rápida para responder "¿cuánto dura / cuántos permite…?". Cada valor se verificó en su módulo; **el detalle y el porqué están en el módulo indicado** (este archivo no los repite). Si cambias un valor en el código, cambia también esta tabla y el módulo.
 
@@ -69,7 +71,9 @@ Tabla de consulta rápida para responder "¿cuánto dura / cuántos permite…?"
 |---|---|
 | 5 | 5 min |
 | 10 | 15 min |
-| 15 | 1 hora |
+| 15, 20, 25… | 1 hora cada vez |
+
+El contador no decae con el tiempo: solo se reinicia con un login completo, un 2FA correcto o un reset de contraseña (`seguridad-y-privacidad.md` §2).
 
 ## Archivos
 
@@ -78,7 +82,9 @@ Tabla de consulta rápida para responder "¿cuánto dura / cuántos permite…?"
 | Imagen enviada por chat | JPEG, PNG o WebP, hasta 5 MB | INB |
 | Audio / video | hasta 16 MB | INB |
 | Documento PDF | hasta 100 MB | INB |
-| Factura PDF | debe empezar con `%PDF`; límite de tamaño en `modulos/FAC.md` | FAC |
+| Factura PDF | debe empezar con `%PDF`; hasta 20 MB (cuerpo JSON de la ruta hasta 29 MB por el base64) | FAC |
+| PDF de cobro de plataforma | hasta 6 MB de cuerpo | PLT |
+| Cuerpo JSON por defecto | 1 MiB | transversal |
 
 ## Umbrales de coincidencia (IA)
 

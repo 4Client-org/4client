@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [specs/00-horizonte.md, archivo/Requerimientos/Propuesta - 4Client - FruverSanGabriel.md, archivo/RoadMap/ROADMAP_PROYECTO_GENERAL.md, README.md, specs/00-estado-actual.md, specs/modulos/*.md]
 ---
 
 # Visión y dirección
+
+**En una frase:** 4Client convierte el WhatsApp de un negocio en un sistema de pedidos con orden, trazabilidad y control para el dueño, y con la menor fricción posible para el personal. Este archivo cubre, en orden: el problema (§1), a quién se vende y cómo se opera (§2), la solución (§3), el alcance (§4), el modelo comercial (§5), el estado (§6) y la dirección (§7).
 
 Qué problema resuelve 4Client, para quién, qué cubre hoy y hacia dónde va. Los hechos comerciales vienen de documentos antiguos (`archivo/Requerimientos/Propuesta…`, `archivo/RoadMap/ROADMAP_PROYECTO_GENERAL.md`, `README.md`) que están en parte desactualizados: todo lo que se apoya solo en ellos lleva *(inferido)*. Lo técnico y el comportamiento actual viven en `modulos/*.md`.
 
@@ -91,10 +93,11 @@ El soporte incluye corrección de errores, actualizaciones de seguridad, atenci�
 
 ## 6. Estado actual
 
+La foto viva (commits, qué viaja a producción, trabajo en curso) está en `00-estado-actual.md`; aquí solo lo estable:
+
 - En producción desde ~2026-07-25 con **un cliente real** (Fruver San Gabriel). Tablero, WhatsApp, formulario, cobro, cierre, informe, facturas, catálogo e IA están en uso.
-- `dev` va por delante de `main` (política de privacidad en el dominio propio, limpieza de Vercel/Railway); ver `00-estado-actual.md`.
 - Hay un incidente de facturación de Meta (2026-10-07) que impide los mensajes salientes mientras los entrantes siguen llegando (`modulos/WPP.md`).
-- Esta documentación (SDD) está en adopción: módulos escritos, verificación independiente pendiente.
+- Las decisiones de fondo y su porqué están en `05-historia/decisiones.md`; los pendientes, en `03-plan/`.
 
 ## 7. Dirección
 
@@ -113,6 +116,6 @@ Todo lo de esta sección es **propuesto, a confirmar con José**. El orden y los
 ## 8. Qué no cubre esta spec
 
 - Reglas de cada módulo: ver `modulos/`.
-- Flujo de un día completo: `ciclo-diario.md`.
+- Flujo de un día completo: `ciclo-diario.md`; qué ve y puede hacer cada rol: `actores-y-permisos.md`; vocabulario: `glosario.md`.
 - Arquitectura, despliegue y operación: `02-tecnico/` y `04-operacion/`.
 - Preguntas abiertas para José: `03-plan/preguntas-abiertas.md`.

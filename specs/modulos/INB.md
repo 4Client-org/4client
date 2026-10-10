@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 5d8e69d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatPhone.ts, apps/web/src/lib/fileToBase64.ts, apps/web/src/components/ui/ChatImage.tsx, apps/web/src/components/ui/ChatAudio.tsx, apps/web/src/components/ui/ChatVideo.tsx, apps/web/src/components/ui/ChatDocument.tsx, apps/web/src/components/ui/ChatLocation.tsx, apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/lib/media.ts, apps/api/src/lib/businessDate.ts, apps/api/prisma/migrations/20260802000000_ticket_last_activity/migration.sql, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/ui/ForwardMessageModal.tsx, apps/web/src/components/ui/DeliveryStatus.tsx, apps/web/src/hooks/useChatScroll.ts, apps/web/src/hooks/useSendChatMedia.ts, apps/web/src/hooks/useChatMediaBlob.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/styles/global.css, apps/api/test/inbox.test.ts, apps/api/test/tickets.test.ts, apps/api/test/files.test.ts, apps/api/test/public.test.ts]
 ---
 
@@ -11,6 +11,14 @@ fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatP
 ## 1. Negocio
 
 **Propósito.** Que el negocio atienda por WhatsApp sin salir de 4Client: leer, responder, mandar fotos/audio/video/PDF, reenviar y entregar al cliente el link del formulario. Este módulo es el lado **del personal** del chat; lo que entra desde Meta es `modulos/WPP.md`, el formulario del cliente es `modulos/FRM.md`, "Tomar lista" es `modulos/IA.md`.
+
+**Alcance y límites.**
+- *Incluye:* la bandeja "Chats WPP" y su búsqueda; leer el chat; responder, enviar multimedia y reenviar; ver multimedia; generar y bloquear links del formulario (lado del personal); borrar los datos de un cliente (`dev`); el tablero de tickets del día; renombrar ticket; el encabezado y las piezas de interfaz del chat.
+- *No incluye:* recibir mensajes de Meta, crear el ticket, el día del chat y los mensajes automáticos (WPP); el formulario público y su validación del token (FRM); los pedidos y sus modales salvo la columna del chat (ORD); "Tomar lista" (IA); el cierre y el pase a mañana (CAJ); la factura (FAC).
+
+**Dependencias.**
+- *De qué depende:* WPP (tickets y mensajes entrantes, `first_message_today_at`, plantillas); Meta Cloud API (enviar, subir y descargar multimedia); ACC (sesión y roles); FRM y FAC (leen el token y la revocación que este módulo escribe); R2 solo en el límite del borrado (PREG-037).
+- *Quién depende de él:* ORD y CAJ (abren el chat y el tablero de tickets); FRM y FAC (validez de los links); IA ("Tomar lista" parte del chat); DSH (bloquear todos vive en el informe).
 
 **Permisos.** Filas "Ver tablero, tickets, pedidos, historial de chat", "Responder en el chat, enviar multimedia, reenviar", "Generar / revocar el link de formulario", "Chats WPP (bandeja completa y búsqueda)", "Bloquear todos los links", "Renombrar ticket / cambiar su teléfono" y "Borrar datos de un cliente" de `01-funcional/actores-y-permisos.md`. Lo que esa tabla no dice:
 - **Interfaz ≠ API.** El encargado y el domiciliario no ven la pestaña "Chats WPP" (la API les responde 403 en `GET /inbox`), pero sí abren el chat desde el ticket y pueden responder, enviar multimedia, reenviar, mandar el formulario y bloquear el link (RN-INB-10, RN-INB-18, RN-INB-19). El botón "Bloquear Link" de un solo ticket está abierto a todos los roles; "bloquear todos" es solo admin y vive en el informe (`apps/web/src/components/dashboard/ResumenTab.tsx`).
@@ -58,7 +66,7 @@ fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatP
 
 *Link del formulario (lado del personal)*
 
-- **RN-INB-18 — Generar un link.** CUANDO el personal pulsa "Formulario", `GET /inbox/:ticketId/form-link` DEBE crear un token de **20 bytes aleatorios en hex (40 caracteres)**, **sobrescribirlo** en el ticket (lo que mata todo link anterior, porque la búsqueda por el valor viejo ya no encuentra nada), guardar quién lo envió y la hora de emisión, poner `form_link_opened_at = null` y `link_failed_attempts = 0`, y borrar la fila de revocación del ticket. Devuelve la URL con el primer `FRONTEND_URL`. Los mismos pasos los usa el webhook al mandar el formulario tras el saludo. La interfaz manda después **tres mensajes de texto** por `/reply`: advertencia, link y seguimiento. *(plataforma, código)*
+- **RN-INB-18 — Generar un link.** CUANDO el personal pulsa "Formulario", `GET /inbox/:ticketId/form-link` DEBE crear un token de **20 bytes aleatorios en hex (40 caracteres)**, **sobrescribirlo** en el ticket (lo que mata todo link anterior, porque la búsqueda por el valor viejo ya no encuentra nada), guardar quién lo envió y la hora de emisión, poner `form_link_opened_at = null` y `link_failed_attempts = 0`, y borrar la fila de revocación del ticket. Devuelve la URL con el primer `FRONTEND_URL`. El webhook **no** genera links (RN-WPP-15). La interfaz manda después **tres mensajes de texto** por `/reply`: advertencia, link y seguimiento. *(plataforma, código)*
 - **RN-INB-19 — Bloquear un link.** CUANDO el personal pulsa "Bloquear Link", `POST /inbox/:ticketId/form-link/revoke` (motivo opcional ≤ 255) DEBE crear o actualizar la revocación del ticket y además **revocar todas las facturas** (`InvoiceLink`) del ticket que no lo estén. Un link generado después vuelve a funcionar (RN-INB-18 borra la revocación). *(plataforma, código)*
 - **RN-INB-20 — Bloquear todos (solo admin/dev).** `POST /inbox/form-links/block-all` DEBE poner `Organization.form_links_blocked_at = ahora`; mata todo link emitido **antes** de ese instante (también facturas) y no afecta los emitidos después. No es un apagado permanente. *(plataforma, código)*
 - **RN-INB-21 — Escalera de bloqueo por intentos: hoy inerte.** `lib/linkSecurity.ts` define 10 intentos fallidos (bloquea los links del ticket), 30 acumulados (bloquea el chat 24 h) y `registerFailedLinkAttempt`, pero **nada llama a `registerFailedLinkAttempt`** desde que se quitó la verificación de los últimos 4 dígitos del teléfono (commit `089ddc3`), así que los contadores nunca suben y `link_failed_total` y `link_blocked_until` nunca se escriben. Siguen leyéndose en `public.ts › loadTicketByFormToken` y `files.ts` (ramas que hoy no se alcanzan). `device_token` es obligatorio en las rutas públicas pero ya no se compara con nada (`FormLinkSession` solo se borra en `erase-data`). El comentario de `linkSecurity.ts` dice que `GET /form-link` llama a `clearSoftLinkBlock`; el código reinicia `link_failed_attempts` directamente (`generateFormLinkUrl`). `clearSoftLinkBlock` sí se llama, pero solo desde `files.ts › POST /invoice`. Ver PREG-035 y DT-012. *(plataforma, código)*
@@ -82,6 +90,19 @@ fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatP
 - **RN-INB-30 — Fotos desde el navegador.** `lib/fileToBase64.ts` fija el tope de la foto de chat en 5 MiB y los tipos `image/jpeg`, `image/png` e `image/webp` (iguales a los de `inbox.ts`, RN-INB-11; es una de las constantes duplicadas de DT-016) y entrega el archivo como base64 sin el prefijo `data:`, que es lo que espera la API. *(plataforma, código)*
 - **RN-INB-31 — Cómo se ve cada tipo de mensaje.** La imagen, el audio y el video se piden con el token de sesión a `GET /inbox/media/:token` al montarse y se muestran desde un enlace local temporal; la imagen se amplía dentro de la aplicación al tocarla. El documento solo se pide al hacer clic y se abre en una pestaña nueva (se libera a los 60 s). La ubicación es un enlace directo a Google Maps ("Ver ubicación"). Si la carga falla, el texto es "No se pudo cargar la imagen/audio/video" o "No se pudo abrir el documento". Las marcas de entrega (`DeliveryStatus`): una marca "Enviado"; doble gris "Entregado"; doble azul "Leído"; icono rojo con el motivo si `failed_reason`. *(plataforma, código)*
 
+**Criterios de aceptación.**
+
+1. *Dado* un encargado y una organización con chats, *cuando* pide la lista de destinos de reenvío, *entonces* recibe solo los chats de su organización con id, nombre y teléfono; al pedir `GET /inbox` recibe 403. (RN-INB-01, 03; `inbox.test.ts › "an encargado (not just admin) gets the real chat list, unlike GET /inbox which is admin-only"` y `› "never returns another organization's chats"`)
+2. *Dado* un chat con mensajes sin contestar, *cuando* el personal lo abre varias veces, *entonces* `unread_count` no cambia; solo baja a 0 al responder. (RN-INB-08, 09; `inbox.test.ts › "the \"sin leer\" dot survives opening the chat any number of times - it only clears once staff actually replies"`)
+3. *Dado* un ticket de una fecha con varios pedidos, *cuando* se abre el chat con `?fecha=`, *entonces* se adjuntan solo los pedidos de esa fecha. (RN-INB-06; `inbox.test.ts › "GET /:ticketId/messages?fecha=X only returns that day's order, not every order this ticket ever had"`)
+4. *Dado* una organización con credenciales, *cuando* el personal responde por texto, *entonces* recibe 201 de inmediato y el mensaje queda con el id de Meta; si Meta rechaza el envío, el mensaje queda con `failed_reason`. (RN-INB-10; `inbox.test.ts › "POST /:ticketId/reply stores the real Meta message id - …"` y `› "POST /:ticketId/reply records failed_reason when Meta rejects the send …"`)
+5. *Dado* una imagen cuyo contenido real no coincide con su tipo declarado, *cuando* se envía, *entonces* se rechaza con 400 antes de subir nada a Meta. (RN-INB-12; `inbox.test.ts › "POST /:ticketId/send-image rejects a file whose real bytes don't match the declared mime_type - never trusts the label alone"`)
+6. *Dado* un `media_id` que pertenece a otra organización, *cuando* se pide `GET /inbox/media/:token`, *entonces* responde 404. (RN-INB-17; `inbox.test.ts › "GET /media/:token refuses a real media_id that belongs to a DIFFERENT org, …"`)
+7. *Dado* un mensaje, *cuando* se intenta reenviar solo a su propio chat, *entonces* se rechaza con 400 y nada se envía. (RN-INB-15; `inbox.test.ts › "rejects forwarding a message to its own chat, even if it's the only target"`)
+8. *Dado* un link de formulario ya enviado, *cuando* el personal genera uno nuevo, *entonces* el anterior deja de funcionar. (RN-INB-18; `public.test.ts › "sending a fresh form-link automatically supersedes (kills) every earlier still-unexpired link for the same ticket, …"`)
+9. *Dado* un link vigente, *cuando* el personal pulsa "Bloquear Link", *entonces* el token se rechaza en todas las rutas públicas y se revocan las facturas del ticket. (RN-INB-19; `public.test.ts › "after revoking, the previously-issued token is rejected on every public endpoint (fails closed)"` y `files.test.ts › ""Bloquear link" on a ticket also kills any factura already sent to that same conversation"`)
+10. *Dado* un ticket con pedidos y chat, *cuando* un admin pide borrar los datos recibe 403; *cuando* lo hace `dev`, *entonces* los pedidos quedan anonimizados sin borrarse, el chat se borra y el ticket se anonimiza. (RN-INB-22; `inbox.test.ts › "rejects an admin (no dev) with 403 - …"` y `› "anonimiza TODOS los pedidos del ticket (sea cual sea su estado) sin borrar ninguno, …"`)
+
 **Textos que ve el cliente final.** Lo que escribe el personal tal cual; el formulario (advertencia, link, seguimiento) y la cuenta bancaria salen de las plantillas editables de la organización (`Organization.message_templates`). El link pasa a ser inválido para el cliente según RN-INB-18 a 20 (mensaje genérico "Link inválido o expirado").
 
 ## 2. Técnico
@@ -104,7 +125,7 @@ fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/web/src/lib/formatP
 
 | Regla | Se hace cumplir en | Test |
 |---|---|---|
-| RN-INB-01 | `inbox.ts › GET /` | *(sin test)* |
+| RN-INB-01 | `inbox.ts › GET /` | `inbox.test.ts › "an encargado (not just admin) gets the real chat list, unlike GET /inbox which is admin-only"` |
 | RN-INB-02 | migración `20260802000000_ticket_last_activity` | *(sin test)* |
 | RN-INB-03 | `inbox.ts › GET /forward-targets` | `apps/api/test/inbox.test.ts › "an encargado (not just admin) gets the real chat list, unlike GET /inbox which is admin-only"`; `› "never returns another organization's chats"` |
 | RN-INB-04 | `inbox.ts › GET /search` | *(sin test)* |
@@ -164,7 +185,7 @@ Respaldo: la bandeja y el chat abierto se refrescan solos cada 60 s por si falla
 | `PHONE_TAKEN` | 409 | `PATCH /tickets/:id` con un teléfono de otro ticket |
 
 **Si tocas X, revisa Y.**
-- **`generateFormLinkUrl`** lo usan `GET /form-link` y el webhook (`modulos/WPP.md`); cambiar los campos que reinicia rompe el "reemplaza el anterior" de `public.ts › loadTicketByFormToken` (`modulos/FRM.md`).
+- **`generateFormLinkUrl`** lo usa solo `GET /form-link` (el webhook ya no genera links, RN-WPP-15); cambiar los campos que reinicia rompe el "reemplaza el anterior" de `public.ts › loadTicketByFormToken` (`modulos/FRM.md`).
 - **Tipos y tamaños de multimedia:** están en `inbox.ts` (constantes `MAX_*_BYTES` y `z.enum`), en `lib/media.ts` y duplicados en `useSendChatMedia.ts › MEDIA_KINDS`.
 - **El reenvío** reutiliza `media_url`: si alguna vez se guarda multimedia propia, `GET /media/:token` y el reenvío deben cambiar juntos.
 - **El gate de la bandeja** está en `inbox.ts › GET /`, en `MainPage.tsx` (`enabled: isAdmin`) y en `actores-y-permisos.md`.

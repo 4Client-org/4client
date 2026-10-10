@@ -17,9 +17,13 @@ Problema, comportamiento esperado, fuera de alcance.
 - `~ RN-XXX-nn` modificada: antes … / ahora …
 - `- RN-XXX-nn` eliminada: …
 
+**Horizonte.** ¿Cierra el camino a algo de `00-horizonte.md` (báscula, pagos, segundo cliente)? Una línea.
+
 ## Plan (cómo)
 
-Diseño técnico, archivos a tocar, migraciones (siempre aditivas), riesgos y plan de reversa.
+Diseño técnico, archivos a tocar, migraciones (siempre aditivas y compatibles con el código anterior), riesgos y **plan de reversa** (cómo se vuelve atrás sin tocar datos).
+
+**Specs a actualizar** (según `checklist.md`): lista de archivos.
 
 ## Tareas
 

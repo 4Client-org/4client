@@ -1,10 +1,22 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 066c45d
+verificado: 2026-10-10 @ 1edb809
 fuentes: [git log (580 commits, abril a octubre 2026), archivo/RoadMap/, specs/04-operacion/runbooks.md, specs/04-operacion/entornos-y-despliegue.md]
 ---
 
 # Cronología del proyecto (abril a octubre 2026)
+
+> **Resumen.** En seis meses el proyecto pasó de un mockup HTML (junio) a un cliente real en producción (2026-07-25), con rondas de auditoría, cumplimiento de la Ley 1581 (septiembre) y mudanza de Railway/Vercel a un VPS con Coolify y Cloudflare (2026-09-20). Hitos abajo; el detalle por mes sigue, con el sha de cada commit clave.
+
+```mermaid
+timeline
+  title Hitos de 4Client (2026)
+  Junio : Mockup a React (05) : Fase 1C WhatsApp y v1.0.0 (27) : Formulario público (29)
+  Julio : Auditorías (11 y 13) : Un ticket por teléfono (12) : En vivo con el primer cliente (25)
+  Agosto : Chats WPP y 2FA (02) : Tomar lista con IA (29) : Centro de mando dev (30)
+  Septiembre : Ley 1581 (03) : Mudanza a VPS y Cloudflare (20)
+  Octubre : Incidente de facturación de Meta (07) : Corte de las 21:00 (08) : Adopción de SDD (09)
+```
 
 Línea de tiempo mes a mes, reconstruida con `git log`. Cada viñeta lleva el sha corto del commit clave; `git show <sha>` da el cuerpo completo (muchos commits explican el porqué). Las fechas son las del commit (fecha de autor). Lo que no tiene commit que lo pruebe se marca *(inferido)* o *(José)*.
 

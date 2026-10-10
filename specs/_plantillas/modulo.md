@@ -14,7 +14,7 @@ fuentes: [rutas de código y tests en las que se basa]
 
 **Permisos.** Fila de este módulo en `01-funcional/actores-y-permisos.md` (qué rol puede qué).
 
-**Estados / ciclo de vida.** (Diagrama Mermaid solo si hay una máquina de estados real.)
+**Estados / ciclo de vida.** (Diagrama Mermaid `stateDiagram-v2` solo si hay una máquina de estados real; un flujo entre módulos va con `flowchart` o `sequenceDiagram`.)
 
 **Reglas.** Una por entrada, con ID `RN-<MOD>-nn`. Eventos: "CUANDO …, el sistema DEBE …". Invariantes: "Siempre …" / "Nunca …". Cada valor se marca *(plataforma)* o *(cliente)*, y su fuente *(código)*, *(José)* o *(inferido)*.
 

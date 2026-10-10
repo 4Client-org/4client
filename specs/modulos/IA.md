@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/ai/types.ts, apps/api/src/services/ai/gemini.ts, apps/api/src/services/ai/groq.ts, apps/api/src/services/ai/openrouter.ts, apps/api/src/services/ai/modelDiscovery.ts, apps/api/src/services/ai/openaiCompatible.ts, apps/api/src/services/ai/cerebras.ts, apps/api/src/lib/matchProduct.ts, apps/api/src/lib/normalize.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/.env.example, apps/web/src/lib/tomarLista.ts, apps/web/src/hooks/useTomarLista.ts, apps/web/src/components/chat/TomarListaActionBar.tsx, apps/web/src/components/chat/TomarListaResultModal.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/orders/ProductSearch.tsx, apps/web/src/pages/MainPage.tsx, apps/api/test/ai-providers.test.ts, apps/api/test/inbox-parse-messages.test.ts, apps/api/test/matchProduct.test.ts]
 ---
 
@@ -11,6 +11,14 @@ fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/services/ai/index.ts, apps/
 ## 1. Negocio
 
 **Propósito.** Ahorrar la transcripción a mano de listas largas que llegan por WhatsApp ("2 kg de tomate, una malla de cebolla…"). La IA solo propone: nunca crea ni modifica un pedido, nunca pone precios. El personal sigue siendo quien revisa y guarda con el flujo normal de pedidos.
+
+**Alcance y límites.**
+- *Incluye:* la extracción `POST /inbox/:ticketId/parse-messages`, la cadena de proveedores de IA con su descubrimiento de modelos y enfriamiento, el cruce con el catálogo, la marca "revisar" (`ai_unmatched`) y la fusión del borrador en los modales.
+- *No incluye:* crear, editar o guardar el pedido y sus precios (ORD); el chat y la selección de mensajes como tal (INB); el catálogo de productos (CAT); el cierre del día que bloquea el guardado (CAJ); la fusión de pedidos que hace el formulario público (FRM).
+
+**Dependencias.**
+- *De qué depende:* proveedores externos de IA (Gemini, Groq, OpenRouter) con sus claves de entorno; INB (ruta y mensajes del chat); CAT (nombres de productos activos); ACC (`requireRole`).
+- *Quién depende de él:* ORD (los modales `NuevoPedidoModal` y `DetallePedidoModal` reciben el borrador); INB (`TicketModal` aloja el botón); `OrderItem.ai_unmatched` lo conservan ORD y CAT al guardar.
 
 **Permisos.** Fila "Tomar lista (IA)" de `01-funcional/actores-y-permisos.md`. Lo que esa tabla no dice:
 - El botón "Tomar lista" está en el encabezado del chat de tres ventanas: el chat del ticket (`TicketModal`), "Nuevo pedido" desde un ticket (`NuevoPedidoModal`) y el detalle del pedido (`DetallePedidoModal`). No existe en "Chats WPP".
@@ -71,6 +79,19 @@ flowchart TD
 - **RN-IA-20 — Sin registro de uso ni costo.** Nunca se guarda en la base quién extrajo, cuántas veces ni con qué proveedor: no hay auditoría, conteo de tokens ni tope por organización; solo quedan líneas `[tomar-lista]` en el log del servidor. Ver PREG-048. *(plataforma, código)*
 
 Nada de este módulo es configurable por negocio: no hay reglas *(cliente)*. Las claves de proveedores son de la plataforma.
+
+**Criterios de aceptación.**
+
+1. *Dado* un domiciliario, *cuando* pide una extracción, *entonces* recibe 403; admin y encargado sí pueden. (RN-IA-01; `inbox-parse-messages.test.ts › "role gate: admin and encargado allowed, domiciliario forbidden"`)
+2. *Dado* un mensaje con multimedia entre los seleccionados, *cuando* se pide la extracción, *entonces* responde 400 `INVALID_MESSAGES` y no se llama a la IA. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects if any selected message is media"`)
+3. *Dado* un mensaje saliente del personal entre los seleccionados, *cuando* se pide la extracción, *entonces* responde 400 `INVALID_MESSAGES`. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects if any selected message is outbound (staff reply)"`)
+4. *Dado* un id de mensaje de otro ticket u otra organización, *cuando* se pide la extracción, *entonces* se rechaza y no se mezcla con el chat actual. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects a message id belonging to another org/ticket"`)
+5. *Dado* un mensaje "2 kg de tomate, cilantro" y un catálogo con Tomate, *cuando* se extrae, *entonces* el ítem de Tomate lleva el nombre del catálogo con `price = 0`, el desconocido lleva `ai_unmatched = true` y no se escribe nada en la base. (RN-IA-05, 06, 08; `inbox-parse-messages.test.ts › "happy path: matched item is resolved to the catalog NAME but never priced from it, unmatched item is flagged for review, never touches the DB"`)
+6. *Dado* que la IA devuelve el mismo producto dos veces con distinta capitalización, *cuando* se arma el borrador, *entonces* queda una sola línea con la primera cantidad. (RN-IA-10; `inbox-parse-messages.test.ts › "dedupes duplicate mentions of the same product WITHIN one extraction (case-insensitive), keeping the first quantity_label"`)
+7. *Dado* un nombre con tilde y mayúsculas distintas al del catálogo, *cuando* se cruza, *entonces* coincide; si dos productos lo contienen por igual, queda sin coincidencia. (RN-IA-07; `matchProduct.test.ts › "exact match, accent/case-insensitive"` y `› "ambiguous substring match (two catalog products both contain the term) -> unmatched"`)
+8. *Dado* que Gemini falla, *cuando* se extrae, *entonces* se intenta Groq y luego OpenRouter hasta que uno responda. (RN-IA-15; `ai-providers.test.ts › "Gemini fails entirely (e.g. daily quota, confirmed live as a real failure mode) -> falls through to Groq"` y `› "Gemini and Groq both fail -> falls through to OpenRouter"`)
+9. *Dado* un proveedor con un 503, *cuando* llegan nuevas extracciones dentro de los 90 s, *entonces* se salta ese proveedor; un 400 no activa el enfriamiento. (RN-IA-16; `ai-providers.test.ts › "a TRANSIENT failure (503) on Gemini falls through to Groq for this request but does NOT blacklist the model FOREVER - …"` y `› "a NON-transient failure (400, e.g. malformed JSON) does NOT trigger the cooldown - …"`)
+10. *Dado* que todos los proveedores fallan, *cuando* se extrae, *entonces* responde 502 `AI_EXTRACTION_FAILED` y el servidor sigue en pie. (RN-IA-19; `inbox-parse-messages.test.ts › "all configured providers failing -> 502 AI_EXTRACTION_FAILED"`)
 
 **Textos que ve el cliente final.** Ninguno: no se envía nada por WhatsApp. Los textos de la interfaz para el personal son "Tomar lista", "N seleccionado(s)", "Deseleccionar todo", "Cancelar", "Montar lista" / "Montando...", los avisos de RN-IA-11, RN-IA-12 y RN-IA-19, y la ventana "¿Dónde montamos estos productos?".
 

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/routes/dashboard.ts, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/hooks/useDashboard.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/lib/csv.ts, apps/api/test/dashboard.test.ts]
 ---
 
@@ -11,6 +11,14 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/web/src/components/dashboard/Re
 ## 1. Negocio
 
 **Propósito.** Que el dueño vea de un vistazo cómo va el día (o cómo fue uno pasado) y si la plata cuadra. Es una vista de **lectura calculada al momento** sobre los pedidos y chats de la fecha elegida; no guarda nada.
+
+**Alcance y límites.**
+- *Incluye:* conteos de pedidos y chats del día, recaudado por bolsa, lista de cerrados sin cobro, pestañas Pedidos, Papelera, Crédito y Cambios, vista de día cerrado, y los botones del encabezado (cerrar caja, CSV, bloquear links) como puntos de entrada.
+- *No incluye:* la lógica del cierre, la foto `DailyClose` y la regla de bolsas (**CAJ**); la lógica de bloquear links (**FRM**, **INB**); crear o editar pedidos (**ORD**); la suscripción de la plataforma (**PLT**; aquí solo el aviso del día 1).
+
+**Dependencias.**
+- *De qué depende:* **ORD** (pedidos, historial, restaurar), **CAJ** (regla de bolsas, `DailyClose`, modal de cierre), **INB** (tickets y su resolución por fecha; bloqueo masivo de links), **ACC** (rol admin); Socket.IO para refrescar.
+- *Quién depende de él:* nadie a nivel de datos (no escribe nada); el administrador lo usa como vista de control y punto de partida del cierre.
 
 **Permisos.** Fila "Informe del día" de `01-funcional/actores-y-permisos.md`: admin y dev. `GET /dashboard` es `requireRole('admin')` (dev pasa); encargado y domiciliario reciben 403 `FORBIDDEN`. La interfaz coincide: la pestaña solo existe para admin/dev (`MainPage.tsx`: `isAdmin`) y la consulta no se dispara para otros roles (`useDashboard(fecha, enabled)`). Las acciones del encabezado heredan sus propios permisos: cerrar caja (`CAJ`, la API además acepta al encargado, PREG-008) y bloquear todos los links (solo admin/dev, `FRM`).
 
@@ -31,7 +39,7 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/web/src/components/dashboard/Re
 
 *Dinero*
 
-- **RN-DSH-06 — Recaudado.** Siempre `recaudado` suma solo pedidos de la fecha **pagados y cerrados** con la misma regla de bolsas que el cierre: pago dividido a cada bolsa; si no, `cash` y `cod` a efectivo, `transfer` a transferencia; cualquier otro método no entra en ninguna. Total = efectivo + transferencia. La regla, su duplicación y el hueco de los créditos saldados y retroactivos los documenta `CAJ` (RN-CAJ-19, PREG-001, DT-004); aquí no se repite. *(plataforma, código)*
+- **RN-DSH-06 — Recaudado.** Siempre `recaudado` suma solo pedidos de la fecha **pagados y cerrados** con la misma regla de bolsas que el cierre: pago dividido a cada bolsa; si no, `cash` y `cod` a efectivo, `transfer` a transferencia; cualquier otro método no entra en ninguna. Total = efectivo + transferencia. La regla y su duplicación las documenta `CAJ` (RN-CAJ-19, DT-004); aquí no se repite. **Un crédito pagado después no suma en ningún total ni en ninguna fecha: es el comportamiento previsto por ahora (D-19, decisión de José 2026-10-09)**; queda registrado solo en la pestaña Crédito (RN-DSH-11). Sigue abierto únicamente el caso de `sin_asignar` y valores heredados (PREG-001). *(plataforma, código; D-19, José)*
 - **RN-DSH-07 — Cerrados sin cobro, en rojo.** CUANDO hay pedidos `cerrado` + bloqueados + sin pagar y con método distinto de crédito, el informe DEBE listarlos bajo la bolsa que les corresponde por método (`cash`/`cod` en efectivo, `transfer` en transferencia) con cliente ("Sin nombre" si no hay) y total, y un texto "cerrado(s) sin cobro - no incluido arriba". *Por qué:* un desajuste real reportado entre lo que decía el informe y lo cobrado a mano (commit b7d3e5b, 2026-08-23). Un crédito sin pagar no aparece: es normal. Un cerrado sin cobro con método `sin_asignar` no sale en ninguna lista (PREG-001). *(plataforma, código; inferido por el commit)*
 - **RN-DSH-08 — El informe sigue el estado actual, no la foto del cierre.** Siempre los números salen de los pedidos en vivo, incluso en un día ya cerrado; la fila `DailyClose` solo se lee para saber si el día está cerrado, quién lo cerró y las decisiones del CSV. Si después del cierre cambia algo (cobro retroactivo, crédito saldado, restaurar), el informe cambia y la foto no (PREG-004). *(plataforma, código)*
 
@@ -39,7 +47,7 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/web/src/components/dashboard/Re
 
 - **RN-DSH-09 — Pedidos.** La pestaña lista los pedidos de RN-DSH-01 ordenados por estado (nuevo, preparando, listo, camino, entregado, cerrado) y agrupados por cliente: clave `ticket_id` (o, sin ticket, el nombre), con total por grupo, desplegables y los cambios de cada pedido. El contador de la pestaña es el número de pedidos, no de grupos. *(plataforma, código)* *(sin test)*
 - **RN-DSH-10 — Papelera.** La pestaña lista los pedidos de la fecha en `papelera` **y** los eliminados por el cliente, cada uno con su aviso ("Enviado a papelera por <nombre>: <motivo>" o "Eliminado por el cliente") y el botón **Restaurar** (`PATCH /orders/:id/restore`, que refresca pedidos e informe). No suma a ningún total. *(plataforma, código)* *(sin test)*
-- **RN-DSH-11 — Crédito: todas las fechas.** Siempre la pestaña Crédito trae **todos** los pedidos con método `credito` de la organización, de cualquier fecha (más recientes primero), porque un crédito sigue pendiente semanas después. La web los divide en **No pagados** (el contador de la pestaña) y **Pagados**, y filtra con un buscador por nombre, dirección, domiciliario, artículo, número, fecha (en ISO, `dd/mm/aaaa`, `dd-mm-aaaa` o texto) o monto. No depende del selector de fecha. *(plataforma, código)* *(sin test)*
+- **RN-DSH-11 — Crédito: todas las fechas.** Siempre la pestaña Crédito trae **todos** los pedidos con método `credito` de la organización, de cualquier fecha (más recientes primero), porque un crédito sigue pendiente semanas después. Es el único lugar donde queda registrado un crédito saldado (D-19). La web los divide en **No pagados** (el contador de la pestaña) y **Pagados**, y filtra con un buscador por nombre, dirección, domiciliario, artículo, número, fecha (en ISO, `dd/mm/aaaa`, `dd-mm-aaaa` o texto) o monto. No depende del selector de fecha. *(plataforma, código)* *(sin test)*
 - **RN-DSH-12 — Cambios, máximo 300.** La pestaña muestra el historial (`order_history`) de los pedidos de la fecha, más recientes primero, con un tope de **300** entradas; el contador de la pestaña es esa cantidad, no el total real. Con más de 300 cambios en un día los más viejos desaparecen del informe (siguen en cada pedido). El filtro es por la `fecha` del pedido, sin excluir papelera: el historial de pedidos en papelera también entra. *(plataforma, código)* *(sin test)*
 
 *Día cerrado y acciones del encabezado*
@@ -49,6 +57,19 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/web/src/components/dashboard/Re
 - **RN-DSH-15 — Bloquear todos los links.** CUANDO el admin pulsa "Bloquear todos los links" y confirma, la web DEBE llamar a `POST /inbox/form-links/block-all` (revoca todos los links de formulario emitidos hasta ese instante, sin importar la fecha del informe ni la hora; uno emitido después funciona). La regla es de `FRM`; aquí está el botón y su confirmación. El botón está siempre habilitado, aunque el día esté cerrado. *(plataforma, código)* *(sin test)*
 - **RN-DSH-16 — Aviso del día 1.** CUANDO es el día 1 del mes en Bogotá y el usuario es admin o dev, la web DEBE mostrar en toda pantalla de la sesión (no solo en el informe) una franja roja: "Hoy es día 1 - recuerda pagar la suscripción de 4Client para que el sistema no se deshabilite". No consulta cobros de plataforma: sale aunque ya se haya pagado, y no se puede descartar. *(plataforma, código)* *(sin test)*
 - **RN-DSH-17 — Actualización.** El informe se vuelve a pedir cada 30 s y además cada vez que llegan eventos `order:created`, `order:updated`, `order:moved`, `order:paid`, `ticket:message` o de no leídos (solo la fecha visible), y `cierre:done` (todas las fechas). Un evento perdido se corrige en menos de 30 s. *(plataforma, código)* *(sin test)*
+
+**Criterios de aceptación.** Archivo de tests: `apps/api/test/dashboard.test.ts`.
+
+1. *Solo admin.* Dado un encargado o un domiciliario, cuando pide `GET /dashboard`, entonces 403 `FORBIDDEN`; un admin recibe el informe. Permisos. (sin test; DT-030)
+2. *Qué pedidos cuentan.* Dados un pedido en papelera y otro eliminado por el cliente en la fecha, cuando se pide el informe, entonces no suman a `total` y aparecen en la pestaña Papelera. RN-DSH-01, 10. (sin test; DT-030)
+3. *Chats del día.* Dado un chat con pedidos de varios días, cuando se pide el informe de un día, entonces su clasificación (completo/activo/sin pedido) mira solo los pedidos de esa fecha. RN-DSH-04, 05. `"\"chats completados\"/\"con pedido activo\" only count orders from the day being viewed, not the ticket's entire history (a ticket is now one row per phone forever)"`
+4. *Recaudado.* Dados un pedido pagado en efectivo y otro cerrado sin cobro, cuando se pide el informe, entonces solo el pagado suma en efectivo. RN-DSH-06. `"a genuinely PAID cash order never shows up in sinCobroEfectivo, even though it is also cerrado+locked"` (los totales por bolsa: sin test)
+5. *Cerrado sin cobro en rojo.* Dado un pedido de cobro en casa cerrado sin cobro, cuando se pide el informe, entonces aparece en `sinCobroEfectivo` y no en el recaudado; uno por transferencia aparece en `sinCobroTransferencia`. RN-DSH-07. `"a cod order closed via \"cerrar sin cobro\" (locked+cerrado+unpaid) shows up in sinCobroEfectivo, not in efectivo"`; `"a transfer order closed via \"cerrar sin cobro\" shows up in sinCobroTransferencia, not sinCobroEfectivo"`
+6. *Crédito sin pagar no es alarma.* Dado un crédito cerrado sin pagar, cuando se pide el informe, entonces no sale en ninguna lista `sinCobro`. RN-DSH-07. `"an unpaid crédito order never shows up in either sinCobro list - that is normal/expected, not a mistake to flag"`
+7. *Pedido abierto.* Dado un pedido aún abierto, entonces nunca sale en `sinCobro`. RN-DSH-07. `"an order still open (not locked/cerrado) never shows up in sinCobro lists - only a genuinely closed-without-payment order should"`
+8. *Crédito saldado (D-19).* Dado un crédito de otro día marcado pagado, cuando se pide el informe de hoy o del día del pedido, entonces aparece en la pestaña Crédito (Pagados) pero no suma en efectivo ni transferencia. RN-DSH-06, 11. (sin test; DT-030)
+9. *Día cerrado sigue en vivo.* Dado un día con `DailyClose`, cuando después se hace un cobro retroactivo, entonces el informe refleja el cambio y la foto del cierre no. RN-DSH-08. (sin test; PREG-004)
+10. *Tope de cambios.* Dado un día con más de 300 entradas de historial, cuando se pide el informe, entonces la pestaña Cambios trae solo las 300 más recientes. RN-DSH-12. (sin test)
 
 **Textos que ve el cliente final.** Ninguno. El informe es solo para el personal.
 

@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/lib/media.ts, apps/api/src/lib/crypto.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/ai/gemini.ts, apps/api/src/services/ai/groq.ts, apps/api/src/services/ai/openrouter.ts, apps/api/src/services/ai/cerebras.ts, apps/api/src/services/ai/modelDiscovery.ts, apps/api/src/services/ai/openaiCompatible.ts, apps/api/src/services/ai/types.ts, apps/api/src/lib/matchProduct.ts, apps/api/src/services/storage.ts, apps/api/src/routes/files.ts, apps/api/src/routes/dev.ts, apps/api/src/services/email.ts, apps/api/src/routes/auth.ts, apps/api/src/server.ts, apps/api/src/config.ts, .github/workflows/backup-prod-db.yml, apps/api/test/ai-providers.test.ts, apps/api/test/inbox.test.ts, apps/api/test/webhook.test.ts]
 ---
 
 # Integraciones externas
+
+> **Resumen.** Cinco servicios de terceros: Meta WhatsApp (entrada y salida del chat, el único crítico), proveedores de IA gratuitos en cadena (solo "Tomar lista"), Cloudflare R2 (PDF), Resend (código 2FA y avisos) y Sentry. Cada sección dice qué sale del sistema, qué se guarda de vuelta y cómo falla; los modos de falla de Meta (§1.4) son lo primero que se consulta en un incidente de mensajes.
 
 Qué servicios de terceros usa la API, qué se les manda, qué se guarda de vuelta y cómo falla cada uno. Las variables de entorno se nombran, nunca se dan sus valores.
 

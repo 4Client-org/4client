@@ -1,10 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-09 @ 2cbd083
+verificado: 2026-10-10 @ 1edb809
 fuentes: [package.json, apps/api/package.json, apps/web/package.json, apps/api/.env.example, .env.example, apps/api/vitest.config.ts, apps/api/test/globalSetup.ts, apps/api/src/config.ts, apps/api/src/seed.ts, apps/api/src/seed-chats.ts, apps/api/src/seed-wpp.ts, apps/api/prisma/migrations/20260802050000_chat_search_trgm/migration.sql, apps/web/vite.config.ts, apps/web/src/lib/apiBase.ts, .github/workflows/ci.yml]
 ---
 
 # Desarrollo local
+
+> **Resumen.** Para trabajar en local hacen falta Node 20, pnpm 10 y un Postgres 16 con dos bases (`fourclient` para la API y `fourclient_test` para Vitest). Los pasos: instalar, crear `apps/api/.env` y `.env.test`, levantar Postgres con la receta de §4, migrar, y correr `pnpm dev:api` / `pnpm dev:web`. La sección 8 lista las trampas más frecuentes.
 
 Cómo levantar 4Client en una máquina de desarrollo y correr los tests. Para el flujo de ramas y verificación antes de integrar, ver [`flujo-de-trabajo.md`](flujo-de-trabajo.md).
 
@@ -14,7 +16,7 @@ Cómo levantar 4Client en una máquina de desarrollo y correr los tests. Para el
 |---|---|---|---|
 | Node.js | 20 | Es la del `Dockerfile` (`node:20-slim`) y la de la CI | (código) |
 | pnpm | 10 | `corepack prepare pnpm@10` en el Dockerfile; `pnpm/action-setup` v10 en CI | (código) |
-| PostgreSQL | 16 | Es la de prod y la de CI (`postgres:16`) | (código), (José) |
+| PostgreSQL | 16 | Es la de CI (`postgres:16`) y la que declara José para prod (PREG-092: el respaldo usa un cliente 18) | (código), (José) |
 
 En la máquina de José los binarios del servidor ya están en `/usr/lib/postgresql/16/bin` (no hace falta instalar ni extraer nada) (José).
 
