@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0019 — Más respuestas de José: cierre, crédito, edición de cobrados, aviso de privacidad
+- **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-3` y `docs/respuestas-jose-3b`
+- **Qué cambió:** PREG-009, 011, 022 y 064 respondidas; PREG-137 queda solo con el cobro retroactivo; nueva PREG-138 (reparto de un pago dividido al editar); D-24 y D-25; roadmap 25 a 27 precisados y nuevos 34 y 35. Ningún código cambió.
+- **Por qué:** respuestas de José (2026-10-10).
+- **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
+- **Obsoleto:** nada (lo decidido es futuro).
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0018 — Respuestas de José a las preguntas prioritarias y nuevos ítems del roadmap
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-2`
 - **Qué cambió:** 11 PREG respondidas (002, 004, 011 en parte, 035, 037, 042, 051, 065, 081, 085, 097); decisiones D-21 a D-23; ítems 25 a 33 en el roadmap (cierre que congela todo, crédito con fechas, vista previa del cierre = servidor, quitar `device_token`, desactivar corta al instante, párrafo de IA en la política, selector de organización para `dev`, plazo de retención, borrado más completo); nueva PREG-137. Ningún código cambió.
 - **Por qué:** respuestas de José a las preguntas prioritarias (2026-10-10).
 - **Specs tocadas:** `03-plan/roadmap.md`, `03-plan/preguntas-abiertas.md`, `05-historia/decisiones.md`, `00-estado-actual.md`.
 - **Obsoleto:** nada (el comportamiento actual no cambió; lo decidido es futuro).
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `312500c` · **Prod:** pendiente
 
 ### R-0017 — Flujo: se prueba solo en dev (D-20)
 - **Fecha / rama:** 2026-10-10, `docs/flujo-sin-previews`
