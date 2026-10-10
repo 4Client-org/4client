@@ -6,7 +6,7 @@ import {
   MessageSquare, MessageCircleWarning, MessageCircleCheck, MessageCircleDashed,
   AlertTriangle,
 } from 'lucide-react';
-import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr } from '../../lib/format';
+import { STATUS_LABEL, fmtCOP, PAYMENT_LABEL, todayStr, fmtBusinessDate, fmtDate } from '../../lib/format';
 import { normalizeSearch } from '../../lib/normalize';
 import { downloadCierreCSV } from '../../lib/csv';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
@@ -95,7 +95,9 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
         const [y, m, day] = iso.split('-');
         const ddmmyyyy = `${day}/${m}/${y}`;
         const ddmmyyyyDash = `${day}-${m}-${y}`;
-        const localized = normalizeSearch(d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'America/Bogota' }));
+        // timeZone UTC: Order.fecha es un día de negocio (medianoche UTC), no un
+        // instante; con la zona de Bogotá daba el día anterior.
+        const localized = normalizeSearch(d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }));
         fechaMatch = iso.includes(creditoSearch) || ddmmyyyy.includes(creditoSearch) || ddmmyyyyDash.includes(creditoSearch) || localized.includes(q);
       }
       const total = o.items?.reduce((s: number, i: any) => s + Number(i.price), 0) ?? 0;
@@ -569,9 +571,15 @@ export default function ResumenTab({ fecha, setFecha, dashboard, papeleraOrders,
                       which staff can freely retype per-order and which a crédito
                       debt record must never silently drift away from. */}
                   <span style={{ fontSize: 14, fontWeight: 800 }}>#{o.num} - {o.client_contact_name ?? o.customer_name}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gt)' }}>
-                    {o.fecha ? new Date(o.fecha).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' }) : ''}
-                  </span>
+                </div>
+                {/* Trazabilidad del crédito: el día del pedido (Order.fecha) y el
+                    momento en que se marcó pagado (credit_paid_at, PATCH
+                    /orders/:id/credito-pagado). Order.fecha es un día de negocio
+                    (@db.Date), por eso fmtBusinessDate y no fmtDate: con la zona de
+                    Bogotá se corría al día anterior. */}
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gt)', marginBottom: 4 }}>
+                  {o.fecha ? `Crédito creado el ${fmtBusinessDate(o.fecha)}` : 'Crédito'}
+                  {o.paid && (o.credit_paid_at ? `, pagado el ${fmtDate(o.credit_paid_at)}` : ', pagado (fecha no registrada)')}
                 </div>
                 {o.client_contact_name && o.customer_name && o.client_contact_name !== o.customer_name && (
                   <div style={{ fontSize: 11, color: 'var(--gt)', marginBottom: 3, fontStyle: 'italic' }}>

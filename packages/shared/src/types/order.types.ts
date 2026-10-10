@@ -67,6 +67,8 @@ export interface Order {
   amount_received: number | null;
   change_amount: number | null;
   cod_choice: 'completo' | 'vuelta' | null;
+  /** Cuándo se marcó pagado un crédito (PATCH /orders/:id/credito-pagado); null si no aplica. */
+  credit_paid_at?: string | null;
   locked: boolean;
   caja_cerrada: boolean;
   notes: string | null;

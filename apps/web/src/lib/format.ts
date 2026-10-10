@@ -7,6 +7,16 @@ export function fmtDate(d: string | Date): string {
   return date.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Bogota' });
 }
 
+// Día de negocio (columna @db.Date como Order.fecha), que llega como
+// "2026-10-10T00:00:00.000Z": medianoche UTC del día, no un instante. Pasarlo por
+// fmtDate (zona de Bogotá) lo corre al día anterior (19:00 del 9); aquí se toma la
+// fecha tal cual, sin zona horaria.
+export function fmtBusinessDate(d: string | Date): string {
+  const iso = typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10);
+  const [y, m, day] = iso.split('-');
+  return `${day}/${m}/${y}`;
+}
+
 // Colombia's calendar date (UTC-5, no DST) for an instant - NOT the device's own local
 // date. Using the device's local getters (new Date().getFullYear() etc.) only happens
 // to be correct if the device's own timezone is set to Bogotá; on any other timezone
