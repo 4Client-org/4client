@@ -52,16 +52,16 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
 | PREG-001 | **Parcialmente respondida (D-19):** el crédito pagado queda fuera de los totales a propósito, por ahora. **Sigue abierto:** `sin_asignar` cerrado sin cobro y métodos heredados fuera de los cinco no caen en ninguna bolsa. ¿Qué pasa con esos? | CAJ, DSH | Alto | `modulos/CAJ.md` (§ 3 Pendientes); `modulos/DSH.md` (§ 3 Pendientes) |
-| PREG-002 | La vista previa del modal de cierre suma distinto que el servidor (ignora el pago dividido, incluye eliminados por el cliente, rotula créditos como 'Completado'). ¿Debe usar exactamente la regla del servidor? | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-002 | **Respondida (roadmap 27):** sí, la vista previa debe mostrar exactamente lo que el servidor guarda. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-003 | El CSV descargado desde 'Informe del día' después de cerrar no trae los pedidos pasados a mañana; solo el descargado antes de confirmar. ¿Es aceptable? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-004 | Restaurar, marcar crédito pagado y cobro retroactivo no miran el día cerrado (la foto `DailyClose` queda vieja), y restaurar deja pedidos abiertos que ya no se pueden cobrar ni mover; cambiar estado desde papelera no limpia sus campos. ¿Se recalcula la foto y se bloquea la restauración? | CAJ, ORD | Alto | `modulos/CAJ.md` (§ 3 Pendientes); `modulos/ORD.md` (§ 3 Pendientes) |
+| PREG-004 | **Respondida (roadmap 25 y 26):** con el día cerrado no se restaura ni se mueve nada; el crédito conserva fecha de creación y de pago pero no suma en ningún total (D-19). Queda por confirmar el cobro retroactivo y marcar crédito pagado (PREG-137). | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes); `modulos/ORD.md` (§ 3 Pendientes) |
 | PREG-005 | Reabrir un cierre solo borra `DailyClose`: no deshace `caja_cerrada`, bloqueos ni pasados a mañana, y un día pasado reabierto no se puede volver a cerrar (`NOT_TODAY`). ¿Es el uso esperado, se limpia al reabrir o se elimina la columna? | CAJ, PLT, GEN | Medio | `02-tecnico/datos-y-migraciones.md` (Preguntas/Pendientes); `04-operacion/runbooks.md` (Preguntas/Pendientes); `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-006 | **Respondida (D-19):** por ahora un crédito pagado no cuenta en ningún día. Se retoma si el cliente pide gestionarlos en el cierre. | CAJ | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-007 | Se puede marcar pagado un crédito que aún no está cerrado; el cierre ya no lo ve como pendiente ni lo suma. ¿Se exige que el pedido esté cerrado? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-008 | La API y la matriz de permisos dejan cerrar caja al encargado, pero la interfaz solo muestra el botón en 'Informe del día', que el encargado no ve. ¿Cuál es la intención? | CAJ, ACC | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-009 | Los totales y la comprobación 'ya cerrado' ocurren fuera de la transacción: un cobro concurrente queda fuera de la foto y dos cierres simultáneos se pisan. ¿Vale la pena cerrar esa ventana? | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
 | PREG-010 | La API cobra pedidos en papelera o eliminados por el cliente (solo la interfaz lo impide) y quedan fuera de los totales. ¿Debe rechazarlo la API? | CAJ | Medio | `modulos/CAJ.md` (§ 3 Pendientes) |
-| PREG-011 | El admin puede editar ítems o método de un pedido ya cobrado sin revalidar monto, vuelta ni pago dividido, y los totales pueden dejar de sumar. ¿Se revalida o se restringe? | CAJ, ORD | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
+| PREG-011 | **Respondida en parte (roadmap 25):** con el día cerrado ni el admin edita nada. Queda por definir si un pedido ya cobrado se puede editar el mismo día, con el día abierto. | CAJ, ORD | Respondida | `modulos/CAJ.md` (§ 3 Pendientes) |
 
 ## ORD — Pedidos
 
@@ -100,14 +100,14 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-035 | La seguridad de links por intentos fallidos y por `device_token`/`FormLinkSession` es código inerte que los comentarios describen como activo. ¿Se elimina todo o se restablece una protección (p. ej. límite de aperturas por link)? | INB, FRM, FAC, GEN | Alto | `02-tecnico/datos-y-migraciones.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/FAC.md` (§ 3 Pendientes); `modulos/FRM.md` (§ 3 Pendientes); `modulos/INB.md` (§ 3 Pendientes) |
+| PREG-035 | **Respondida (roadmap 28):** si no se usa, se quita. | INB, FRM, FAC, GEN | Respondida | `02-tecnico/datos-y-migraciones.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/FAC.md` (§ 3 Pendientes); `modulos/FRM.md` (§ 3 Pendientes); `modulos/INB.md` (§ 3 Pendientes) |
 | PREG-036 | `POST /tickets` no lo usa ninguna pantalla ni tiene test, y mezcla dos días distintos. ¿Se borra o se conserva para alguna integración? | INB | Bajo | `modulos/INB.md` (§ 3 Pendientes) |
-| PREG-037 | 'Borrar datos del cliente' deja datos personales en `order_history`, observaciones, `Order.notes` y los PDF de factura en R2. ¿Se acepta ante la Ley 1581 o se borran/redactan? | INB, FAC, GEN | Alto | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/FAC.md` (§ 3 Pendientes); `modulos/INB.md` (§ 3 Pendientes) |
+| PREG-037 | **Respondida (D-22):** por ahora se borra lo que se pueda; llegar al historial y los PDF se revisa más adelante (roadmap 33). | INB, FAC, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes); `modulos/FAC.md` (§ 3 Pendientes); `modulos/INB.md` (§ 3 Pendientes) |
 | PREG-038 | Reenviar con el archivo vencido crea una fila fallida que `forwarded` cuenta como reenviada. ¿Debe distinguirse o abortar todo? | INB | Bajo | `modulos/INB.md` (§ 3 Pendientes) |
 | PREG-039 | La bandeja muestra máximo 500 chats sin paginación (`page` se ignora). ¿Es suficiente? | INB | Bajo | `modulos/INB.md` (§ 3 Pendientes) |
 | PREG-040 | El encargado (y el domiciliario) no ven la bandeja pero desde un ticket pueden leer 500 mensajes, responder, reenviar y bloquear links. ¿Es el alcance buscado? | INB, ACC | Medio | `modulos/INB.md` (§ 3 Pendientes) |
 | PREG-041 | Responder pone `unread_count = 0` aunque el envío falle después con `failed_reason`; el chat queda 'atendido' sin que el cliente reciba nada. ¿Se mantiene? | INB | Medio | `modulos/INB.md` (§ 3 Pendientes) |
-| PREG-042 | `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización? | INB, PLT, GEN | Alto | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
+| PREG-042 | **Respondida (roadmap 31):** `dev` podrá elegir la organización a administrar. Por ahora se deja como está. | INB, PLT, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 
 ## IA — Tomar lista
 
@@ -121,7 +121,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-048 | No hay medición de uso/costo ni tope por organización de la IA. ¿Hace falta antes de crecer a más negocios? | IA | Medio | `modulos/IA.md` (§ 3 Pendientes) |
 | PREG-049 | 'Tomar lista' se puede usar en pedidos de solo lectura (papelera, eliminado por el cliente, bloqueado) sin que aparezca 'Guardar'. ¿Se desactiva el botón? | IA, ORD | Bajo | `modulos/IA.md` (§ 3 Pendientes) |
 | PREG-050 | El enfriamiento de 90 s también se activa con errores sin status HTTP (JSON roto, esquema), contra el comentario del código. ¿Es intencional? | IA, GEN | Bajo | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
-| PREG-051 | 'Tomar lista' manda texto literal de clientes a proveedores de IA gratuitos fuera de Colombia que la política de privacidad no menciona. ¿Se aceptó este tratamiento bajo la Ley 1581? | IA, GEN | Alto | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
+| PREG-051 | **Respondida (roadmap 30):** se ajusta la política con un párrafo corto; se verificó que solo se envía el texto seleccionado y el catálogo, nunca teléfono ni nombre. | IA, GEN | Respondida | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
 
 ## FRM — Formulario público
 
@@ -145,7 +145,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-062 | El botón de desactivar aparece en la fila propia aunque la API responde 400. ¿Se oculta? | ACC | Bajo | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-063 | **Parcialmente respondida (D-10, `roadmap.md` #19):** José planea el inicio de sesión con nombre de usuario más adelante, por pasos. **Sigue abierto:** mientras tanto, ¿se oculta el campo, que se muestra y guarda pero no sirve para entrar? | ACC | Medio | `modulos/ACC.md` (§ 3 Pendientes) |
 | PREG-064 | `REQUIRE_2FA=false` (texto) activa el 2FA por `z.coerce.boolean()`. ¿Se corrige el parseo o se documenta que debe quedar vacía? | ACC, GEN, OPS | Alto | `02-tecnico/arquitectura.md` (Preguntas/Pendientes); `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
-| PREG-065 | Desactivar o bajar de rol a un usuario no invalida su access token hasta 15 min. ¿Se acepta o `authenticate` consulta `active`/`role`? | ACC, GEN | Alto | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
+| PREG-065 | **Respondida (roadmap 29):** al desactivar el perfil el acceso se corta al instante. | ACC, GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-066 | `/login/verify-code` no respeta `locked_until`. ¿Debe cortar también durante el bloqueo? | ACC, GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-067 | `POST /tickets` (cualquier rol) sobrescribe `customer_name` de un ticket existente, esquivando el `PATCH` solo de admin. ¿Es intencional? | ACC, INB, GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 
@@ -176,7 +176,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
 | PREG-080 | `POST /invoice` acepta pedidos cerrados, en papelera, sin ítems o cobrados; solo la interfaz lo impide. ¿Debe la API repetir las condiciones? | FAC, ORD | Medio | `modulos/FAC.md` (§ 3 Pendientes) |
-| PREG-081 | Si la subida a R2 falla, el pedido queda sin factura válida y la nueva apunta a un archivo inexistente. ¿Se reordena (subir primero) o se acepta? | FAC | Alto | `modulos/FAC.md` (§ 3 Pendientes) |
+| PREG-081 | **Respondida (D-21):** se acepta; el chat inmutable es el respaldo. | FAC | Respondida | `modulos/FAC.md` (§ 3 Pendientes) |
 | PREG-082 | Una factura enviada sigue abriéndose hasta 24 h aunque el pedido se cobre o vaya a papelera. ¿Debe revocar también el cobro, la papelera o el cierre? | FAC, CAJ | Medio | `modulos/FAC.md` (§ 3 Pendientes) |
 | PREG-083 | La factura se arma con la pantalla sin guardar, así que puede enviarse un PDF con datos no guardados. ¿Se exige guardar antes de enviar? | FAC | Medio | `modulos/FAC.md` (§ 3 Pendientes) |
 | PREG-084 | Cada reenvío crea otro PDF permanente y nada borra los vencidos. ¿Hace falta política de retención? | FAC | Medio | `modulos/FAC.md` (§ 3 Pendientes) |
@@ -185,7 +185,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 
 | ID | Pregunta | Módulo(s) | Impacto | Detalle |
 |---|---|---|---|---|
-| PREG-085 | El dev lee datos personales de cualquier negocio sin motivo ni tope y solo queda `dev.db_read` sin el contenido. ¿Basta ese rastro (Ley 1581) o se enmascaran por defecto? | PLT | Alto | `modulos/PLT.md` (§ 3 Pendientes) |
+| PREG-085 | **Respondida (roadmap 31):** hay que planear bien cómo administrar sin que `dev` lea chats; por ahora se deja así. | PLT | Respondida | `modulos/PLT.md` (§ 3 Pendientes) |
 | PREG-086 | El PDF de un cobro puede quedar vacío sin aviso y `report_url` se sobrescribe con `null` si R2 falla. ¿Debe fallar y conservar la URL anterior? | PLT | Medio | `modulos/PLT.md` (§ 3 Pendientes) |
 | PREG-087 | El dev puede editar o borrar un cobro ya pagado. ¿Debe bloquearse? | PLT | Medio | `modulos/PLT.md` (§ 3 Pendientes) |
 | PREG-088 | 'Marcar pagado' no se puede deshacer en la interfaz y 'al día' no compara el mes cubierto. ¿Debe mirar el mes? | PLT | Bajo | `modulos/PLT.md` (§ 3 Pendientes) |
@@ -202,7 +202,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-094 | `order:updated` desde `tickets.ts › PATCH /:id` manda solo `{ id }` con `as any`. ¿Se ajusta el tipo o el emisor? | GEN | Bajo | `02-tecnico/api-y-eventos.md` (Preguntas/Pendientes) |
 | PREG-095 | ¿El bucket de R2 permite lectura pública? Si sí, `invoices/` se descarga sin el control de 24 h ni la revocación. | GEN, FAC | Medio | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
 | PREG-096 | Sentry usa `NODE_ENV` (`production` en todos los despliegues). ¿Debe usar `APP_ENVIRONMENT_NAME`? | GEN, OPS | Bajo | `02-tecnico/integraciones.md` (Preguntas/Pendientes) |
-| PREG-097 | No hay purga automática de datos personales (mensajes, `raw_payload`, pedidos, `audit_logs`). ¿Cuál es el plazo de retención según la política? | GEN | Alto | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
+| PREG-097 | **Respondida (D-23, roadmap 32):** por ahora se acumulan sin plazo; hay que planear el plazo según la ley. | GEN | Respondida | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-098 | La auditoría no registra bloqueos de links, catálogo y precios, empleados ni `/dev/seed`. ¿Hace falta? | GEN | Medio | `02-tecnico/seguridad-y-privacidad.md` (Preguntas/Pendientes) |
 | PREG-099 | El respaldo promete independencia de Cloudflare pero el destino es R2. ¿Se acepta o hace falta una segunda copia? ¿Cuál es el plazo del ciclo de vida? | GEN, OPS | Medio | `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
 | PREG-100 | El job de test de CI no define `META_WEBHOOK_VERIFY_TOKEN` que el test del handshake necesita. ¿CI está pasando hoy? | GEN, OPS | Medio | `02-tecnico/calidad-y-pruebas.md` (Preguntas/Pendientes) |
@@ -257,5 +257,6 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-135 | La política publicada dice datos "protegidos con cifrado"; en el código solo se cifran los tokens de Meta. ¿Se ajusta el texto o se cifra más? | PLT | Alto | `02-tecnico/datos-personales.md` |
 | PREG-136 | Sentry se inicializa sin filtro de datos personales (`beforeSend`) y recibe también los 4xx de validación. ¿Se filtra? | PLT | Medio | `04-operacion/observabilidad-y-continuidad.md` |
+| PREG-137 | El cobro retroactivo y marcar un crédito como pagado sobre un pedido de un día ya cerrado: ¿se siguen permitiendo? José pidió que con el día cerrado no se mueva nada, pero el crédito pagado después es la liquidación de un crédito (D-19) y el cobro retroactivo se hizo a propósito. | CAJ | Alto | `modulos/CAJ.md` (§ 3 Pendientes) |
 
-Total: 136 preguntas (las respondidas por José están marcadas "Respondida").
+Total: 137 preguntas (las respondidas por José están marcadas "Respondida").
