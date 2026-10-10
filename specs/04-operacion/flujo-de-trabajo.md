@@ -30,7 +30,7 @@ git checkout dev && git pull --ff-only origin dev
 git checkout -b feature/<slug>        # o fix/<slug>, chore/<slug>, docs/<slug>
 ```
 
-Una rama = un tema. Nunca se trabaja directo sobre `dev` ni sobre `main`.
+Una rama = un tema. Nunca se trabaja directo sobre `dev` ni sobre `main`. La rama **no se prueba**: se integra a `dev` y ahí se revisa (D-20). Si hace falta un ajuste, se hace en una rama nueva desde `dev` y se integra otra vez. Las vistas previas de rama de Cloudflare Pages existen pero apuntan a la API de producción, así que nadie las usa para probar.
 
 ## 2. Commits
 

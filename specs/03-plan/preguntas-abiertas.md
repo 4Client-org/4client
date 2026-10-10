@@ -251,7 +251,7 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-128 | No hay forma en la interfaz de desactivar una organización (el login ya rechaza `active = false`). ¿Hace falta? | PLT, ACC | Medio | `04-operacion/alta-de-negocio.md` |
 | PREG-129 | Un hotfix urgente no se puede aislar: `main` recibe todo lo que hay en `dev`. ¿Se acepta, o se define un flujo de hotfix? | flujo | Medio | `04-operacion/flujo-de-trabajo.md` |
 | PREG-130 | Socket.IO usa salas en memoria sin adaptador: con más de una réplica de la API los eventos en tiempo real no llegarían a todos. ¿Se escala a más de una réplica alguna vez? | PLT, ACC | Bajo | `02-tecnico/arquitectura.md` |
-| PREG-131 | Una vista previa de Cloudflare Pages con otro host que `dev.*.pages.dev` llamaría a la API de producción. ¿Se restringe? | PLT | Medio | `02-tecnico/modelo-de-amenazas.md` |
+| PREG-131 | **Respondida (D-20):** José solo prueba en `dev`, nunca en vistas previas de rama; no hay riesgo práctico. | PLT | Respondida | `02-tecnico/modelo-de-amenazas.md` |
 | PREG-132 | `PATCH /config/wpp` no emite evento de socket: otros usuarios conectados no ven el cambio hasta recargar. ¿Es intencional? | WPP | Bajo | `modulos/WPP.md` |
 | PREG-133 | El bloqueo de cuenta (5/15/60 min) permite que alguien anónimo que conozca el correo de un admin lo bloquee hasta 1 h. ¿Se acepta? | ACC | Medio | `02-tecnico/modelo-de-amenazas.md` |
 | PREG-134 | No hay canal ni registro de solicitudes de titulares (acceso, rectificación) ni procedimiento de notificación de brechas a la SIC. ¿Quién y cómo? | PLT | Alto | `02-tecnico/datos-personales.md` |
