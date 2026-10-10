@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0017 — Flujo: se prueba solo en dev (D-20)
+- **Fecha / rama:** 2026-10-10, `docs/flujo-sin-previews`
+- **Qué cambió:** nueva decisión D-20 (José solo prueba en `dev`, no en vistas previas de rama); PREG-131 queda respondida; `flujo-de-trabajo.md` lo dice en el paso 1.
+- **Por qué:** respuesta de José a PREG-131.
+- **Specs tocadas:** `05-historia/decisiones.md`, `03-plan/preguntas-abiertas.md`, `04-operacion/flujo-de-trabajo.md`.
+- **Obsoleto:** nada.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0016 — Lista de pendientes de privacidad y seguridad, y limpieza de ramas
 - **Fecha / rama:** 2026-10-10, `docs/lista-pendientes`
 - **Qué cambió:** el roadmap suma los ítems 22 a 24 (solicitudes de titulares, cifrado frente a la política, bloqueo de cuenta por terceros). Se borraron las 36 ramas remotas ya integradas en `dev`; quedan solo `dev` y `main`, local y en GitHub.
 - **Por qué:** pedido de José (2026-10-10): dejar esos temas en la lista de pendientes y que solo existan las dos ramas permanentes.
 - **Specs tocadas:** `03-plan/roadmap.md`, `00-estado-actual.md`.
 - **Obsoleto:** nada.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `31da636` · **Prod:** pendiente
 
 ### R-0015 — Pulido profesional de las specs y siete documentos nuevos
 - **Fecha / rama:** 2026-10-10, `docs/specs-profesional`
