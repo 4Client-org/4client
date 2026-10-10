@@ -43,6 +43,9 @@ Preparar el sistema para un segundo cliente y endurecer la operación.
 | 12 | Script de **detección de deriva** (drift) entre specs y código. | Las specs citan `ruta › símbolo` y tests por título; un script puede avisar cuando ya no existen. | `specs/`, `.github/` |
 | 19 | **Inicio de sesión con nombre de usuario** (en vez de correo) y **2FA también para administradores**. | Plan gradual de José: hoy se mantiene lo más simple posible para el primer cliente; el campo `username` ya existe pero no sirve para entrar. | ACC |
 | 21 | Que el **administrador de cada negocio** pueda borrar datos de un cliente final (hoy solo `dev`). | Decisión de José: se abrirá cuando haya más clientes (D-17). | INB, ACC |
+| 22 | **Atención de solicitudes de titulares** (acceso, rectificación, supresión de datos de un cliente final): definir quién las atiende, por qué canal y dónde se registran. | Ley 1581; hoy se resuelven a mano y sin registro (PREG-134, `02-tecnico/datos-personales.md`). Decisión de José 2026-10-10: va a la lista, se define después. | PLT, INB |
+| 23 | **Cifrado y política de privacidad:** decidir si se cifran más datos (mensajes, teléfonos) o se ajusta el texto de la política, que hoy dice "protegidos con cifrado" y solo se cifran los tokens de Meta. | Coherencia entre lo que se promete y lo que se hace (PREG-135). José 2026-10-10: analizar cómo hacerlo bien. | PLT, WPP |
+| 24 | **Bloqueo de cuenta por terceros:** hoy quien conozca el correo de un administrador puede bloquearlo hasta 1 h con intentos fallidos. Analizar una solución (por ejemplo bloqueo por origen además de por cuenta). | Riesgo de denegación a un administrador (PREG-133). José 2026-10-10: hay que solucionarlo; falta analizar cómo. | ACC |
 
 ## Después
 
