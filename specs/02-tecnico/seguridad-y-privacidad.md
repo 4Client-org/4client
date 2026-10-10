@@ -56,7 +56,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 - **Detección de reutilización:** presentar un token ya revocado revoca **todos** los refresh tokens activos del usuario y responde 401 `TOKEN_REUSE_DETECTED` *(código; test `auth.test.ts › "detects refresh-token reuse: replaying a rotated-away cookie returns 401 TOKEN_REUSE_DETECTED and revokes the whole family"`)*.
 - **CSRF:** `/refresh` es la única ruta que se autentica por cookie; exige `X-Requested-With: XMLHttpRequest` (403 `CSRF_CHECK_FAILED` si falta). Un sitio ajeno no puede poner esa cabecera sin una preflight CORS que la lista de orígenes rechaza *(código; test `auth.test.ts › "rejects refresh with no X-Requested-With header -> 403 CSRF_CHECK_FAILED, even with a valid cookie"`)*. El resto de rutas usa `Authorization: Bearer`, que no es vulnerable a CSRF.
 - **Refresh con usuario u organización inactivos:** revoca ese token y responde 401. El refresh relee el rol desde la base *(código)*.
-- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). **Cambiar el rol no revoca nada.** Como `authenticate` no consulta la base, un access token ya emitido sigue valiendo hasta 15 min después de una desactivación o un cambio de rol *(código)*. Ver PREG-065.
+- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). Cambiar el rol desconecta los sockets del usuario pero no revoca sus refresh tokens. **`authenticate` consulta la base en cada petición** (`active`, `role`, `org_id` por clave primaria): un usuario desactivado, inexistente, o cuyo rol ya no es el del token recibe 401 al instante, sin esperar los 15 min. Tras un cambio de rol, la web renueva con `/auth/refresh` y sigue con el rol nuevo; con una cuenta desactivada el refresh falla *(código; `access-immediate.test.ts`; PREG-065 resuelta)*.
 - Los refresh tokens revocados o vencidos de un usuario se borran en su siguiente login exitoso; no hay otra limpieza *(código)*.
 - `POST /auth/logout` exige un access token válido y revoca el refresh token de la cookie *(código)*.
 
@@ -91,7 +91,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 | Tope de emisión | 5 códigos por cuenta en 15 min, luego 429 `CODES_RATE_LIMITED` |
 | Código incorrecto | También suma al contador de bloqueo de la cuenta |
 
-- `REQUIRE_2FA` se lee con `z.coerce.boolean()`: cualquier texto no vacío, **incluido `"false"`**, lo enciende *(código)*. Ver PREG-064.
+- `REQUIRE_2FA` se lee con `lib/envBool.ts › parseEnvBool`: `true`/`1`/`yes`/`on` encienden; `false`/`0`/`no`/`off`, vacío o ausente apagan (sin distinguir mayúsculas); un valor desconocido enciende (falla cerrado) *(código; `envBool.test.ts`; PREG-064 resuelta)*.
 - `/login/verify-code` no mira `locked_until`: una cuenta bloqueada puede seguir gastando los intentos que le quedan al código vigente (como máximo 5) *(código)*. Ver PREG-066.
 
 **Política de contraseñas** (`lib/password.ts › passwordSchema`): mínimo 12 caracteres, con al menos una mayúscula, una minúscula y un número. Se aplica al crear usuarios, al resetear contraseñas y al crear una organización desde DevTools; **el login no la aplica**, para que sigan entrando cuentas anteriores a la política. Hash bcrypt de costo 12. No existe cambio de contraseña por el propio usuario: solo el reset que hace un admin o un dev *(código)*.
@@ -179,7 +179,7 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 - **`trustProxy`** confía solo en el salto 0 (Traefik), para que un cliente no pueda elegir su IP con `X-Forwarded-For` y saltarse los límites *(código)*.
 - **Cabeceras de la API:** `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` en toda respuesta, más los valores por defecto de `@fastify/helmet` (nosniff, anti-frame, CSP para respuestas JSON/PDF). CORS solo para los orígenes de `FRONTEND_URL` (lista separada por comas) con credenciales; las rutas `/api/v1/public/*` responden además `Access-Control-Allow-Origin: *` *(código)*.
 - **Cabeceras de la web** (`apps/web/public/_headers`, Cloudflare Pages): `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, CSP (`script-src 'self'`, estilos propios más Google Fonts, `frame-ancestors 'none'`, `object-src 'none'`; `connect-src` permite cualquier `https:` y `wss:`) y `Permissions-Policy` que niega cámara, micrófono, geolocalización, pagos y USB *(código)*.
-- **Socket.io** (`plugins/socket.ts`): el JWT se verifica al conectar y se rechazan tokens sin `userId`/`role`. El socket se **desconecta solo al vencer el token** (temporizador hasta `exp`) y también cuando se resetea la contraseña o se desactiva al usuario (sala `user:<id>`). `join:org` solo une a la organización del token; `join:date` crea la sala `org:<orgDelToken>:date:<fecha>` *(código, sin test)*.
+- **Socket.io** (`plugins/socket.ts`): el JWT se verifica al conectar y se rechazan tokens sin `userId`/`role`. El handshake además contrasta `active`, `role` y `org_id` contra la base (rechaza a un desactivado o con rol cambiado). El socket se **desconecta solo al vencer el token** (temporizador hasta `exp`) y también cuando se resetea la contraseña, se desactiva al usuario o se le cambia el rol (sala `user:<id>`). `join:org` solo une a la organización del token; `join:date` crea la sala `org:<orgDelToken>:date:<fecha>` *(código, sin test)*.
 
 ## 11. Ley 1581 de 2012 (datos personales)
 
@@ -231,13 +231,11 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 - **Pérdida de multimedia a los 30 días** (decisión de negocio, `lib/media.ts`).
 - **2FA solo para `dev`:** las cuentas admin, que pueden resetear contraseñas y ver todo el negocio, entran solo con contraseña (decisión explícita, comentada en `auth.ts`).
 
-**Hallazgos de esta lectura** (ver Pendientes): un access token sigue valiendo hasta 15 min tras desactivar o cambiar el rol; cualquier rol puede renombrar un ticket por `POST /tickets`; `REQUIRE_2FA="false"` lo enciende; el endurecimiento de links está muerto (`device_token`, escalera de bloqueos); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
+**Hallazgos de esta lectura** (ver Pendientes): (resueltos: el access token tras desactivar o cambiar el rol, y `REQUIRE_2FA="false"`); cualquier rol puede renombrar un ticket por `POST /tickets`; el endurecimiento de links está muerto (`device_token`, escalera de bloqueos); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
 
 ## Pendientes
 
-- **PREG-064** — `REQUIRE_2FA` usa `z.coerce.boolean()`, así que `REQUIRE_2FA=false` (texto) **lo activa**. ¿Corregir el parseo o documentar que la variable debe quedar vacía?
 - **PREG-067** — `POST /tickets` (cualquier rol) sobrescribe el `customer_name` de un ticket existente, lo que esquiva el `PATCH` que es solo de admin. ¿Es intencional?
-- **PREG-065** — Desactivar a un usuario o bajarle el rol no invalida su access token (hasta 15 min). ¿Se acepta o `authenticate` debe consultar `active`/`role`?
 - **PREG-035** — `device_token`, `FormLinkSession` y `registerFailedLinkAttempt` son código muerto (se exigen o se comprueban, pero nada los activa). ¿Se borran o se reactivan?
 - **PREG-042** — `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización?
 - **PREG-037** — `erase-data` no limpia `Order.notes` (y no puede tocar `order_history`). ¿Se acepta, o hay que redactar las notas?

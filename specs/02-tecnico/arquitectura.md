@@ -137,7 +137,7 @@ Comportamientos globales:
 | HSTS | `onSend` agrega `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` a toda respuesta. | *(código)* |
 | Errores no controlados | Responden `{ error, code }` con `code = error.code ?? 'SERVER_ERROR'`. En producción, si el status es ≥ 500, el mensaje se reemplaza por "Error interno del servidor". Se reportan a Sentry si está configurado. | Un `z.parse` (no `safeParse`) que falla no trae `statusCode` y termina en 500 enmascarado. *(código)* |
 | CORS | Orígenes = `FRONTEND_URL` separado por comas. Cabeceras permitidas: `Content-Type`, `Authorization`, `X-Requested-With`; `credentials: true`. | `X-Requested-With` es la defensa CSRF de `/auth/refresh`. Las rutas `/api/v1/public/*` sobrescriben con `Access-Control-Allow-Origin: *` y responden `OPTIONS *` con 204 (`public.ts › onRequest`). *(código)* |
-| JWT | HS256 fijo en firma y verificación, secreto `JWT_SECRET`. Access token 15 min; refresh en cookie HttpOnly `rf` de 7 días con `path: /api/v1/auth` (`routes/auth.ts`). | El mismo secreto firma los tokens viejos de link de formulario; por eso `authenticate` y el socket rechazan cualquier token sin `userId` y `role`. *(código)* |
+| JWT | HS256 fijo en firma y verificación, secreto `JWT_SECRET`. Access token 15 min (`authenticate` lo contrasta con la base en cada petición: desactivar o cambiar el rol lo invalida al instante); refresh en cookie HttpOnly `rf` de 7 días con `path: /api/v1/auth` (`routes/auth.ts`). | El mismo secreto firma los tokens viejos de link de formulario; por eso `authenticate` y el socket rechazan cualquier token sin `userId` y `role`. *(código)* |
 | Rate limit global | 300 peticiones por minuto. Clave: `userId` del JWT **verificado** (`req.jwtVerify()`); si no hay token válido o no trae `userId`, la IP. | Antes usaba `jwt.decode()` sin verificar firma y se podía elegir balde con un token falso. Los límites por ruta están en `api-y-eventos.md`. *(código)* |
 | Roles | `middleware/auth.ts › requireRole`: `dev` pasa cualquier verificación de rol. | *(código)* |
 
@@ -161,7 +161,7 @@ Solo nombres; los valores viven en Coolify. Si el esquema no valida, el proceso 
 | `SENTRY_DSN` | No | Errores. |
 | `SEED_ADMIN_PASS`, `SEED_DEV_PASS` | No (mín. 8 si se definen) | Solo `POST /dev/seed` y `seed.ts`, que las exigen ellos mismos. |
 | `RESEND_API_KEY` | No | Correo del código 2FA. |
-| `REQUIRE_2FA` | No (`false`) | Activa el segundo paso del login, solo para el rol `dev`. Ver trampa abajo. |
+| `REQUIRE_2FA` | No (apagado si falta) | Activa el segundo paso del login, solo para el rol `dev`. Ver trampa abajo. |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` | No | Proveedores de "Tomar lista". `CEREBRAS_API_KEY` se valida pero hoy no se usa. |
 
 **Modo estricto (`APP_ENVIRONMENT_NAME=production`)** — el servidor no arranca si falta:
@@ -170,7 +170,7 @@ Solo nombres; los valores viven en Coolify. Si el esquema no valida, el proceso 
 
 y además `POST /dev/seed` queda prohibido. `NODE_ENV=production` sin `APP_ENVIRONMENT_NAME` también impide arrancar: obliga a decidir explícitamente. *(código)*
 
-**Trampa `REQUIRE_2FA`:** se valida con `z.coerce.boolean()`, que convierte con `Boolean(valor)`. Cualquier texto no vacío es `true`: `REQUIRE_2FA=false` o `REQUIRE_2FA=0` **activan** el 2FA. Para apagarlo hay que dejar la variable sin definir o vacía. *(código)* → PREG-064.
+**`REQUIRE_2FA`:** se lee con `lib/envBool.ts › parseEnvBool` (antes `z.coerce.boolean()`, que encendía el 2FA con `"false"`). `true`/`1`/`yes`/`on` encienden; `false`/`0`/`no`/`off`, vacío o ausente apagan; sin distinguir mayúsculas; un valor desconocido enciende (falla cerrado). Es la única variable booleana de `config.ts`. *(código; `envBool.test.ts`)*
 
 **Variables fuera de `config.ts`:** `META_TOKEN` (solo `update-org-wpp.ts`); `VITE_API_URL` (web, ver abajo); en GitHub Actions, la variable de repositorio `VITE_API_URL` (build de CI) y los secretos del respaldo `PROD_DATABASE_BACKUP_URL`, `BACKUP_R2_ACCESS_KEY_ID`, `BACKUP_R2_SECRET_ACCESS_KEY`, `BACKUP_R2_BUCKET_NAME` y `BACKUP_R2_ACCOUNT_ID` (`calidad-y-pruebas.md` §6). El `Dockerfile` y `start.sh` no declaran variables: todo llega por el entorno del contenedor en Coolify. Quién las lee: `config.ts` (todas las del servidor; el resto del código importa `config`), salvo `seed.ts` (`SEED_*`) y `update-org-wpp.ts` (`META_TOKEN`), que leen `process.env` directo. *(código)*
 
@@ -241,6 +241,5 @@ Mapa de carpetas, componentes, hooks y utilidades: `frontend.md`. Catálogo de `
 ## 10. Pendientes
 
 - **PREG-092 — Respondida:** PostgreSQL 16.15 en dev y prod (VPS, 2026-10-10). El `README.md` raíz que dice 15 y el comentario del workflow de backup que dice que el cliente 18 coincide con el servidor están desactualizados.
-- **PREG-064 — `REQUIRE_2FA` con `z.coerce.boolean()`.** `REQUIRE_2FA=false` activa el 2FA. ¿Se cambia a un parseo explícito (`'true'`/`'false'`) o se documenta solo en la operación?
 - **PREG-015 — Fecha por defecto en UTC en `orders.ts`.** `GET /orders` y `POST /orders` sin `fecha` usan `new Date().toISOString()` (UTC); entre 19:00 y 23:59 de Bogotá eso ya es "mañana". La web siempre envía `fecha`, así que hoy no se nota. ¿Se alinea con el resto (Bogotá)?
 - **DT-002 — Logo fijo en `MainPage`.** El encabezado muestra siempre `/fruver-san-gabriel.jpeg`, sea cual sea la organización. Es una excepción multi-tenant registrada (principio 2); se trata junto con el resto del hardcoding de un solo cliente.
