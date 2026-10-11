@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ 17dcc31
 fuentes: [apps/api/src/server.ts, apps/api/src/middleware/auth.ts, apps/api/src/routes/auth.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/config.ts, apps/api/src/routes/dev.ts, apps/web/src/lib/api.ts]
 ---
 
@@ -52,7 +52,13 @@ Respuestas de error **sin `code`** (solo `error`), hoy: `webhook.ts` handshake c
 | `code` | HTTP | Cuándo |
 |---|---|---|
 | `ORDER_LOCKED` | 409 | Pedido bloqueado (cobrado/cerrado): solo admin edita; también al cambiar estado de uno bloqueado |
-| `DAY_CLOSED` | 409 | Crear o editar en un día con caja cerrada |
+| `DAY_CLOSED` | 409 | Crear, editar, mover de estado (también desde/hacia papelera), restaurar, cobrar o cobrar retroactivamente un pedido de un día con caja cerrada; también la fusión y el borrado del cliente desde el formulario (`public.ts`). Se revisa antes que `ORDER_LOCKED`. No aplica a observaciones ni a `credito-pagado` |
+| `ORDER_IN_PAPELERA` | 409 | Cobrar un pedido en papelera (hay que restaurarlo) |
+| `ORDER_CLIENT_DELETED` | 409 | Cobrar un pedido eliminado por el cliente (hay que restaurarlo) |
+| `PAYMENT_CHANGE_ADMIN_ONLY` | 403 | El encargado intenta cambiar el método o el desglose de pago de un pedido ya cobrado |
+| `PAYMENT_BREAKDOWN_REQUIRED` | 400 | Cambiar el método o el total de un pedido ya cobrado sin `payment_breakdown` |
+| `PAYMENT_BREAKDOWN_MISMATCH` | 400 | `payment_breakdown` (efectivo + transferencia) que no suma exactamente el total nuevo |
+| `PAYMENT_METHOD_NOT_ALLOWED` | 400 | Dejar un pedido cobrado en `credito` o `sin_asignar`, cambiar el método de un crédito cobrado, o enviar desglose a un crédito sin pago dividido |
 | `REASON_REQUIRED` | 400 | Enviar a papelera sin motivo |
 | `NOT_DELETED` | 400 | Restaurar un pedido que no está en papelera ni eliminado |
 | `NOT_AUTHOR` | 403 | Editar o borrar una observación ajena |
