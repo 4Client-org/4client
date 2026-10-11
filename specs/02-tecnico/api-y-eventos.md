@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 17dcc31
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
@@ -22,7 +22,7 @@ Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 6 · DSH
 |---|---|---|
 | `public` | Sin sesión de personal (puede exigir token de link, firma de Meta o cookie) | sin `authenticate` |
 | `auth` | Cualquier rol con sesión: admin, encargado, domiciliario, dev | `authenticate` |
-| `gestión` | admin + encargado + dev | `requireRole('admin', 'encargado')` |
+| `gestión` | admin + encargado + domiciliario + dev (el domiciliario pasa donde pasa el encargado, `middleware/auth.ts › requireRole`; decisión de José 2026-10-10) | `requireRole('admin', 'encargado')` |
 | `admin` | admin + dev | `requireRole('admin')` o `requireRole('admin', 'dev')` |
 | `dev` | solo dev | `requireRole('dev')` |
 

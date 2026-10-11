@@ -1,12 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/vitest.config.ts, apps/api/test/globalSetup.ts, apps/api/test/helpers.ts, apps/api/test/*.test.ts, apps/api/package.json, apps/web/package.json, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/server.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations, Dockerfile, start.sh]
 ---
 
 # Calidad y pruebas
 
-> **Resumen.** Una sola suite (Vitest, 259 tests, API contra Postgres real); la web solo se verifica con tipos y build. CI corre typecheck, tests y build en cada push o PR a `dev`/`main`. El respaldo diario de la base es un workflow aparte. Los huecos conocidos están en §4 y los pendientes al final.
+> **Resumen.** Una sola suite (Vitest, 321 tests, API contra Postgres real); la web solo se verifica con tipos y build. CI corre typecheck, tests y build en cada push o PR a `dev`/`main`. El respaldo diario de la base es un workflow aparte. Los huecos conocidos están en §4 y los pendientes al final.
 
 Cómo se prueba el sistema, qué cubre y qué no la suite, qué corre en CI, cómo se respalda la base y qué requisitos no funcionales se observan en el código. Principio 11: toda regla de dinero, permisos o tenant necesita un test contra **Postgres real**; los servicios externos se simulan.
 
@@ -34,7 +34,7 @@ Cómo se prueba el sistema, qué cubre y qué no la suite, qué corre en CI, có
 
 | Aspecto | `server.ts` (real) | `buildTestServer` |
 |---|---|---|
-| Rutas | Todas, más `/health` y `/api/v1/wpp/status` | Sin `users`, `employees`, `/health` ni `/wpp/status` |
+| Rutas | Todas, más `/health` y `/api/v1/wpp/status` | Sin `employees`, `/health` ni `/wpp/status` (`users` se registra desde 2026-10-10, para `access-immediate.test.ts`) |
 | `@fastify/helmet`, hook HTTPS, cabecera HSTS, Sentry | Sí | No |
 | `trustProxy` | Solo el salto 0 | No configurado |
 | Límite global | 300/min, clave = `userId` verificado o IP | 100/min por IP; cada `inject` recibe una **IP aleatoria** si el test no fija una |
@@ -46,28 +46,32 @@ Consecuencia: los límites por usuario, la cabecera HSTS, el rechazo por HTTP, `
 
 ## 3. Archivos de test
 
-Conteo de bloques `it(` por archivo, hecho sobre el código: **20 archivos, 259 tests**.
+Conteo de bloques `it(` por archivo, hecho sobre el código: **24 archivos, 321 tests** (con `it.each` expandidos, como los cuenta `vitest list`).
 
 | Archivo | Tests | Qué cubre |
 |---|---|---|
 | `ai-providers.test.ts` | 12 | Cadena Gemini → Groq → OpenRouter, Cerebras fuera de la cadena, descubrimiento de modelos, caída al siguiente candidato y proveedor, enfriamiento de 90 s solo ante 5xx y no ante 400, esquema zod, bloque de código markdown |
+| `access-immediate.test.ts` | 4 | Corte inmediato: un usuario desactivado o con el rol cambiado recibe 401 con el mismo token; el refresh no da token a un desactivado y emite el rol nuevo |
 | `auth-2fa.test.ts` | 5 | 2FA solo para el rol `dev` con `REQUIRE_2FA` activo; código correcto o incorrecto; el código se consume |
 | `auth.test.ts` | 11 | Login, error idéntico para un email inexistente, refresh con rotación, reutilización que revoca la familia, CSRF de `/refresh`, `/me`, bloqueo tras 5 fallos con correo al dueño, organización inactiva |
 | `billing.test.ts` | 3 | `GET /billing/charges`: solo la propia organización, orden, roles |
 | `businessDate.test.ts` | 5 | Corte de las 21:00 Bogotá (`businessDateForInstant`), cambios de mes y de año |
-| `cierre.test.ts` | 16 | Solo se cierra hoy, decisiones obligatorias, `manana` (renumeración y marcador), `forzar_cierre`, doble cierre, día congelado, cobro retroactivo |
+| `cierre.test.ts` | 17 | Solo se cierra hoy, decisiones obligatorias, `manana` (renumeración y marcador), `forzar_cierre`, doble cierre, día congelado, cobro retroactivo |
+| `cierre-congela-y-cobrados.test.ts` | 21 | Día cerrado que congela todo (`DAY_CLOSED` al restaurar, mover, cobrar, borrar desde el formulario; excepciones: crédito pagado y observaciones), cobro de pedidos en papelera o eliminados por el cliente (`ORDER_IN_PAPELERA`, `ORDER_CLIENT_DELETED`) y corrección de pago de un pedido cobrado (`payment_breakdown`, `PAYMENT_CHANGE_ADMIN_ONLY`, `PAYMENT_BREAKDOWN_*`, `PAYMENT_METHOD_NOT_ALLOWED`) |
+| `cierre-totales.test.ts` | 9 | Una sola regla de bolsas (`lib/cierreTotals.ts`): pago dividido, crédito sin pagar y eliminados fuera del total, vista previa = `DailyClose` = informe, solo admin/dev cierra y ve `GET /cierre/preview`, y `credit_paid_at` |
 | `config.test.ts` | 2 | `PATCH /config/wpp`: unicidad de `wpp_meta_phone_id` (409) |
 | `dashboard.test.ts` | 6 | Conteos del informe por día; listas "sin cobro" en efectivo y transferencia |
 | `dev-centro-mando.test.ts` | 26 | DevTools: crear y listar organizaciones, reabrir cierre, ticket de prueba, cobros de plataforma (CRUD, PDF, consecutivo), `/dev/db` con `orgId`, rechazo de roles no-dev |
+| `envBool.test.ts` | 17 | `lib/envBool.ts › parseEnvBool`: `false`/`0`/`no`/`off`/vacío apagan, `true`/`1`/`yes`/`on` encienden, valores desconocidos encienden (falla cerrado) |
 | `files.test.ts` | 12 | Facturas: subida, link de 24 h, reemplazo por pedido, edición que invalida, bloqueo por ticket y por organización, otra organización |
 | `inbox-parse-messages.test.ts` | 7 | Tomar lista: precio siempre 0, sin coincidencia marcada, deduplicación, solo mensajes de texto entrantes del ticket, 502, roles |
 | `inbox.test.ts` | 25 | Mensajes por día, marca de no leído, destinos de reenvío, `failed_reason` de Meta, envío de imagen, audio y documento con validación de firma, `GET /media` (otra organización, firma falsa, vencido), reenvío, supresión de datos (Ley 1581) |
 | `matchProduct.test.ts` | 7 | Coincidencia exacta, plural, contención única o ambigua, similitud con umbral y margen |
 | `messageTemplates.test.ts` | 8 | Plantillas por defecto o guardadas; lectura y edición por rol; validación |
 | `orderNumbering.test.ts` | 5 | Llenado de huecos en la numeración del día; creación concurrente sin duplicados |
-| `orders.test.ts` | 37 | Crear y editar pedidos, aislamiento por organización, historial, cobro (contraseña, bloqueo, dividido, crédito, $0), pedido bloqueado y día cerrado, observaciones, cobro en casa |
+| `orders.test.ts` | 38 | Crear y editar pedidos, aislamiento por organización, historial, cobro (contraseña, bloqueo, dividido, crédito, $0), pedido bloqueado y día cerrado, observaciones, cobro en casa |
 | `products-bulk-price.test.ts` | 4 | `PATCH /products/bulk-price`: otra organización, precio negativo, rol, lista vacía |
-| `public.test.ts` | 48 | Formulario: enviar y fusionar, estados editables, link de 24 h, revocación, reemplazo, "bloquear todos", tope diario, atribución, día cerrado, borrado por el cliente, consentimiento, último pedido |
+| `public.test.ts` | 57 | Formulario: enviar y fusionar, estados editables, link de 24 h, revocación, reemplazo, "bloquear todos", tope diario, atribución, día cerrado, borrado por el cliente, consentimiento, último pedido |
 | `tickets.test.ts` | 2 | Orden de `GET /tickets` por primer mensaje del día |
 | `webhook.test.ts` | 18 | Handshake, recibos de estado, bienvenida y aviso una vez por ticket, redirección, sin teléfono, BSUID, `raw_payload`, multimedia y ubicación sin descarga, corte de las 21:00 |
 
@@ -75,7 +79,7 @@ Conteo de bloques `it(` por archivo, hecho sobre el código: **20 archivos, 259 
 
 | Sin test | Detalle |
 |---|---|
-| `routes/users.ts` (completo) | Crear, editar, desactivar, resetear contraseña, ocultar cuentas `dev`, revocar sesiones al desactivar. Ni siquiera se registra en `buildTestServer` |
+| `routes/users.ts` (completo) | Crear, resetear contraseña, ocultar cuentas `dev`, revocar sesiones al desactivar. Solo se ejercitan `PATCH /users/:id` (desactivar y cambiar el rol) y su efecto en `authenticate`, en `access-immediate.test.ts` |
 | `routes/employees.ts` (completo) | Tampoco se registra |
 | `routes/tickets.ts › POST /` y `› PATCH /:id` | Solo hay tests del `GET` |
 | `GET /api/v1/wpp/status`, `/health` | Viven en `server.ts`, fuera del servidor de test |
@@ -180,7 +184,7 @@ Receta que siguen los archivos existentes (`orders.test.ts` es el modelo) *(cód
 4. Una regla de dinero, permisos o tenant sin test viola el principio 11. Cubre al menos: caso feliz, rol no permitido (403), recurso de otra organización (404) y el borde de la regla.
 5. Servicios externos: no los llames. Simula `global.fetch` (Meta, IA), `vi.mock` el correo, y `vi.spyOn(Date, 'now')` para el reloj; restaura en `afterEach`.
 6. Cuando agregues un test a una regla documentada, actualiza la tabla "regla → cumplimiento → test" del módulo (cita `archivo › "título"`) y, si cierra un hueco, quita el `DT-nnn` correspondiente.
-7. Recuerda las diferencias de `buildTestServer` frente al servidor real (§2): no cubre `users`, `employees`, HSTS, HTTPS ni la firma del webhook; para esas hay que ampliar el helper.
+7. Recuerda las diferencias de `buildTestServer` frente al servidor real (§2): no cubre `employees`, HSTS, HTTPS ni la firma del webhook; para esas hay que ampliar el helper.
 
 Datos ficticios siempre (`@example.com`, `+57 300 000 0000`).
 

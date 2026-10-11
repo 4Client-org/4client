@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ d566e40
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/routes/public.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/lib/businessDate.ts, apps/web/src/pages/ClientFormPage.tsx, apps/web/public/legal/politica-privacidad.html, apps/api/test/public.test.ts]
 ---
 
@@ -168,7 +168,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - ~~PREG-035~~ — Resuelta por José (2026-10-10): se quitó el requisito (RN-FRM-32). Falta cerrarla en `preguntas-abiertas.md`. Deuda: borrar la tabla `FormLinkSession` en un release posterior.
 - ~~PREG-025~~ — Resuelta por José (2026-10-10): el pedido toma el día calendario de Bogotá en que se envió el link (RN-FRM-34). `Ticket.fecha` conserva su corte de las 21:00. Falta cerrarla en `preguntas-abiertas.md`.
 - **PREG-054 — Tope de 30 mensajes automáticos casi inerte.** Cuenta mensajes `out` con `sent_by` null en 24 h, pero cuando un empleado mandó el link, la confirmación lleva su `sent_by` y no cuenta; solo suma lo automático (bienvenida, confirmaciones de links automáticos). Un link filtrado de un ticket con link enviado por personal no queda limitado por este tope (sí por 3 pedidos/día y 15/min por IP; las ediciones no tienen tope propio).
-- **DT-002 — Política única, un solo negocio.** Una URL fija, una versión `v1` y un texto que nombra a un solo negocio sirven a todas las organizaciones; el código ya anticipa pasar a política por `Organization` (parte del hardcoding de un solo cliente).
+- **DT-002 — Política única, un solo negocio.** Una URL fija, una versión (`v2` desde 2026-10-10) y un texto que nombra a un solo negocio sirven a todas las organizaciones; el código ya anticipa pasar a política por `Organization` (parte del hardcoding de un solo cliente).
 - **PREG-055 — Dos ediciones simultáneas.** La edición reemplaza los ítems sin transacción ni versión; dos pestañas (o dos dispositivos, que el diseño permite) pueden pisarse.
 - **DT-012 — Bloqueo por intentos, código muerto.** Nada llama a `registerFailedLinkAttempt` (el paso de teléfono que lo disparaba se quitó); `TICKET_BLOCKED`/`LINK_ATTEMPTS_EXCEEDED` y los contadores solo se leen. Sin test.
 - **DT-020 — Comentarios desactualizados en `public.ts`.** Corregidos el 2026-10-10: el del tope de pedidos ("7 días"), el de `/order/:orderId/delete` (`papelera`) y los del paso de dígitos/dispositivo. Pendiente: el de `/submit` dice que el límite es "por link (token)" (es por IP) y los tests aún pasan `phone_last4`, que se ignora.

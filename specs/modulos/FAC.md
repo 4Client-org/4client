@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/routes/files.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/services/storage.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/pages/FacturaPage.tsx, apps/api/prisma/schema.prisma, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
@@ -161,7 +161,7 @@ Los 400 de validación (cuerpo, tamaño, firma, nombre inválido) no llevan cód
 - **El tope de 24 h** está en `loadLiveInvoiceLink` y en el texto de error; el texto del link de formulario vive aparte (`public.ts`, FRM).
 - **Borrar datos de un cliente** (`inbox.ts › erase-data`) revoca y anonimiza `phone_last4`, pero no borra el PDF de R2 (PREG-037); si cambias el borrado, revisa esto.
 - **La carpeta `uploads/`** y el prefijo `invoices/` de R2 deben coincidir con lo que la limpieza futura espere.
-- **`registerFailedLinkAttempt`**: ver PREG-035 antes de apoyarte en los contadores.
+- **`registerFailedLinkAttempt`**: nadie lo llama (DT-012); no te apoyes en los contadores de intentos fallidos.
 
 ## 3. Pendientes
 
@@ -171,7 +171,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **PREG-081 — Subida fallida deja sin factura viva.** La fila nueva y la revocación de las anteriores se hacen antes de subir el PDF. Si R2 falla (502), el pedido queda sin ninguna factura válida y la fila nueva apunta a un archivo que no existe (404 al abrirla). Tampoco se puede reintentar el mensaje al chat si falla solo `reply` (el PDF ya está subido). ¿Se reordena (subir primero) o se acepta?
 - **PREG-082 — Recibo vivo después del cobro o de pasar a papelera.** Una factura enviada mientras el pedido estaba en preparando/listo sigue abriéndose hasta 24 h aunque el pedido se cobre, se mueva a camino o se mande a papelera, porque solo la edición del pedido revoca. ¿Debe revocar también el cobro, la papelera o el cierre?
 - **PREG-037 — El PDF sobrevive a "Borrar datos del cliente".** La factura contiene nombre, dirección y teléfono del cliente. `erase-data` revoca el link y anonimiza `phone_last4`, pero el archivo queda en R2 (o en `uploads/`) indefinidamente y nada lo borra tras las 24 h. ¿Se borran los PDF (Ley 1581) y se limpian los vencidos?
-- **PREG-035 — Candados por intentos fallidos sin uso.** Nadie llama ya a `registerFailedLinkAttempt` (comentario en `public.ts`: se dejó de pedir los dígitos), así que `LINK_ATTEMPTS_EXCEEDED` y `TICKET_BLOCKED` solo pueden activarse con contadores heredados. Y `phone_last4` ya no sirve para nada salvo metadato. ¿Se eliminan columna y chequeos, o se piensa reactivar una defensa?
+- **PREG-035 — Candados por intentos fallidos sin uso.** *(Resuelta en parte, José 2026-10-10: se quitó el requisito de `device_token` y de atar el link a un dispositivo, FRM RN-FRM-32.)* Sigue pendiente el código muerto: nadie llama a `registerFailedLinkAttempt`, así que `LINK_ATTEMPTS_EXCEEDED` y `TICKET_BLOCKED` solo pueden activarse con contadores heredados, y `phone_last4` es solo metadato (DT-012).
 - **PREG-083 — La factura se arma con la pantalla sin guardar.** RN-FAC-02: se puede enviar al cliente un PDF con ítems o precios que aún no se guardaron (y el envío no revoca porque no hay edición). ¿Se exige guardar antes de enviar?
 - **PREG-084 — Sin límite de uso por pedido ni limpieza.** Cada reenvío crea otro PDF permanente (solo el último queda vivo). Sin tarea que borre los archivos vencidos o revocados. ¿Hace falta política de retención?
 - **DT-033 — PDF de prueba versionados.** Hay 6 PDF de facturas (`Factura_003_*`, `Factura_004_*`) rastreados en git bajo `apps/api/uploads/` (commit `ec3a5e8`), aunque `.gitignore` excluye `apps/api/uploads/`. Su contenido no se revisó aquí; podrían traer datos de clientes: conviene revisarlos y sacarlos del índice (`git rm --cached`). *(datos)*

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [specs/00-horizonte.md, archivo/Requerimientos/Propuesta - 4Client - FruverSanGabriel.md, archivo/RoadMap/ROADMAP_PROYECTO_GENERAL.md, README.md, specs/00-estado-actual.md, specs/modulos/*.md]
 ---
 
@@ -39,8 +39,8 @@ La conclusión de la Propuesta, que sigue orientando el producto: el problema no
 | Rol | Papel en la operación |
 |---|---|
 | admin | El dueño: ve y controla todo, incluido el informe, el catálogo, los usuarios y los créditos. |
-| encargado | Atiende el mostrador: pedidos, cobros, chat. No borra registros. (Cierre de caja: la API se lo permite pero la interfaz solo lo ofrece desde el Informe del día, que no ve; PREG-008.) |
-| domiciliario | Repartidor con login de solo lectura y chat. (El repartidor al que se *asigna* un pedido es un `Employee` sin login.) |
+| encargado | Atiende el mostrador: pedidos, cobros, chat. No borra registros. No cierra la caja: solo el admin (y `dev`) puede; la API le responde 403 (decisión de José, 2026-10-10). |
+| domiciliario | Repartidor con login; por ahora con los mismos permisos que el encargado (decisión de José, 2026-10-10). (El repartidor al que se *asigna* un pedido es un `Employee` sin login.) |
 | dev | José, operador de la plataforma, entre organizaciones (`modulos/PLT.md`). |
 | cliente final | Escribe por WhatsApp y arma su pedido en un formulario con link temporal, sin cuenta. |
 

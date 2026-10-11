@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, specs/modulos/IA.md, specs/modulos/ORD.md, specs/modulos/CAJ.md, specs/modulos/DSH.md, specs/modulos/FAC.md, specs/modulos/CAT.md, specs/modulos/PLT.md, specs/04-operacion/runbooks.md]
 ---
 
@@ -100,7 +100,7 @@ flowchart TD
 ```
 
 - **Formulario (FRM):** sin cuenta, solo para su propio ticket; sin consentimiento responde 400; todo ítem nuevo entra en **$0** (el precio lo pone el encargado); máximo **3 pedidos del formulario por ticket y día**; puede editar o borrar su pedido mientras esté `nuevo`, `preparando` o `listo` y sin bloquear. Borrar no cambia el estado: el pedido queda señalado en rojo (RN-FRM-10, 11, 18, 20, 24, 25). Si el cliente edita, el pedido queda marcado "el cliente lo tocó" de forma permanente (RN-ORD-15).
-- **Tomar lista (IA):** admin y encargado, 1 a 50 mensajes de texto del cliente, hasta 15 extracciones por minuto por usuario. La IA **nunca** crea ni guarda un pedido ni pone precios (RN-IA-02, 04, 05, 06).
+- **Tomar lista (IA):** admin, encargado y domiciliario (mismos permisos que el encargado), 1 a 50 mensajes de texto del cliente, hasta 15 extracciones por minuto por usuario. La IA **nunca** crea ni guarda un pedido ni pone precios (RN-IA-02, 04, 05, 06).
 - **Pedido a mano (ORD):** siempre desde un ticket; solo el nombre y un ítem son obligatorios (RN-ORD-10, RN-ORD-34).
 - **Numeración:** cada pedido recibe el menor número libre del día, de tres dígitos (`001`, `002`…), contando también los de papelera (RN-ORD-01, RN-ORD-02).
 
@@ -145,7 +145,7 @@ flowchart TD
 - Métodos: `sin_asignar` (no se puede cobrar), `cash` ("Pagado en tienda"), `transfer`, `cod` ("Cobro en casa") y `credito`. El cliente final solo puede elegir `cash`, `transfer` o `cod` (RN-CAJ-01).
 - En **cobro en casa** el personal elige "Completo" o "Necesita vuelta" al crear o editar el pedido, para que el domiciliario sepa cuánta vuelta lleva (RN-CAJ-05). **Pago dividido:** las dos partes suman exacto el total (RN-CAJ-06).
 - **Un solo cobro por pedido:** el segundo da 409 (RN-CAJ-08). Después del cobro solo admin/dev editan el pedido, hasta el cierre (RN-CAJ-11).
-- **Correcciones (solo admin):** "Marcar crédito pagado" y "Cobro retroactivo" para un cerrado sin cobro que sí se cobró (RN-CAJ-09, RN-CAJ-10).
+- **Correcciones (solo admin):** "Marcar crédito pagado" (se puede también con el día cerrado; guarda cuándo se pagó), "Cobro retroactivo" para un cerrado sin cobro que sí se cobró, y "Corregir pago" de un pedido ya cobrado con el día abierto, que exige repartir el total entre efectivo y transferencia (RN-CAJ-09, 10, 26 a 28). Un pedido en papelera o eliminado por el cliente no se cobra (RN-CAJ-29).
 - Un crédito saldado después **no** se acomoda en los totales del cierre ni del informe: decisión D-19 de José (el cliente no lo ha pedido); se retoma si lo pide.
 
 ## 7. Cierre de caja
@@ -169,7 +169,7 @@ flowchart TD
 - Solo se cierra **hoy**, **una vez** por día. Si falta decisión sobre algún pendiente: 400 `MISSING_DECISIONS` con la lista (RN-CAJ-12 a 14). Las decisiones sobre chats las exige la interfaz, no la API (RN-CAJ-18).
 - **Pasar a mañana** renumera: sigue después del mayor número que ya tenga mañana (o `001`) y deja un "fantasma" atenuado en el día de origen con la etiqueta "Pospuesto" y su número viejo (RN-CAJ-16, RN-CAJ-17).
 - **Totales:** solo cuentan pedidos de la fecha pagados y cerrados que el cliente no eliminó; `cash` y `cod` van a efectivo, `transfer` a transferencia, y el pago dividido reparte cada parte a su bolsa (RN-CAJ-19).
-- **Congelamiento:** con `DailyClose` creado, crear, editar, mover y cobrar pedidos de esa fecha dan 409 `DAY_CLOSED`, admin incluido; solo se pueden agregar observaciones. Un pedido nuevo del formulario del cliente pasa a mañana (RN-CAJ-21, RN-FRM-18). Solo `dev` puede reabrir un día (RN-CAJ-24).
+- **Congelamiento:** con `DailyClose` creado, crear, editar, mover, restaurar, eliminar, cobrar y cobrar retroactivamente pedidos de esa fecha dan 409 `DAY_CLOSED`, admin incluido; solo se pueden agregar observaciones y marcar un crédito como pagado. Un pedido nuevo del formulario del cliente pasa a mañana (RN-CAJ-21, RN-FRM-18). Solo `dev` puede reabrir un día (RN-CAJ-24).
 
 ## 8. Informe del día
 

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 15f5766
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/routes/dashboard.ts, apps/api/src/lib/cierreTotals.ts, apps/api/test/cierre-totales.test.ts, apps/web/src/lib/format.ts, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/hooks/useDashboard.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/lib/csv.ts, apps/api/test/dashboard.test.ts]
 ---
 
@@ -41,7 +41,7 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/api/src/lib/cierreTotals.ts, ap
 
 - **RN-DSH-06 — Recaudado.** Siempre `recaudado` suma solo pedidos de la fecha **pagados y cerrados** con la misma regla de bolsas que el cierre: pago dividido a cada bolsa; si no, `cash` y `cod` a efectivo, `transfer` a transferencia; cualquier otro método no entra en ninguna. Total = efectivo + transferencia. La regla es **la misma función** que usan el cierre real y su vista previa (`lib/cierreTotals.ts › calcularBolsas`, documentada en `CAJ` RN-CAJ-19 y RN-CAJ-30): sobre los mismos pedidos, el informe, el modal de cierre y la foto `DailyClose` dan los mismos números (un pedido de $50.000 pagado $30.000 en efectivo + $20.000 por transferencia suma $30.000 y $20.000). **Un crédito pagado después no suma en ningún total ni en ninguna fecha: es el comportamiento previsto por ahora (D-19, decisión de José 2026-10-09)**; queda registrado solo en la pestaña Crédito (RN-DSH-11). Sigue abierto únicamente el caso de `sin_asignar` y valores heredados (PREG-001). *(plataforma, código; D-19, José)*
 - **RN-DSH-07 — Cerrados sin cobro, en rojo.** CUANDO hay pedidos `cerrado` + bloqueados + sin pagar y con método distinto de crédito, el informe DEBE listarlos bajo la bolsa que les corresponde por método (`cash`/`cod` en efectivo, `transfer` en transferencia) con cliente ("Sin nombre" si no hay) y total, y un texto "cerrado(s) sin cobro - no incluido arriba". *Por qué:* un desajuste real reportado entre lo que decía el informe y lo cobrado a mano (commit b7d3e5b, 2026-08-23). Un crédito sin pagar no aparece: es normal. Un cerrado sin cobro con método `sin_asignar` no sale en ninguna lista (PREG-001). *(plataforma, código; inferido por el commit)*
-- **RN-DSH-08 — El informe sigue el estado actual, no la foto del cierre.** Siempre los números salen de los pedidos en vivo, incluso en un día ya cerrado; la fila `DailyClose` solo se lee para saber si el día está cerrado, quién lo cerró y las decisiones del CSV. Si después del cierre cambia algo (cobro retroactivo, crédito saldado, restaurar), el informe cambia y la foto no (PREG-004). *(plataforma, código)*
+- **RN-DSH-08 — El informe sigue el estado actual, no la foto del cierre.** Siempre los números salen de los pedidos en vivo, incluso en un día ya cerrado; la fila `DailyClose` solo se lee para saber si el día está cerrado, quién lo cerró y las decisiones del CSV. Con el día cerrado ya no se cobra, edita, mueve ni restaura nada (`DAY_CLOSED`, RN-CAJ-21), así que lo único que puede cambiar después del cierre es un crédito saldado (que no suma en ningún total, D-19, y aparece en la pestaña Crédito) y las observaciones; si `dev` reabre el día, el informe vuelve a seguir los cambios y la foto se borra (PREG-004 respondida). *(plataforma, código)*
 
 *Pestañas*
 
@@ -68,7 +68,7 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/api/src/lib/cierreTotals.ts, ap
 6. *Crédito sin pagar no es alarma.* Dado un crédito cerrado sin pagar, cuando se pide el informe, entonces no sale en ninguna lista `sinCobro`. RN-DSH-07. `"an unpaid crédito order never shows up in either sinCobro list - that is normal/expected, not a mistake to flag"`
 7. *Pedido abierto.* Dado un pedido aún abierto, entonces nunca sale en `sinCobro`. RN-DSH-07. `"an order still open (not locked/cerrado) never shows up in sinCobro lists - only a genuinely closed-without-payment order should"`
 8. *Crédito saldado (D-19).* Dado un crédito marcado pagado después del cierre, cuando se pide el informe del día del pedido, entonces aparece en la pestaña Crédito como pagado con su `fecha` y su `credit_paid_at`, pero no suma en efectivo ni transferencia. RN-DSH-06, 11. `cierre-totales.test.ts › "crédito: guarda cuándo se pagó (credit_paid_at) sin tocar paid_at, se puede pagar con el día cerrado y no suma en ningún total (D-19)"` (crédito de otro día, *sin test*)
-9. *Día cerrado sigue en vivo.* Dado un día con `DailyClose`, cuando después se hace un cobro retroactivo, entonces el informe refleja el cambio y la foto del cierre no. RN-DSH-08. (sin test; PREG-004)
+9. *Día cerrado sigue en vivo.* Dado un día con `DailyClose`, cuando después se marca un crédito pagado (lo único que se puede cambiar con el día cerrado), entonces el informe lo muestra como pagado en la pestaña Crédito, sin sumarlo a los totales, y la foto del cierre no cambia; un cobro retroactivo da 409 `DAY_CLOSED`. RN-DSH-08. `cierre-totales.test.ts › "crédito: guarda cuándo se pagó (credit_paid_at) sin tocar paid_at, se puede pagar con el día cerrado y no suma en ningún total (D-19)"`; `cierre-congela-y-cobrados.test.ts › "cobrar un pedido de un día cerrado -> 409 DAY_CLOSED, no queda pagado"`
 10. *Tope de cambios.* Dado un día con más de 300 entradas de historial, cuando se pide el informe, entonces la pestaña Cambios trae solo las 300 más recientes. RN-DSH-12. (sin test)
 
 **Textos que ve el cliente final.** Ninguno. El informe es solo para el personal.
@@ -117,7 +117,7 @@ fuentes: [apps/api/src/routes/dashboard.ts, apps/api/src/lib/cierreTotals.ts, ap
 
 ## 3. Pendientes
 
-IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-conocidos.md`. Relacionados de `CAJ`: PREG-001 (pagos fuera de bolsas), PREG-003 (CSV sin pasados a mañana), PREG-004 (día cerrado cambia). PREG-008 (¿encargado cierra?) y DT-004 (regla triplicada) quedaron resueltas el 2026-10-10 (RN-CAJ-31, `lib/cierreTotals.ts`).
+IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-conocidos.md`. Relacionados de `CAJ`: PREG-001 (pagos fuera de bolsas), PREG-003 (CSV sin pasados a mañana), PREG-004 (día cerrado cambia; respondida). PREG-008 (¿encargado cierra?) y DT-004 (regla triplicada) quedaron resueltas el 2026-10-10 (RN-CAJ-31, `lib/cierreTotals.ts`).
 
 - **PREG-074 — "Cerrados/Cobrados" cuenta pedidos que no se cobraron.** `entregados` es `status = cerrado`: incluye crédito sin pagar y cerrado sin cobro. ¿Se separan "cobrados" de "cerrados"?
 - **PREG-075 — "Chats con pedidos completados" incluye cerrados sin pagar.** La regla es `paid || cerrado`; un crédito pendiente o un cerrado sin cobro cuentan como completos aunque no haya entrado la plata. ¿Es la intención o debe exigir pago (salvo crédito)?

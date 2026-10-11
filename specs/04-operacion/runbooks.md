@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [Dockerfile, start.sh, .github/workflows/backup-prod-db.yml, apps/api/src/config.ts, apps/api/src/lib/crypto.ts, apps/api/src/routes/config.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/auth.ts, apps/api/src/update-org-wpp.ts, apps/api/src/reencrypt-wpp-tokens.ts, apps/api/prisma/schema.prisma]
 ---
 
@@ -268,6 +268,8 @@ Los valores viven en Coolify (por app), en GitHub (secretos de Actions) y en Met
 **Límite importante:** el cierre normal (`POST /api/v1/cierre`) solo acepta **la fecha de hoy** (`NOT_TODAY`). Reabrir un día pasado lo deja abierto **sin forma de volver a cerrarlo** desde la app. Usar esta acción solo el mismo día (PREG-005).
 
 **Pasos:** confirmar con el admin del negocio qué día y por qué; ejecutar la acción; avisar que deben volver a hacer el cierre al final del día.
+
+**Después de reabrir:** el día vuelve a aceptar altas, ediciones, movimientos y cobros (`DAY_CLOSED` deja de responder); es la única forma de usar el cobro retroactivo sobre un "cerrado sin cobro" de ese día (RN-CAJ-10, RN-CAJ-24).
 
 **Verificar:** el tablero de ese día permite crear y editar pedidos; `SELECT * FROM daily_closes WHERE fecha = '<fecha>'` no devuelve filas; existe el registro en `audit_logs`; al final del día el nuevo cierre queda guardado.
 
