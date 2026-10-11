@@ -278,6 +278,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     setSplitCash('');
     setSplitTransfer('');
   }, [showCobro]);
+  // "Corregir pago" de un pedido ya cobrado (solo admin/dev, día abierto;
+  // orders.ts › PATCH /:id con payment_breakdown, RN-CAJ-26 a RN-CAJ-28). Se abre
+  // a mano desde el recuadro "Pedido cerrado y cobrado" o solo, al guardar un
+  // pedido cobrado cuyo total cambió (la API exige el desglose nuevo). Guarda los
+  // ítems pendientes y, al terminar, lo que tenía que pasar después (cerrar).
+  const [payFix, setPayFix] = useState<null | { reason: 'manual' | 'total'; items: any[]; onDone?: () => void }>(null);
+  const [payFixMethod, setPayFixMethod] = useState('cash');
+  const [payFixCash, setPayFixCash] = useState('');
+  const [payFixTransfer, setPayFixTransfer] = useState('');
   const [confirmDlg, setConfirmDlg] = useState<{ msg: string; onOk: () => void; danger?: boolean; onSave?: () => void } | null>(null);
   // Mismo patrón que TicketModal.tsx - en celular la fila de botones
   // (Formulario/Bloquear Link/Catálogo/Tomar lista) pasa a un menú
@@ -482,8 +491,11 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
     // "vuelta" sends whatever staff typed, not-yet-decided (or switched away from
     // cod) explicitly sends null to clear any stale value from an earlier choice -
     // see CodPaymentField/orders.ts's validateCodAmount for the matching validation.
-    mutationFn: (finalItems: any[]) => {
+    mutationFn: ({ items: finalItems, payment }: { items: any[]; payment?: { method: string; cash: number; transfer: number } }) => {
       const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+      // En un pedido ya cobrado el monto recibido, la vuelta y "completo/vuelta"
+      // son datos del cobro: los recalcula la API (lib/paymentEdit.ts), no se envían.
+      const isLocked = !!order?.locked;
       return api.patch(`/orders/${orderId}`, {
         customer_name: nombre,
         // Only ever actually applied server-side when this order has no ticket, or
@@ -491,12 +503,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
         // send, the backend silently drops it otherwise.
         customer_phone: telefono,
         address: direccion,
-        payment_method: pago,
+        payment_method: payment?.method ?? pago,
         employee_id: empleadoId || null,
-        amount_received: pago === 'cod'
-          ? (codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? (parseFloat(codCash) || 0) : null)
-          : null,
-        cod_choice: pago === 'cod' ? codChoice : null,
+        ...(isLocked ? {} : {
+          amount_received: pago === 'cod'
+            ? (codChoice === 'completo' ? finalTotal : codChoice === 'vuelta' ? (parseFloat(codCash) || 0) : null)
+            : null,
+          cod_choice: pago === 'cod' ? codChoice : null,
+        }),
+        ...(payment ? { payment_breakdown: { cash: payment.cash, transfer: payment.transfer } } : {}),
         items: finalItems.map((i, idx) => ({
           product_name: i.product_name,
           quantity_label: i.quantity_label,
@@ -521,6 +536,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       // merges items into an existing order) showed the pre-save item list
       // without this.
       qc.invalidateQueries({ queryKey: ['ticket'] });
+      // El informe del día calcula en vivo: un pago corregido cambia sus bolsas.
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
       touchedFieldsRef.current.clear();
       setIsDirty(false);
       setCatalogDirty(false);
@@ -533,9 +550,43 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // Commits whatever row is still mid-edit in the Factbox table (typed but never
   // confirmed with Enter/✓) before saving - see ProductSearchHandle's own comment for
   // why saveMut can't just read `items` state directly for this.
-  function triggerSave(options?: Parameters<typeof saveMut.mutate>[1]) {
+  function triggerSave(options?: { onSuccess?: () => void }) {
     const finalItems = productSearchRef.current?.commitPendingEdit() ?? items;
-    saveMut.mutate(finalItems, options);
+    // Pedido ya cobrado cuyo total cambió: la API exige el desglose de pago nuevo
+    // (PAYMENT_BREAKDOWN_REQUIRED), así que se pide antes de enviar. Un crédito sin
+    // pago dividido no lo necesita (su monto acordado sigue al total).
+    if (order?.locked) {
+      const finalTotal = finalItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+      const savedTotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price ?? 0), 0);
+      const creditoSinSplit = order.payment_method === 'credito' && order.split_cash == null;
+      if (finalTotal !== savedTotal && !creditoSinSplit) {
+        openPayFix('total', finalItems, options?.onSuccess);
+        return;
+      }
+    }
+    saveMut.mutate({ items: finalItems }, options);
+  }
+
+  // Bolsa "natural" del método (RN-CAJ-19): cash/cod -> efectivo, transfer -> transferencia.
+  function prefillPayFix(method: string, total: number) {
+    const toTransfer = method === 'transfer';
+    setPayFixCash(String(toTransfer ? 0 : total));
+    setPayFixTransfer(String(toTransfer ? total : 0));
+  }
+
+  function openPayFix(reason: 'manual' | 'total', fixItems: any[], onDone?: () => void) {
+    if (!order) return;
+    const fixTotal = fixItems.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0);
+    const method = ['cash', 'transfer', 'cod', 'credito'].includes(order.payment_method) ? order.payment_method : 'cash';
+    setPayFixMethod(method);
+    if (reason === 'manual' && order.split_cash != null && order.split_transfer != null) {
+      setPayFixCash(String(Number(order.split_cash)));
+      setPayFixTransfer(String(Number(order.split_transfer)));
+    } else {
+      prefillPayFix(method, fixTotal);
+    }
+    setConfirmDlg(null);
+    setPayFix({ reason, items: fixItems, onDone });
   }
 
   // These two routes (not PATCH /:id) stay open even on a locked/closed order or a
@@ -1126,6 +1177,15 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // two pieces together must land exactly on the total.
   const splitValid = !splitPayment || (splitCashNum + splitTransferNum === total);
   const cobroValido = cierreMissing.length === 0 && cobroPass.trim().length > 0 && splitValid;
+  // "Corregir pago": el desglose debe sumar exactamente el total que se va a guardar.
+  const savedTotal = (order.items ?? []).reduce((s: number, i: any) => s + Number(i.price ?? 0), 0);
+  const payFixTotal = payFix ? payFix.items.reduce((s: number, i: any) => s + (parseFloat(i.price) || 0), 0) : 0;
+  const payFixCashNum = parseFloat(payFixCash) || 0;
+  const payFixTransferNum = parseFloat(payFixTransfer) || 0;
+  const payFixValid = payFixCashNum >= 0 && payFixTransferNum >= 0 && payFixCashNum + payFixTransferNum === payFixTotal;
+  // Corregir el pago: solo admin/dev, día abierto, pedido cobrado que no es crédito
+  // (el crédito se salda con "Marcar crédito pagado").
+  const canFixPayment = canEditLocked && locked && !diaCerrado && order.payment_method !== 'credito';
   const hasChatPanel = !!order.ticket_id;
 
   return (
@@ -1472,7 +1532,16 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   {canManage && (
                     <div><span style={{ color: 'var(--gt)' }}>Vuelto: </span><strong>{fmtCOP(Number(order.change_amount ?? 0))}</strong></div>
                   )}
+                  {order.split_cash != null && order.split_transfer != null && (
+                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: 'var(--gt)' }}>Pago dividido: </span><strong>efectivo {fmtCOP(Number(order.split_cash))} · transferencia {fmtCOP(Number(order.split_transfer))}</strong></div>
+                  )}
                 </div>
+                {canFixPayment && (
+                  <button className="bsec" onClick={() => openPayFix('manual', productSearchRef.current?.commitPendingEdit() ?? items)}
+                    style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <Banknote size={13} /> Corregir pago
+                  </button>
+                )}
               </div>
             )}
 
@@ -1492,7 +1561,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                 <span style={{ color: 'var(--r)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <AlertTriangle size={15} /> El cliente eliminó este pedido desde el formulario.
                 </span>
-                {canManage && (
+                {/* Con el día cerrado no se restaura (RN-CAJ-21: la API responde DAY_CLOSED). */}
+                {canManage && !diaCerrado && (
                   <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
                     style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                     <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
@@ -1511,7 +1581,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   <div style={{ fontWeight: 800, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <AlertTriangle size={15} /> Enviado a papelera
                   </div>
-                  {canManage && (
+                  {canManage && !diaCerrado && (
                     <button className="bverde" onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}
                       style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <CheckCircle size={13} /> {restoreMut.isPending ? 'Restaurando...' : 'Restaurar pedido'}
@@ -1613,7 +1683,10 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   Método de pago
                   {pagoFromClient && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#DC2626' }}>· cambió el cliente</span>}
                 </label>
-                <select ref={pagoRef} className="fi2" disabled={readOnly} value={pago}
+                {/* En un pedido ya cobrado el método se cambia con "Corregir pago"
+                    (pide cuánto fue por cada método), no desde aquí. */}
+                <select ref={pagoRef} className="fi2" disabled={readOnly || locked} value={pago}
+                  title={locked ? 'Pedido ya cobrado - el administrador cambia el pago con "Corregir pago"' : undefined}
                   onChange={(e) => {
                     setPago(e.target.value);
                     // Same reset as NuevoPedidoModal - switching away from (or back
@@ -1642,7 +1715,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
               </div>
             </div>
             {pago === 'cod' && (
-              <CodPaymentField total={total} choice={codChoice} disabled={readOnly}
+              <CodPaymentField total={total} choice={codChoice} disabled={readOnly || locked}
                 onChoiceChange={(c) => { setCodChoice(c); touchField('pago'); }}
                 cash={codCash} onCashChange={(v) => { setCodCash(v); touchField('pago'); }} />
             )}
@@ -1780,7 +1853,9 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                   plano cualquier pedido ya bloqueado (locked), sin importar el
                   motivo. Nunca aparece para crédito (tiene su propio botón
                   arriba) ni para un pedido que sí se cobró normalmente. */}
-              {canEditLocked && order.locked && !order.paid && order.status === 'cerrado' && order.payment_method !== 'credito' && (
+              {/* Con el día cerrado la API responde DAY_CLOSED (RN-CAJ-21); como "cerrar sin
+                  cobro" solo pasa en el cierre, solo aparece si dev reabrió el día. */}
+              {canEditLocked && !diaCerrado && order.locked && !order.paid && order.status === 'cerrado' && order.payment_method !== 'credito' && (
                 <button className="bverde"
                   onClick={() => setConfirmDlg({
                     msg: 'Este pedido quedó cerrado "sin cobro" en el cierre de caja. ¿Confirmas que sí se cobró y quieres marcarlo como pagado?',
@@ -1853,7 +1928,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
       {/* CLIENT-DELETED DECISION DIALOG - pops automatically on open, same as the
           cobro dialog does with openCobro, since this needs a staff decision
           before anything else about the order matters. */}
-      {order.client_deleted && !clientDeletedDismissed && (
+      {order.client_deleted && !clientDeletedDismissed && !diaCerrado && (
         <div className="moverlay on" style={{ zIndex: 700 }}>
           <div className="cobrobox">
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
@@ -1921,6 +1996,71 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
           onConfirm={() => { confirmDlg.onOk(); setConfirmDlg(null); }}
           onCancel={() => setConfirmDlg(null)}
         />
+      )}
+
+      {/* CORREGIR PAGO - pedido ya cobrado, solo admin/dev con el día abierto */}
+      {payFix && (
+        <div className="moverlay on" style={{ zIndex: 700 }} onClick={(e) => e.target === e.currentTarget && !saveMut.isPending && setPayFix(null)}>
+          <div className="cobrobox">
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              <Banknote size={32} color="var(--v)" strokeWidth={1.5} />
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, textAlign: 'center', marginBottom: 8 }}>Corregir pago</div>
+            <div style={{ textAlign: 'center', fontSize: 14, color: 'var(--gt)', marginBottom: 16 }}>
+              {order.customer_name} - Total: <strong>{fmtCOP(payFixTotal)}</strong>
+            </div>
+            {payFix.reason === 'total' && (
+              <div style={{ background: 'var(--ac)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 16, fontSize: 13, color: 'var(--a)', fontWeight: 600, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>El pedido ya estaba cobrado y el total cambió de {fmtCOP(savedTotal)} a {fmtCOP(payFixTotal)}. Indica cuánto fue en efectivo y cuánto en transferencia para guardar.</span>
+              </div>
+            )}
+            <div className="fg2">
+              <label className="fl2">Método de pago</label>
+              <select className="fi2" value={payFixMethod} disabled={payFixMethod === 'credito'}
+                onChange={(e) => { setPayFixMethod(e.target.value); prefillPayFix(e.target.value, payFixTotal); }}>
+                <option value="transfer">Transferencia</option>
+                <option value="cash">Pagado en tienda</option>
+                <option value="cod">Cobro en casa</option>
+                {payFixMethod === 'credito' && <option value="credito">Crédito</option>}
+              </select>
+            </div>
+            <div style={{ background: 'var(--bg)', border: '1.5px solid var(--brd)', borderRadius: 'var(--rad)', padding: '10px 12px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label className="fl2">Efectivo</label>
+                  <input className="fi2 no-spin" type="number" min="0" placeholder="$0"
+                    value={payFixCash} onChange={(e) => setPayFixCash(e.target.value)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label className="fl2">Transferencia</label>
+                  <input className="fi2 no-spin" type="number" min="0" placeholder="$0"
+                    value={payFixTransfer} onChange={(e) => setPayFixTransfer(e.target.value)} />
+                </div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, marginTop: 8, color: payFixValid ? 'var(--v)' : 'var(--r)' }}>
+                {payFixValid
+                  ? `✓ Suman el total (${fmtCOP(payFixTotal)})`
+                  : `Deben sumar exactamente ${fmtCOP(payFixTotal)} - van ${fmtCOP(payFixCashNum + payFixTransferNum)}`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 9, marginTop: 4 }}>
+              <button className="bsec" onClick={() => setPayFix(null)} disabled={saveMut.isPending}>Cancelar</button>
+              <button className="bpri"
+                onClick={() => {
+                  const done = payFix.onDone;
+                  saveMut.mutate(
+                    { items: payFix.items, payment: { method: payFixMethod, cash: payFixCashNum, transfer: payFixTransferNum } },
+                    { onSuccess: () => { setPayFix(null); done?.(); } },
+                  );
+                }}
+                disabled={saveMut.isPending || !payFixValid}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: payFixValid ? 1 : 0.5 }}>
+                {saveMut.isPending ? 'Guardando...' : <><CheckCircle size={15} /> Guardar pago</>}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* COBRO DIALOG */}
