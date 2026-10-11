@@ -38,7 +38,7 @@ export default function MainPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin' || user?.role === 'dev';
-  const canManage = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
+  const canManage = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'domiciliario' || user?.role === 'dev';
   const qc = useQueryClient();
 
   const [fecha, setFecha] = useState(todayStr());
@@ -286,7 +286,7 @@ export default function MainPage() {
               <div>
                 <div className="un">{user?.name}</div>
                 <div className="ur2">
-                  {user?.role === 'dev' ? 'Dev' : isAdmin ? 'Administrador' : canManage ? 'Encargado' : 'Domiciliario'}
+                  {user?.role === 'dev' ? 'Dev' : isAdmin ? 'Administrador' : user?.role === 'domiciliario' ? 'Domiciliario' : 'Encargado'}
                 </div>
               </div>
             </div>

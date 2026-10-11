@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ 60a06e4
 fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/config/ConfigTab.tsx, specs/modulos/*.md]
 ---
 
@@ -12,7 +12,7 @@ fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/web/sr
 |---|---|---|---|
 | **admin** | Dueño del negocio | Login (correo + contraseña) | ACC |
 | **encargado** | Atiende el mostrador, maneja pedidos y cobros | Login | ACC |
-| **domiciliario** | Repartidor con acceso de solo lectura y chat | Login | ACC |
+| **domiciliario** | Repartidor; por ahora con los mismos permisos que el encargado (decisión de José, 2026-10-10) | Login | ACC |
 | **dev** | Operador de la plataforma (hoy José) | Login, con 2FA por correo si `REQUIRE_2FA` (D-10) | ACC, PLT |
 | **cliente final** | Compra por WhatsApp y arma su pedido en el formulario | Link temporal (sin cuenta) | FRM |
 | **Meta** | Envía los mensajes entrantes al webhook | Firma HMAC (sin usuario) | WPP |
@@ -24,6 +24,7 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 - **Herencia de `dev`.** `dev` **pasa todas las verificaciones de rol** (`requireRole`). Donde la tabla dice "admin", también aplica a `dev`. Un admin nunca ve ni edita cuentas `dev` (la API responde 404 como si no existieran).
 - **Solo sesiones de personal.** `authenticate` rechaza cualquier token sin `userId` y `role`, para que un token de link de formulario no sirva como sesión de personal.
 - **Aislamiento por negocio.** Toda ruta filtra por el `org_id` del token (principio 2); la única excepción por diseño es `/dev/*`.
+- **Domiciliario = encargado, por ahora.** `requireRole` deja pasar al `domiciliario` en toda ruta que permite `encargado` (`middleware/auth.ts › requireRole`), y la web le muestra los mismos botones (`canManage`, `canTomarLista`). Lo que es solo de admin o dev sigue cerrado para él. Si más adelante se separan, se quita esa línea y se ajusta la web (PREG-012 resuelta, roadmap 38).
 - **Gana la API.** La matriz es lo que la **API permite**. Cuando la interfaz muestra u oculta algo distinto, está anotado abajo y en el módulo dueño.
 
 ## Matriz rol × capacidad (lo que la API permite)
@@ -36,10 +37,10 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 | Generar / revocar el link de formulario de un ticket | ✅ | ✅ | ✅ | ✅ | INB |
 | Subir factura (PDF) y enviarla | ✅ | ✅ | ✅ | ✅ | FAC |
 | Leer productos, empleados, plantillas de mensajes | ✅ | ✅ | ✅ | ✅ | CAT, ACC, WPP |
-| Crear/editar pedidos, mover estado, papelera, restaurar | ✅ | ✅ | ❌ | ✅ | ORD |
-| Cobrar un pedido (pide contraseña del usuario) | ✅ | ✅ | ❌ | ✅ | CAJ |
-| Observaciones en pedidos | ✅ | ✅ | ❌ | ✅ | ORD |
-| Tomar lista (IA) | ✅ | ✅ | ❌ | ✅ | IA |
+| Crear/editar pedidos, mover estado, papelera, restaurar | ✅ | ✅ | ✅ | ✅ | ORD |
+| Cobrar un pedido (pide contraseña del usuario) | ✅ | ✅ | ✅ | ✅ | CAJ |
+| Observaciones en pedidos | ✅ | ✅ | ✅ | ✅ | ORD |
+| Tomar lista (IA) | ✅ | ✅ | ✅ | ✅ | IA |
 | Cierre de caja | ✅ | ✅ | ❌ | ✅ | CAJ |
 | Editar un pedido ya bloqueado (cerrado) | ✅ | ❌ | ❌ | ✅ | ORD, CAJ |
 | Marcar crédito pagado, cobro retroactivo | ✅ | ❌ | ❌ | ✅ | CAJ |
@@ -67,7 +68,6 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 
 | Caso | Interfaz | API | Dónde |
 |---|---|---|---|
-| Domiciliario en pedidos | Ve botones (Guardar, Mover) | 403 | ORD, PREG-012 |
 | Encargado y cierre de caja | No tiene el botón (vive en el Informe, que no ve) | Lo permite | CAJ, PREG-008 |
 | Encargado/domiciliario y "Chats WPP" | No ven la pestaña; sí abren el chat desde el ticket | 403 en `GET /inbox` | INB |
 | Renombrar ticket | Botón apagado (`RENAME_TICKET_UI_ENABLED`) | Admin/dev | INB, PREG-091 |

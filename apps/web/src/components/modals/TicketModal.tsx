@@ -50,7 +50,7 @@ export default function TicketModal({ ticketId, fecha, onClose, onCreateFromTick
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
-  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
+  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'domiciliario' || user?.role === 'dev';
   const [reply, setReply] = useState('');
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [showEraseConfirm, setShowEraseConfirm] = useState(false);

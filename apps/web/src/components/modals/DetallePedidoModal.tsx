@@ -100,7 +100,7 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
   // the app (can cobro, move status, etc. - see requireRole('admin', 'encargado') on
   // the backend) except this modal, where a stricter admin-only isAdmin left them
   // without the papelera button and other actions admin has on the exact same order.
-  const canManage = isAdmin || user?.role === 'encargado' || user?.role === 'dev';
+  const canManage = isAdmin || user?.role === 'encargado' || user?.role === 'domiciliario' || user?.role === 'dev';
   const qc = useQueryClient();
   const { data: products = [] } = useProducts();
   const { data: employees = [] } = useEmployees();

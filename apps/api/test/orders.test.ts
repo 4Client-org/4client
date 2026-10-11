@@ -128,12 +128,24 @@ describe('orders routes', () => {
     expect(res.json().data.num).not.toBe('002');
   });
 
-  it('forbids creating an order as domiciliario -> 403', async () => {
+  // Antes: domiciliario -> 403. Decisión de José 2026-10-10 (PREG-012): por ahora el
+  // domiciliario puede lo mismo que el encargado.
+  it('allows creating an order as domiciliario (same permissions as encargado) -> 201', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/orders',
       headers: authHeader(domiciliarioToken),
       payload: sampleOrderPayload({ fecha: '2026-01-11' }),
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('domiciliario still cannot do admin-only actions (create product) -> 403', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/products',
+      headers: authHeader(domiciliarioToken),
+      payload: { name: 'x', price: 1000, unit: 'kg' },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().code).toBe('FORBIDDEN');

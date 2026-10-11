@@ -211,7 +211,7 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
     expect(res.json().code).toBe('AI_EXTRACTION_FAILED');
   });
 
-  it('role gate: admin and encargado allowed, domiciliario forbidden', async () => {
+  it('role gate: admin, encargado and domiciliario allowed (domiciliario = encargado, 2026-10-10)', async () => {
     (config as any).GEMINI_API_KEY = 'test-key';
     mockGeminiSuccess([{ product_name: 'tomate', quantity_label: '' }]);
 
@@ -225,6 +225,6 @@ describe('POST /inbox/:ticketId/parse-messages ("Tomar lista")', () => {
       method: 'POST', url: `/api/v1/inbox/${ticketId}/parse-messages`,
       headers: authHeader(domiciliarioToken), payload: { messageIds: [inMsgId] },
     });
-    expect(domiciliario.statusCode).toBe(403);
+    expect(domiciliario.statusCode).toBe(200);
   });
 });
