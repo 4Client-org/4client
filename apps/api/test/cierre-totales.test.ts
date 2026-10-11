@@ -1,5 +1,5 @@
-// Cierre, vista previa e informe cuadran (RN-CAJ-19, RN-CAJ-26, RN-DSH-06), solo el
-// admin cierra (RN-CAJ-27, PREG-008) y el crédito guarda cuándo se pagó (RN-CAJ-28).
+// Cierre, vista previa e informe cuadran (RN-CAJ-19, RN-CAJ-30, RN-DSH-06), solo el
+// admin cierra (RN-CAJ-31, PREG-008) y el crédito guarda cuándo se pagó (RN-CAJ-32).
 // Decisiones de José del 2026-10-10. Contra Postgres real, como exige el principio 11.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
