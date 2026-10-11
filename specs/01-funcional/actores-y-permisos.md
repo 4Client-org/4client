@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ 17dcc31
 fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/config/ConfigTab.tsx, specs/modulos/*.md]
 ---
 
@@ -24,6 +24,7 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 - **Herencia de `dev`.** `dev` **pasa todas las verificaciones de rol** (`requireRole`). Donde la tabla dice "admin", también aplica a `dev`. Un admin nunca ve ni edita cuentas `dev` (la API responde 404 como si no existieran).
 - **Solo sesiones de personal.** `authenticate` rechaza cualquier token sin `userId` y `role`, para que un token de link de formulario no sirva como sesión de personal.
 - **Aislamiento por negocio.** Toda ruta filtra por el `org_id` del token (principio 2); la única excepción por diseño es `/dev/*`.
+- **Día cerrado congela todo.** Con la caja de un día cerrada, ningún rol (tampoco admin ni dev) crea, edita, mueve, restaura, cobra ni cobra retroactivamente pedidos de ese día: 409 `DAY_CLOSED`. Solo siguen las observaciones y "marcar crédito pagado" (RN-CAJ-21). La matriz de abajo vale para un día abierto.
 - **Gana la API.** La matriz es lo que la **API permite**. Cuando la interfaz muestra u oculta algo distinto, está anotado abajo y en el módulo dueño.
 
 ## Matriz rol × capacidad (lo que la API permite)
@@ -42,6 +43,7 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 | Tomar lista (IA) | ✅ | ✅ | ❌ | ✅ | IA |
 | Cierre de caja | ✅ | ✅ | ❌ | ✅ | CAJ |
 | Editar un pedido ya bloqueado (cerrado) | ✅ | ❌ | ❌ | ✅ | ORD, CAJ |
+| Cambiar el método o el desglose de pago de un pedido ya cobrado (`403 PAYMENT_CHANGE_ADMIN_ONLY` al encargado) | ✅ | ❌ | ❌ | ✅ | CAJ (RN-CAJ-26) |
 | Marcar crédito pagado, cobro retroactivo | ✅ | ❌ | ❌ | ✅ | CAJ |
 | Chats WPP (bandeja completa y búsqueda) | ✅ | ❌ | ❌ | ✅ | INB (D-09) |
 | Informe del día (incluye descargar CSV) | ✅ | ❌ | ❌ | ✅ | DSH |
@@ -73,7 +75,8 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 | Renombrar ticket | Botón apagado (`RENAME_TICKET_UI_ENABLED`) | Admin/dev | INB, PREG-091 |
 | Crear admin | El formulario solo ofrece encargado y domiciliario | Acepta `admin` | ACC |
 | WhatsApp en DevTools | Solo dev | `/config/*` abierto a admin | PLT, WPP |
+| Restaurar desde la pestaña Papelera del informe con el día cerrado | Muestra "Restaurar" | 409 `DAY_CLOSED` | DSH, CAJ (RN-CAJ-21) |
 
 ## Cliente final
 
-Sin cuenta. Entra con un link de formulario de 40 hexadecimales, válido 24 horas desde que se generó, que solo sirve para su propio ticket; puede crear (máximo 3 por día), editar o borrar sus pedidos del formulario mientras estén abiertos. También abre, sin sesión, el link de factura de 24 h. Detalle en `modulos/FRM.md` y `modulos/FAC.md`.
+Sin cuenta. Entra con un link de formulario de 40 hexadecimales, válido 24 horas desde que se generó, que solo sirve para su propio ticket; puede crear (máximo 3 por día), editar o borrar sus pedidos del formulario mientras estén abiertos y su día no tenga la caja cerrada (RN-CAJ-21). También abre, sin sesión, el link de factura de 24 h. Detalle en `modulos/FRM.md` y `modulos/FAC.md`.

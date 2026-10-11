@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ 17dcc31
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
@@ -95,8 +95,8 @@ Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden
 | GET | `/api/v1/public/form-info` | public | — | Datos del cliente y sus pedidos activos de hoy. |
 | GET | `/api/v1/public/products` | public | — | Catálogo sin precios. |
 | GET | `/api/v1/public/last-order` | public | — | Último pedido cerrado, para "repetir". |
-| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido o lo fusiona con el activo editable; exige consentimiento. |
-| POST | `/api/v1/public/order/:orderId/delete` | public | 15/min por IP | El cliente elimina su pedido: queda `client_deleted`, sin cambiar `status`. |
+| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido o lo fusiona con el activo editable; exige consentimiento. La fusión con un pedido de un día cerrado responde `409 DAY_CLOSED`; un pedido nuevo en día cerrado pasa a mañana. |
+| POST | `/api/v1/public/order/:orderId/delete` | public | 15/min por IP | El cliente elimina su pedido: queda `client_deleted`, sin cambiar `status` (`409 DAY_CLOSED` si su día ya cerró caja). |
 
 ### ORD — Pedidos
 
@@ -105,20 +105,22 @@ Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden
 | GET | `/api/v1/orders` | auth | — | Pedidos de un día, incluidos los pospuestos desde ese día. |
 | POST | `/api/v1/orders` | gestión | — | Crea un pedido (rechaza un día cerrado). |
 | GET | `/api/v1/orders/:id` | auth | — | Pedido con ítems, historial y observaciones. |
-| PATCH | `/api/v1/orders/:id` | gestión | — | Edita datos e ítems (reemplaza todas las líneas); un pedido bloqueado solo lo edita admin. |
+| PATCH | `/api/v1/orders/:id` | gestión | — | Edita datos e ítems (reemplaza todas las líneas); un pedido bloqueado solo lo edita admin. En un pedido ya cobrado acepta `payment_breakdown: { cash, transfer }` (solo admin), obligatorio si cambian el método o el total (RN-CAJ-26 a RN-CAJ-28). |
 | POST | `/api/v1/orders/:id/observations` | gestión | — | Agrega una observación (también con día cerrado). |
 | PATCH | `/api/v1/orders/:id/observations/:obsId` | gestión | — | Edita una observación propia (`403 NOT_AUTHOR` si no). |
 | DELETE | `/api/v1/orders/:id/observations/:obsId` | gestión | — | Borra una observación propia. |
 | PATCH | `/api/v1/orders/:id/status` | gestión | — | Mueve el estado en el tablero o lo manda a papelera con motivo. |
-| PATCH | `/api/v1/orders/:id/restore` | gestión | — | Restaura desde papelera o desde "eliminado por el cliente". |
+| PATCH | `/api/v1/orders/:id/restore` | gestión | — | Restaura desde papelera o desde "eliminado por el cliente" (`409 DAY_CLOSED` con el día cerrado). |
+
+Todas las rutas de esta tabla y de la de CAJ que modifican un pedido responden `409 DAY_CLOSED` si su día tiene caja cerrada, salvo las observaciones y `credito-pagado` (RN-CAJ-21, `lib/dayClose.ts`).
 
 ### CAJ — Cobro, crédito y cierre
 
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
-| POST | `/api/v1/orders/:id/cobro` | gestión | — | Cobra con la contraseña del usuario; cierra y bloquea el pedido (`409 ORDER_LOCKED` si ya estaba). |
-| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito. |
-| PATCH | `/api/v1/orders/:id/cobro-retroactivo` | admin | — | Marca pagado un pedido cerrado sin cobro por error. |
+| POST | `/api/v1/orders/:id/cobro` | gestión | — | Cobra con la contraseña del usuario; cierra y bloquea el pedido (`409 ORDER_LOCKED` si ya estaba; `409 ORDER_IN_PAPELERA` / `ORDER_CLIENT_DELETED` si está eliminado). |
+| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito (también con el día cerrado). |
+| PATCH | `/api/v1/orders/:id/cobro-retroactivo` | admin | — | Marca pagado un pedido cerrado sin cobro por error (solo con el día abierto, es decir, reabierto por `dev`). |
 | GET | `/api/v1/cierre/status` | auth | — | Si un día está cerrado. |
 | POST | `/api/v1/cierre` | gestión | — | Cierre de caja: exige decisión por pedido pendiente, guarda `DailyClose` y congela el día. |
 
