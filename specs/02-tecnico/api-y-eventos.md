@@ -1,20 +1,20 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ 15f5766
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
 # API y eventos
 
-> **Resumen.** La API es REST bajo `/api/v1` (86 endpoints, 5 niveles de acceso) más Socket.IO para avisar a las pantallas abiertas. Los eventos son solo avisos: la web invalida su caché y vuelve a pedir los datos por HTTP.
+> **Resumen.** La API es REST bajo `/api/v1` (87 endpoints, 5 niveles de acceso) más Socket.IO para avisar a las pantallas abiertas. Los eventos son solo avisos: la web invalida su caché y vuelve a pedir los datos por HTTP.
 
 Catálogo completo de endpoints HTTP y eventos Socket.IO. Los parámetros y cuerpos de cada ruta están en su código (`apps/api/src/routes/<archivo>.ts`); aquí va quién puede llamarla, a qué módulo pertenece y para qué existe. Los códigos de error que devuelven están en `codigos-de-error.md`.
 
 ## 1. Endpoints HTTP
 
-**Total: 86 endpoints.** Son 84 registros `fastify.get|post|put|patch|delete(...)` en los 15 archivos de `apps/api/src/routes/` más 2 rutas en línea en `apps/api/src/server.ts` (`/health` y `/api/v1/wpp/status`). No se cuenta `OPTIONS *` de `public.ts`, que solo responde 204 al preflight CORS.
+**Total: 87 endpoints.** Son 85 registros `fastify.get|post|put|patch|delete(...)` en los 15 archivos de `apps/api/src/routes/` más 2 rutas en línea en `apps/api/src/server.ts` (`/health` y `/api/v1/wpp/status`). No se cuenta `OPTIONS *` de `public.ts`, que solo responde 204 al preflight CORS.
 
-Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 5 · DSH 1 · CAT 5 · FAC 3 · PLT 17.
+Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 6 · DSH 1 · CAT 5 · FAC 3 · PLT 17.
 
 **Notación de roles** (`middleware/auth.ts`; `dev` pasa toda verificación de rol):
 
@@ -117,10 +117,11 @@ Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
 | POST | `/api/v1/orders/:id/cobro` | gestión | — | Cobra con la contraseña del usuario; cierra y bloquea el pedido (`409 ORDER_LOCKED` si ya estaba). |
-| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito. |
+| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito y guarda cuándo (`credit_paid_at`); no toca `paid_at`/`paid_by`. |
 | PATCH | `/api/v1/orders/:id/cobro-retroactivo` | admin | — | Marca pagado un pedido cerrado sin cobro por error. |
 | GET | `/api/v1/cierre/status` | auth | — | Si un día está cerrado. |
-| POST | `/api/v1/cierre` | gestión | — | Cierre de caja: exige decisión por pedido pendiente, guarda `DailyClose` y congela el día. |
+| GET | `/api/v1/cierre/preview` | admin | — | Vista previa de solo lectura del cierre: totales por bolsa y cada pedido del día con su clase, con la misma regla que `POST /cierre` y `GET /dashboard` (`lib/cierreTotals.ts`). La usa el modal de cierre. |
+| POST | `/api/v1/cierre` | admin | — | Cierre de caja: exige decisión por pedido pendiente, guarda `DailyClose` y congela el día. Solo admin/dev (PREG-008, 2026-10-10). |
 
 ### DSH — Informe
 
@@ -187,7 +188,7 @@ La clave "usuario" es el `userId` del JWT verificado (`server.ts › keyGenerato
 ### Cómo regenerar esta tabla
 
 ```sh
-# 84 rutas de archivos (método, ruta relativa al prefijo, preHandler en línea)
+# 85 rutas de archivos (método, ruta relativa al prefijo, preHandler en línea)
 grep -nE "fastify\.(get|post|put|patch|delete)\(" apps/api/src/routes/*.ts | sed -E 's/async.*//'
 grep -nE "fastify\.(get|post|put|patch|delete)\(" apps/api/src/routes/*.ts | wc -l
 # prefijos por archivo y rutas en línea
