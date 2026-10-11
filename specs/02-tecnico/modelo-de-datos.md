@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, apps/api/src/routes/orders.ts, apps/api/src/routes/public.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/files.ts, apps/api/src/routes/auth.ts, apps/api/src/routes/users.ts, apps/api/src/routes/employees.ts, apps/api/src/routes/products.ts, apps/api/src/routes/config.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/orderNumbering.ts]
 ---
 
@@ -39,6 +39,7 @@ erDiagram
     string role "admin encargado domiciliario dev"
     int failed_login_attempts
     datetime locked_until
+    string session_id "sesión única admin y dev, nullable"
   }
   RefreshToken {
     string token_hash UK "SHA-256"
@@ -165,8 +166,8 @@ Columnas: **Propósito** · **Quién escribe** (módulo, ruta) · **Ciclo de vid
 | Modelo | Propósito | Quién escribe | Ciclo de vida | Invariantes | Datos personales |
 |---|---|---|---|---|---|
 | `Organization` | Un negocio cliente (tenant) y su configuración de WhatsApp, plantillas y kill switch de links | Alta: PLT `dev.ts › POST /organizations`. WhatsApp y plantillas: WPP `config.ts › PATCH /wpp`, `PUT /message-templates`. Bloqueo global de links: INB `inbox.ts › POST /form-links/block-all` | Creada por `dev` → editada → `active=false` (login rechazado) . **Nunca se borra** (hay FKs `RESTRICT` desde casi todo) | `slug` único; `wpp_meta_phone_id` único (un número, un negocio); `wpp_meta_token` siempre `enc:v2:` en producción; el token nunca sale por la API | No directos. Contiene **secreto**: `wpp_meta_token`, `wpp_meta_app_secret` (sin uso) |
-| `User` | Cuenta del staff (y `dev`) | ACC `users.ts › POST /`; `dev` por `dev.ts › POST /seed` y `POST /organizations` (primer admin). Login: `auth.ts` (contadores, `last_login`) | Creada → activa → `active=false` (revoca sesiones, corta sockets). **Sin borrado físico** en el código | `email` único **global** y `(org_id, email)`; `username` único; un admin no ve ni edita `role='dev'`; el rol `dev` no se crea por API | Sí: `email`, `name` |
-| `RefreshToken` | Sesión larga rotativa (hash SHA-256) | ACC `auth.ts › issueSession`, `/refresh`, `/logout`; `users.ts` (revoca) | Emitido (7 días) → rotado/revocado → **borrado** en el siguiente login exitoso del usuario | `token_hash` único; reutilización de uno revocado revoca toda la familia; `CASCADE` desde `User` | No (hash opaco) |
+| `User` | Cuenta del staff (y `dev`) | ACC `users.ts › POST /`; `dev` por `dev.ts › POST /seed` y `POST /organizations` (primer admin). Login: `auth.ts` (contadores, `last_login`) | Creada → activa → `active=false` (revoca sesiones, corta sockets). `session_id` (nullable) lo fija cada login de admin/dev y cierra las demás sesiones. **Sin borrado físico** en el código | `email` único **global** y `(org_id, email)`; `username` único; un admin no ve ni edita `role='dev'`; el rol `dev` no se crea por API | Sí: `email`, `name` |
+| `RefreshToken` | Sesión larga rotativa (hash SHA-256) | ACC `auth.ts › issueSession`, `/refresh`, `/logout`; `users.ts` (revoca) | Emitido (7 días) → rotado/revocado → **borrado** en el siguiente login exitoso del usuario (en admin y dev, **todos** se borran en cada login: sesión única) | `token_hash` único; reutilización de uno revocado revoca toda la familia; `CASCADE` desde `User` | No (hash opaco) |
 | `LoginVerificationCode` | Código 2FA por correo (solo `dev` con `REQUIRE_2FA`) | ACC `auth.ts › POST /login`, `/login/verify-code` | Emitido (5 min) → consumido o agotado (5 intentos). **No hay limpieza**: las filas se acumulan | Se guarda HMAC, nunca el código; `CASCADE` desde `User` | No |
 | `Employee` | Domiciliario o empleado asignable a un pedido | ACC `employees.ts › POST /`, `DELETE /:id` (borrado suave con `updateMany`) | Creado → `active=false`. No se reactiva ni se ve (PREG-061) | Siempre filtrado por `org_id`; asignar uno de otra organización responde 404 (`orders.ts › POST /`, `PATCH /:id`) | Sí: `name`, `phone` (del personal, no de clientes finales) |
 | `Product` | Producto del catálogo (nombre, categoría, precio de referencia, existencia) | CAT `products.ts` (alta, edición, lote, Excel) | Creado → `active=false` (borrado suave) ; `in_stock` aparte ("hoy no hay") | **No hay `product.delete`**. Los pedidos no lo referencian por FK (§ 3.4); `price_per_unit` es solo referencia | No |

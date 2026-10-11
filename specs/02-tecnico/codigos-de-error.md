@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 17dcc31
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/src/server.ts, apps/api/src/middleware/auth.ts, apps/api/src/routes/auth.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/config.ts, apps/api/src/routes/dev.ts, apps/web/src/lib/api.ts]
 ---
 
@@ -41,6 +41,7 @@ Respuestas de error **sin `code`** (solo `error`), hoy: `webhook.ts` handshake c
 | `INVALID_REFRESH_TOKEN` | 401 | Cookie `rf` ausente, desconocida o vencida |
 | `TOKEN_REUSE_DETECTED` | 401 | Refresh token ya rotado: se revoca toda la familia |
 | `CSRF_CHECK_FAILED` | 403 | `/auth/refresh` sin la cabecera `X-Requested-With` |
+| `SESSION_REPLACED` | 401 | Token de `admin`/`dev` cuyo `sid` ya no es la sesión vigente: otro dispositivo inició sesión ("Tu sesión se cerró porque se inició en otro dispositivo"). La web no intenta renovar: cierra la sesión y muestra el aviso en el login. La cookie `rf` de esa sesión da `INVALID_REFRESH_TOKEN` |
 | `DUPLICATE_EMAIL` | 409 | Email ya registrado en la plataforma (global, no por organización) |
 | `DUPLICATE_USERNAME` | 409 | Nombre de usuario ya en uso |
 | `SELF_DEACTIVATE` | 400 | Un usuario intenta desactivarse a sí mismo |
@@ -101,5 +102,5 @@ Respuestas de error **sin `code`** (solo `error`), hoy: `webhook.ts` handshake c
 ## Notas
 
 - Un mismo `code` puede salir con textos distintos (`VALIDATION_ERROR`, `NOT_FOUND`); la web no debe depender del mensaje.
-- La web trata distinto un 401: con token dispara refresh; sin token (login fallido) no (`arquitectura.md` §8).
+- La web trata distinto un 401: con token dispara refresh (salvo `SESSION_REPLACED`, que cierra la sesión directamente); sin token (login fallido) no (`arquitectura.md` §8).
 - Excepciones al formato: `/health` y el webhook responden `{ status, timestamp }` y `{ ok: true }` en éxito.

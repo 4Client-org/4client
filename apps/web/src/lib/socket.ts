@@ -2,7 +2,7 @@ import { io, Socket } from 'socket.io-client';
 import type { ServerToClientEvents, ClientToServerEvents } from '@4client/shared';
 import { useAuthStore } from '../store/auth';
 import { resolveApiBase } from './apiBase';
-import { tryRefresh } from './api';
+import { tryRefresh, markSessionReplaced } from './api';
 
 let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 
@@ -30,6 +30,12 @@ export function getSocket(_token: string): Socket<ServerToClientEvents, ClientTo
     // any reliable English pattern, and a refresh attempt on a genuine network
     // hiccup is harmless (it just fails too, and socket.io's own backoff keeps
     // retrying regardless).
+    // Sesión única de admin y dev: otra sesión nueva de la misma cuenta desplazó a esta.
+    socket.on('session:replaced', () => {
+      markSessionReplaced();
+      useAuthStore.getState().clearAuth();
+    });
+
     socket.on('connect_error', async () => {
       const refreshed = await tryRefresh();
       if (refreshed) socket?.connect();

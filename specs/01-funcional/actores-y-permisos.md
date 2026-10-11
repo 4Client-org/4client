@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 17dcc31
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/api/test/cierre-totales.test.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/config/ConfigTab.tsx, specs/modulos/*.md]
 ---
 
@@ -23,6 +23,7 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 
 - **Herencia de `dev`.** `dev` **pasa todas las verificaciones de rol** (`requireRole`). Donde la tabla dice "admin", también aplica a `dev`. Un admin nunca ve ni edita cuentas `dev` (la API responde 404 como si no existieran).
 - **Solo sesiones de personal.** `authenticate` rechaza cualquier token sin `userId` y `role`, para que un token de link de formulario no sirva como sesión de personal.
+- **Sesión única para `admin` y `dev`.** Un login nuevo de un admin o dev cierra al instante sus sesiones anteriores en otros dispositivos (401 `SESSION_REPLACED`; RN-ACC-27). `encargado` y `domiciliario` pueden tener varias sesiones a la vez. No hay aviso por correo (PREG-142).
 - **Aislamiento por negocio.** Toda ruta filtra por el `org_id` del token (principio 2); la única excepción por diseño es `/dev/*`.
 - **Domiciliario = encargado, por ahora.** `requireRole` deja pasar al `domiciliario` en toda ruta que permite `encargado` (`middleware/auth.ts › requireRole`), y la web le muestra los mismos botones (`canManage`, `canTomarLista`). Lo que es solo de admin o dev sigue cerrado para él. Si más adelante se separan, se quita esa línea y se ajusta la web (PREG-012 resuelta, roadmap 38).
 - **Día cerrado congela todo.** Con la caja de un día cerrada, ningún rol (tampoco admin ni dev) crea, edita, mueve, restaura, cobra ni cobra retroactivamente pedidos de ese día: 409 `DAY_CLOSED`. Solo siguen las observaciones y "marcar crédito pagado" (RN-CAJ-21). La matriz de abajo vale para un día abierto.

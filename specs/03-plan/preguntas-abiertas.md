@@ -262,5 +262,6 @@ Las de mayor impacto (dinero, seguridad, pérdida de datos, lo que ve el cliente
 | PREG-139 | **Respondida (roadmap 25 y 34):** pedido cerrado con la caja abierta: se edita el método de pago (solo el administrador) y todo se recalcula; con la caja cerrada nada se actualiza, solo se deja una observación. | CAJ, ORD | Respondida | `03-plan/roadmap.md` (25, 34) |
 | PREG-140 | Decisiones de implementación de CH-0001 por confirmar: (1) un pedido cobrado no puede pasarse a `credito` ni a `sin_asignar` al corregir el pago; (2) un crédito sin pago dividido no lleva desglose; (3) el cobro retroactivo solo es posible si `dev` reabre el día; (4) si cambia el rol, el token viejo da 401 y la web renueva con refresh; (5) `form-info` y `last-order` también usan el día del link. ¿Están bien? | CAJ, ORD, ACC, FRM | Alto | `03-plan/cambios/CH-0001-ajustes-cierre-acceso-formulario.md` |
 | PREG-141 | La pestaña Papelera de `ResumenTab` sigue mostrando "Restaurar" con el día cerrado (la API responde 409). ¿Se oculta el botón? | DSH, ORD | Bajo | `modulos/ORD.md` |
+| PREG-142 | ¿Se avisa por correo al dueño cuando entra una sesión nueva en su cuenta de administrador o `dev`? Hoy no (decisión de José 2026-10-10, "por ahora no"): con la sesión única el dueño ve que lo sacaron, pero no sabe quién entró. | ACC | Medio | `03-plan/cambios/CH-0002-sesion-unica-admin.md` |
 
-Total: 141 preguntas (las respondidas por José están marcadas "Respondida").
+Total: 142 preguntas (las respondidas por José están marcadas "Respondida").

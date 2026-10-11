@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a256ddc
 fuentes: [package.json, pnpm-lock.yaml, Dockerfile, start.sh, apps/api/package.json, apps/api/src/server.ts, apps/api/src/config.ts, apps/api/src/plugins/socket.ts, apps/api/src/plugins/prisma.ts, apps/api/src/middleware/auth.ts, apps/api/src/services, apps/web/package.json, apps/web/vite.config.ts, apps/web/public/_headers, apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/pages/MainPage.tsx, apps/web/src/store/auth.ts, apps/web/src/lib/api.ts, apps/web/src/lib/apiBase.ts, apps/web/src/lib/socket.ts, apps/web/src/lib/format.ts, apps/web/src/components/ui/UpdateBanner.tsx, apps/web/src/hooks, .github/workflows]
 ---
 
@@ -137,7 +137,7 @@ Comportamientos globales:
 | HSTS | `onSend` agrega `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` a toda respuesta. | *(código)* |
 | Errores no controlados | Responden `{ error, code }` con `code = error.code ?? 'SERVER_ERROR'`. En producción, si el status es ≥ 500, el mensaje se reemplaza por "Error interno del servidor". Se reportan a Sentry si está configurado. | Un `z.parse` (no `safeParse`) que falla no trae `statusCode` y termina en 500 enmascarado. *(código)* |
 | CORS | Orígenes = `FRONTEND_URL` separado por comas. Cabeceras permitidas: `Content-Type`, `Authorization`, `X-Requested-With`; `credentials: true`. | `X-Requested-With` es la defensa CSRF de `/auth/refresh`. Las rutas `/api/v1/public/*` sobrescriben con `Access-Control-Allow-Origin: *` y responden `OPTIONS *` con 204 (`public.ts › onRequest`). *(código)* |
-| JWT | HS256 fijo en firma y verificación, secreto `JWT_SECRET`. Access token 15 min (`authenticate` lo contrasta con la base en cada petición: desactivar o cambiar el rol lo invalida al instante); refresh en cookie HttpOnly `rf` de 7 días con `path: /api/v1/auth` (`routes/auth.ts`). | El mismo secreto firma los tokens viejos de link de formulario; por eso `authenticate` y el socket rechazan cualquier token sin `userId` y `role`. *(código)* |
+| JWT | HS256 fijo en firma y verificación, secreto `JWT_SECRET`. Access token 15 min (`authenticate` lo contrasta con la base en cada petición: desactivar o cambiar el rol lo invalida al instante); el access token de `admin` y `dev` lleva además `sid` y solo vale si coincide con `users.session_id` (sesión única, RN-ACC-27: un login nuevo cierra las sesiones anteriores); refresh en cookie HttpOnly `rf` de 7 días con `path: /api/v1/auth` (`routes/auth.ts`). | El mismo secreto firma los tokens viejos de link de formulario; por eso `authenticate` y el socket rechazan cualquier token sin `userId` y `role`. *(código)* |
 | Rate limit global | 300 peticiones por minuto. Clave: `userId` del JWT **verificado** (`req.jwtVerify()`); si no hay token válido o no trae `userId`, la IP. | Antes usaba `jwt.decode()` sin verificar firma y se podía elegir balde con un token falso. Los límites por ruta están en `api-y-eventos.md`. *(código)* |
 | Roles | `middleware/auth.ts › requireRole`: `dev` pasa cualquier verificación de rol. | *(código)* |
 
@@ -204,11 +204,11 @@ Mapa de carpetas, componentes, hooks y utilidades: `frontend.md`. Catálogo de `
 
 **Cliente HTTP** (`lib/api.ts`):
 - `Content-Type: application/json` solo si hay cuerpo (Fastify rechaza JSON vacío con 400 `FST_ERR_CTP_EMPTY_JSON_BODY`).
-- Un 401 **con token** dispara un refresh; uno sin token (login fallido) no.
+- Un 401 **con token** dispara un refresh; uno sin token (login fallido) no. Excepción: 401 `SESSION_REPLACED` (sesión única de admin/dev) cierra la sesión sin renovar y deja el aviso para el login (`markSessionReplaced`).
 - **Refresh single-flight:** `tryRefresh` comparte una sola promesa `refreshPromise` entre todos los 401 simultáneos y el socket. `doRefresh` envía `X-Requested-With: XMLHttpRequest`, sin cuerpo, y vuelve a escribir `user` con lo que devuelve el servidor (la cookie es la fuente de verdad de la identidad).
 - Los errores se lanzan como `Error` con `code` y `data` (el cuerpo completo), que algunos llamadores usan (p. ej. la lista de pedidos sin decisión del cierre). *(código)*
 
-**Socket** (`lib/socket.ts`): una sola conexión por pestaña, solo transporte `websocket`, token leído del store en cada intento de conexión. En `connect_error` intenta refresh y reconecta; al volver a la pestaña reconecta si estaba caída. `MainPage` vuelve a emitir `join:org` y `join:date` en cada `connect`, porque Socket.IO no repite las salas solo. *(código)*
+**Socket** (`lib/socket.ts`): una sola conexión por pestaña, solo transporte `websocket`, token leído del store en cada intento de conexión. En `connect_error` intenta refresh y reconecta; al recibir `session:replaced` cierra la sesión (RN-ACC-28); al volver a la pestaña reconecta si estaba caída. `MainPage` vuelve a emitir `join:org` y `join:date` en cada `connect`, porque Socket.IO no repite las salas solo. *(código)*
 
 **Hooks** (`apps/web/src/hooks`): `useOrders` (+ `useCreateOrder`, `usePatchOrder`, `useMoveOrder`, `useCobroOrder`), `useDashboard`, `useCierre › useDiaCerrado`, `useProducts`, `useEmployees`, `useMessageTemplates`, `useTomarLista`, `useSendChatMedia`, `useChatMediaBlob`, `useChatScroll`, `useIdleLogout`.
 

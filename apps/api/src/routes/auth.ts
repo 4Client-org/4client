@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, hasSingleSession } from '../middleware/auth.js';
 import { config } from '../config.js';
 import { sendEmail } from '../services/email.js';
 import { audit } from '../lib/audit.js';
@@ -98,21 +98,36 @@ function cookieOpts(req: FastifyRequest) {
 // checks out) - both end up doing exactly the same thing: mint the real
 // accessToken/RefreshToken pair and return them + the user.
 async function issueSession(fastify: FastifyInstance, req: FastifyRequest, reply: FastifyReply, user: UserWithOrg) {
-  const payload = { userId: user.id, orgId: user.org_id, role: user.role as import('@4client/shared').UserRole };
+  // Sesión única de admin y dev (decisión de José 2026-10-10): un login nuevo deja
+  // vigente solo a esta sesión. Las anteriores pierden su token de renovación (se
+  // BORRAN, no se marcan revocados: un refresh con una cookie vieja debe fallar
+  // como "inexistente" y no disparar la detección de reuso, que revocaría
+  // también a la sesión nueva) y su access token deja de servir por `sid`.
+  const single = hasSingleSession(user.role);
+  const sid = single ? crypto.randomUUID() : undefined;
+  const payload = { userId: user.id, orgId: user.org_id, role: user.role as import('@4client/shared').UserRole, ...(sid ? { sid } : {}) };
   const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });
 
   const rawRefresh = crypto.randomBytes(40).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(rawRefresh).digest('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-  await fastify.prisma.refreshToken.create({
-    data: { user_id: user.id, token_hash: tokenHash, expires_at: expiresAt },
+  await fastify.prisma.$transaction(async (tx) => {
+    if (single) await tx.refreshToken.deleteMany({ where: { user_id: user.id } });
+    await tx.refreshToken.create({
+      data: { user_id: user.id, token_hash: tokenHash, expires_at: expiresAt },
+    });
+    await tx.user.update({
+      where: { id: user.id },
+      data: { last_login: new Date(), ...(single ? { session_id: sid } : {}) },
+    });
   });
-
-  await fastify.prisma.user.update({
-    where: { id: user.id },
-    data: { last_login: new Date() },
-  });
+  if (single) {
+    // Avisa y desconecta los sockets de las sesiones anteriores (este login aún no
+    // abrió el suyo: el cliente lo hace después de recibir esta respuesta).
+    fastify.io.to(`user:${user.id}`).emit('session:replaced');
+    fastify.disconnectUserSockets(user.id);
+  }
 
   // Security-audit finding: last_login above only ever holds the MOST RECENT
   // success, overwritten every time - no queryable history of past logins
@@ -517,7 +532,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
     const newRaw = rotation.newRaw;
 
-    const payload = { userId: stored.user.id, orgId: stored.user.org_id, role: stored.user.role as import('@4client/shared').UserRole };
+    // admin y dev: el access token renovado conserva el `sid` de la sesión vigente.
+    const sid = hasSingleSession(stored.user.role) ? stored.user.session_id : null;
+    const payload = { userId: stored.user.id, orgId: stored.user.org_id, role: stored.user.role as import('@4client/shared').UserRole, ...(sid ? { sid } : {}) };
     const accessToken = fastify.jwt.sign(payload, { expiresIn: '15m' });
 
     reply.setCookie('rf', newRaw, cookieOpts(req));

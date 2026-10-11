@@ -7,3 +7,4 @@ Estados: `propuesto → aprobado → en_curso → hecho @sha | descartado`. Los 
 | ID | Cambio | Estado | Módulos |
 |---|---|---|---|
 | CH-0001 | Ajustes de cierre de caja, acceso y formulario | hecho en dev | CAJ, ORD, DSH, ACC, FRM, WPP, CAT |
+| CH-0002 | Sesión única para administrador y dev | hecho en dev | ACC |

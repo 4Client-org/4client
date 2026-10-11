@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ d566e40
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/src/routes/auth.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/lib/crypto.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/routes/webhook.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/sanitize.ts, apps/api/src/lib/media.ts, apps/api/src/lib/audit.ts, apps/web/src/lib/csv.ts, apps/web/src/store/auth.ts, apps/web/public/_headers, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts, apps/api/test/public.test.ts, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
@@ -8,7 +8,7 @@ fuentes: [apps/api/src/routes/auth.ts, apps/api/src/middleware/auth.ts, apps/api
 
 # Seguridad y privacidad
 
-> **Resumen.** Sesión de 15 min con refresh rotativo en cookie, bloqueo por cuenta, 2FA solo para `dev`, aislamiento por `org_id` del JWT (404 y no 403), credenciales de Meta cifradas por organización, links públicos de 24 h con token opaco, y cumplimiento de la Ley 1581 con supresión solo por `dev`. Los puntos débiles conocidos están como PREG al final (§13).
+> **Resumen.** Sesión de 15 min con refresh rotativo en cookie (sesión única para admin y dev), bloqueo por cuenta, 2FA solo para `dev`, aislamiento por `org_id` del JWT (404 y no 403), credenciales de Meta cifradas por organización, links públicos de 24 h con token opaco, y cumplimiento de la Ley 1581 con supresión solo por `dev`. Los puntos débiles conocidos están como PREG al final (§13).
 
 ### Fronteras de confianza
 
@@ -45,7 +45,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 
 | Pieza | Valor | Dónde |
 |---|---|---|
-| Access token | JWT **HS256** (firma y verificación fijadas a ese algoritmo), **15 min**, payload `{ userId, orgId, role }` | `routes/auth.ts › issueSession`, `server.ts` (registro de `@fastify/jwt`) |
+| Access token | JWT **HS256** (firma y verificación fijadas a ese algoritmo), **15 min**, payload `{ userId, orgId, role }`, más `sid` solo para `admin` y `dev` (sesión única) | `routes/auth.ts › issueSession`, `server.ts` (registro de `@fastify/jwt`) |
 | Secreto JWT | `JWT_SECRET`, mínimo 32 caracteres o la API no arranca | `config.ts › envSchema` |
 | Refresh token | 40 bytes aleatorios en hex; en la base solo su **SHA-256** (`RefreshToken.token_hash`, único); vence a los **7 días** | `issueSession` |
 | Cookie | `rf`, `httpOnly`, `path=/api/v1/auth`, `maxAge` 7 días. Con HTTPS: `Secure` + `SameSite=None` (web y API son orígenes distintos); con HTTP (local): `SameSite=Lax` | `auth.ts › cookieOpts` |
@@ -58,6 +58,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 - **Refresh con usuario u organización inactivos:** revoca ese token y responde 401. El refresh relee el rol desde la base *(código)*.
 - **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). Cambiar el rol desconecta los sockets del usuario pero no revoca sus refresh tokens. **`authenticate` consulta la base en cada petición** (`active`, `role`, `org_id` por clave primaria): un usuario desactivado, inexistente, o cuyo rol ya no es el del token recibe 401 al instante, sin esperar los 15 min. Tras un cambio de rol, la web renueva con `/auth/refresh` y sigue con el rol nuevo; con una cuenta desactivada el refresh falla *(código; `access-immediate.test.ts`; PREG-065 resuelta)*.
 - Los refresh tokens revocados o vencidos de un usuario se borran en su siguiente login exitoso; no hay otra limpieza *(código)*.
+- **Sesión única de `admin` y `dev`** (decisión de José 2026-10-10; RN-ACC-27): `issueSession` genera un `sid` (UUID), lo guarda en `users.session_id` y lo incluye en el access token, y **borra todos los refresh tokens** del usuario en la misma transacción; luego emite `session:replaced` a la sala `user:<id>` y desconecta sus sockets. `authenticate` y el handshake del socket rechazan (401 `SESSION_REPLACED`, en el socket `Token inválido`) todo token de admin/dev cuyo `sid` no sea `session_id`; `/refresh` conserva el `sid` vigente. Un token sin `sid` vale solo mientras `session_id` sea nulo (antes del primer login tras el despliegue). Los refresh de la sesión desplazada se borran en vez de marcarse revocados, para que su cookie dé `INVALID_REFRESH_TOKEN` y no active la detección de reutilización (que revocaría también la sesión nueva). `encargado` y `domiciliario` pueden tener varias sesiones a la vez. No hay aviso por correo (PREG-142). *(código; `session-unica.test.ts`)*
 - `POST /auth/logout` exige un access token válido y revoca el refresh token de la cookie *(código)*.
 
 ## 2. Login, bloqueo y 2FA (`routes/auth.ts`)

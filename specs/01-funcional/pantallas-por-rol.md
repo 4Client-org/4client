@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/web/src/App.tsx, apps/web/src/pages/MainPage.tsx, apps/web/src/pages/LoginPage.tsx, apps/web/src/pages/ClientFormPage.tsx, apps/web/src/pages/FacturaPage.tsx, apps/web/src/components/config/ConfigTab.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/modals/CierreCajaModal.tsx, apps/web/src/components/orders/Swimlane.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/components/chat/*.tsx, apps/web/src/styles/global.css, specs/01-funcional/actores-y-permisos.md, specs/modulos/*.md]
 ---
 
@@ -52,7 +52,7 @@ Reglas transversales del marco (`MainPage`):
 - **Franja roja del día 1** (admin y dev, en todas las pestañas): "Hoy es día 1 - recuerda pagar la suscripción…" (RN-DSH-16).
 - **Fecha:** el selector de fecha del tablero y el del informe comparten el mismo estado; cambiar de pestaña conserva el día.
 - **Tiempo real:** un socket se une a la sala de la organización y a la del día; los eventos de pedidos, mensajes y cierre invalidan las consultas (RN-ORD-36, RN-ORD-37, RN-CAJ-22).
-- **Sesión:** la web cierra la sesión tras 1 hora sin actividad y al salir limpia toda la caché (RN-ACC-19, RN-ACC-22).
+- **Sesión:** la web cierra la sesión tras 1 hora sin actividad y al salir limpia toda la caché (RN-ACC-19, RN-ACC-22). Admin y dev solo pueden tener una sesión abierta a la vez (RN-ACC-27).
 
 ## 2. Visibilidad por rol
 
@@ -114,6 +114,7 @@ Al abrir Configuración, `dev` cae en DevTools (subpestaña "Base de datos"); lo
 - **Muestra:** logo, campos "Correo" y "Contraseña" (con ojo), botón "Ingresar al sistema"; insignia "DEV" en entornos de desarrollo.
 - **Estados:** cualquier fallo (clave errónea, correo inexistente, **cuenta bloqueada 429**, red) muestra el mismo texto "Usuario o contraseña incorrectos" (RN-ACC-11, RN-ACC-13): el bloqueo no se distingue en pantalla. Con campos vacíos: "Ingresa usuario y contraseña" (aunque el campo se llama Correo, PREG-063).
 - **2FA (solo dev, `REQUIRE_2FA`):** segunda pantalla con código de 6 dígitos "Vence en 5 minutos"; aquí sí se muestran mensajes específicos; si el código venció o la cuenta se bloqueó vuelve a las credenciales (RN-ACC-16). "Volver a iniciar sesión" reenvía un código nuevo.
+- **Sesión desplazada (admin y dev):** si otro dispositivo inició sesión con la misma cuenta, esta pantalla se cierra sola y el login muestra "Tu sesión se cerró porque se inició en otro dispositivo" en el lugar del error, una sola vez (RN-ACC-27, RN-ACC-28). Encargado y domiciliario no lo ven: sus sesiones coexisten.
 
 ### 3.2 Tickets y Pedidos (el tablero, `Swimlane`)
 - **Para qué:** vista del día: una fila por cliente (ticket) con columnas Nuevo, Preparando, Listo, En camino y Cerrado. Dueño: `ORD` (tickets y orden: `INB`).
