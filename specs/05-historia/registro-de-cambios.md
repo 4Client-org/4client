@@ -52,7 +52,7 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 - **Por qué:** pedido de José (2026-10-10): una cuenta de administrador comprometida no debe poder convivir con la del dueño.
 - **Specs tocadas:** ver el barrido de este cambio: ACC, seguridad y privacidad, API y eventos, códigos de error, límites, modelo de datos, datos y migraciones, calidad y pruebas, actores y permisos, glosario, pantallas, amenazas, riesgos, más `CH-0002`, D-29, roadmap 43 y PREG-142.
 - **Obsoleto:** que un administrador pudiera tener varias sesiones abiertas a la vez.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `74e2bf8` · **Prod:** pendiente
 
 ### R-0024 — Ajustes de cierre de caja, acceso y formulario (CH-0001)
 - **Fecha / rama:** 2026-10-10, `feature/ajustes-jose-2026-10-10`
