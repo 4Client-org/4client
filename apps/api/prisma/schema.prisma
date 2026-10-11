@@ -285,28 +285,25 @@ model Ticket {
   // (registered_by/history) falls back to the first active admin/encargado when null.
   form_link_sent_by  String?   @db.Uuid
   // Issued-at of the CURRENT form_link_token - null = no link issued yet. Used for
-  // both TTL checks (4h-unopened, 24h absolute) and, implicitly, staleness: since
+  // the flat 24h expiry (public.ts) and as the day the form's new orders land on
+  // (the Bogota calendar day the link was SENT, public.ts's linkDayFor). Since
   // there's only ever one live token per ticket, this is simply when THAT token was
   // minted, not a comparison target for a separate incoming value anymore.
   form_token_min_iat DateTime? @db.Timestamptz
   // Set the first time GET /form-info actually succeeds for the CURRENT link (reset
-  // to null every time a fresh link is issued, same as form_token_min_iat above). A
-  // link nobody opens within 10 minutes of being sent dies on its own (public.ts's
-  // assertLinkStillValid) - shrinks how long a link that went to the wrong person
-  // (typo'd number, accidental forward) stays usable, without touching the normal
-  // end-of-day expiry for a link that WAS opened in time.
+  // to null every time a fresh link is issued, same as form_token_min_iat above).
+  // Informational only: it does NOT affect expiry (the link dies 24h after being
+  // issued, opened or not).
   form_link_opened_at DateTime? @db.Timestamptz
-  // Wrong-phone-digits guesses against ANY link for this ticket - form link AND
-  // every invoice/factura link together (see linkSecurity.ts) - since the last
-  // reset. Reset to 0 whenever staff sends a fresh link of EITHER kind (inbox.ts's
-  // /form-link route, files.ts's POST /invoice). Once it hits linkSecurity.ts's
-  // MAX_ATTEMPTS_SOFT, EVERY outstanding link for this ticket is dead - not just
-  // whichever one the wrong guesses happened to land on.
+  // Wrong-guess counter shared by the form link and every invoice/factura link
+  // (linkSecurity.ts). Reset to 0 whenever staff sends a fresh link of EITHER kind.
+  // Once it reaches linkSecurity.ts's MAX_ATTEMPTS_SOFT, every outstanding link of
+  // this ticket is dead. Currently dormant: nothing increments it any more (the
+  // phone-digits step that did was removed), it is only read.
   link_failed_attempts Int       @default(0)
-  // Cumulative wrong-digit guesses across EVERY link this ticket has ever issued,
-  // since the last time this ticket was hard-blocked. Never reset by a fresh link
-  // (unlike link_failed_attempts above) - that's what stops someone from dodging
-  // the soft block by just asking staff for a new link every 10 guesses.
+  // Cumulative wrong guesses across every link of this ticket since the last hard
+  // block (never reset by a fresh link, unlike link_failed_attempts). Dormant like
+  // link_failed_attempts: nothing increments it today.
   link_failed_total    Int       @default(0)
   // Set once link_failed_total crosses MAX_ATTEMPTS_HARD - blocks every link (form
   // + all invoices) for this ticket until this timestamp, self-expiring with no
@@ -635,14 +632,12 @@ model RevokedFormToken {
   @@map("revoked_form_tokens")
 }
 
-// Claims a ticket's form-link for whichever browser/device opens it FIRST - there's
-// no real "device identity" reachable from a web page, so `device_token` is just a
-// random value the client generates once and persists in its own localStorage
-// (public.ts's routes below). First request for a ticket with no row yet claims it;
-// any later request presenting a DIFFERENT device_token is rejected as if the link
-// were invalid, same as an expired/revoked one (never reveals *why* it failed).
-// Cleared whenever staff issues a fresh link for this ticket (inbox.ts) - that's a
-// deliberate "start over" action, e.g. after a false-positive lockout.
+// OBSOLETE - kept only so the schema stays additive. This table is never written:
+// the form link is NOT locked to a device (any device with the link can use it),
+// and the public routes neither require nor compare a `device_token` any more.
+// Only the right-to-erasure flow (inbox.ts erase-data) still runs a harmless
+// deleteMany on it. Candidate to drop in a later release, once no old container
+// that references it can be alive.
 model FormLinkSession {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ticket_id    String   @unique @db.Uuid

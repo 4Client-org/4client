@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
@@ -87,15 +87,15 @@ Los tamaños de multimedia son del archivo decodificado; el `bodyLimit` de cada 
 
 ### FRM — Formulario público del cliente
 
-Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden con `Access-Control-Allow-Origin: *`.
+Todas `public`, con token de link (`t`) obligatorio (el `device_token` que mandaban las páginas anteriores se ignora). Responden con `Access-Control-Allow-Origin: *`.
 
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
 | GET | `/api/v1/public/link-status` | public | — | Dice si el link sirve antes de mostrar nada (bloqueado, vencido, agotado). |
-| GET | `/api/v1/public/form-info` | public | — | Datos del cliente y sus pedidos activos de hoy. |
-| GET | `/api/v1/public/products` | public | — | Catálogo sin precios. |
-| GET | `/api/v1/public/last-order` | public | — | Último pedido cerrado, para "repetir". |
-| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido o lo fusiona con el activo editable; exige consentimiento. |
+| GET | `/api/v1/public/form-info` | public | — | Datos del cliente y sus pedidos activos del día del link (el día calendario de Bogotá en que se envió). |
+| GET | `/api/v1/public/products` | public | — | Catálogo sin precios, con `in_stock` (el formulario marca "NO HAY" en los agotados). |
+| GET | `/api/v1/public/last-order` | public | — | Último pedido anterior al día del link o cerrado de ese día, para "repetir". |
+| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido (con `fecha` = día calendario de Bogotá en que se envió el link, pasando al siguiente si ese día ya cerró) o lo fusiona con el activo editable; exige consentimiento. |
 | POST | `/api/v1/public/order/:orderId/delete` | public | 15/min por IP | El cliente elimina su pedido: queda `client_deleted`, sin cambiar `status`. |
 
 ### ORD — Pedidos

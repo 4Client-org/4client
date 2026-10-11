@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, start.sh, apps/api/src/lib/businessDate.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts]
 ---
 
@@ -109,13 +109,13 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 
 | Elemento | Estado |
 |---|---|
-| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). Hoy ningún código inserta filas; solo el borrado de datos las elimina. Las rutas públicas siguen **exigiendo** `device_token` pero no lo comparan con nada. → PREG-035 |
+| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). **Obsoleta**: ningún código inserta filas (solo el borrado de datos hace un `deleteMany` inofensivo) y, desde 2026-10-10, las rutas públicas ya no piden `device_token`. Se conserva para que las migraciones sean solo aditivas; **deuda:** borrar la tabla en un release posterior, cuando ningún contenedor viejo pueda referenciarla (PREG-035) |
 | `Organization.wpp_meta_app_secret` | Solo lo escriben `seed-wpp.ts` y `reencrypt-wpp-tokens.ts`. El webhook verifica la firma con la variable global `META_APP_SECRET`, no con esta columna. |
 | `OrderItem.quantity_value`, `quantity_unit` | Sin uso (§2). |
 | `Ticket.wpp_thread_id` | Sin uso; solo aparece en el visor de base de `dev`. |
 | `RevokedFormToken` | Sigue en uso (botón "bloquear link"), aunque nació para los links JWT. Desde `form_link_short_token`, generar un link nuevo ya invalida el anterior por sobrescritura; la fila de revocación se borra al emitir uno nuevo (`lib/formLink.ts`). |
 | `Order.status = 'entregado'` | Valor heredado: pedidos viejos lo conservan, pero ya no se puede asignar. |
-| Comentarios del schema sobre links | Los de `Ticket.form_token_min_iat`, `form_link_opened_at` e `InvoiceLink` hablan de ventanas de 10 min / 4 h sin abrir y de verificar los últimos 4 dígitos del teléfono; el código del formulario aplica un vencimiento fijo de 24 h desde la emisión (`public.ts › loadTicketByFormToken`). Ver `modulos/FRM.md` y `modulos/FAC.md`. → DT-040 |
+| Comentarios del schema sobre links | Corregidos el 2026-10-10 los de `Ticket.form_token_min_iat`, `form_link_opened_at`, `link_failed_attempts/total` y `FormLinkSession`. Pendiente el de `InvoiceLink`, que habla de ventana de 10 min y verificación de los últimos 4 dígitos (ver `modulos/FAC.md`). → DT-040 |
 
 ## 9. Política de migraciones
 
@@ -147,5 +147,5 @@ Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls app
 ## 11. Pendientes
 
 - **PREG-005 — `caja_cerrada` tras reabrir un cierre.** `POST /dev/actions/reopen-cierre` borra el `DailyClose` pero no limpia `Order.caja_cerrada` ni `locked`. Hoy nada lee `caja_cerrada`. ¿Se deja así, se limpia al reabrir o se elimina la columna?
-- **PREG-035 — `device_token` y `FormLinkSession`.** Las rutas públicas exigen `device_token`, pero no se usa y `FormLinkSession` nunca se escribe. ¿Se retiró la atadura a un dispositivo a propósito? Si es así, ¿se quita el parámetro y la tabla?
-- **DT-040 — Comentarios del schema desactualizados** sobre ventanas de link (10 min / 4 h) y `phone_last4`, que contradicen el vencimiento fijo de 24 h del código. ¿Se corrigen los comentarios?
+- **PREG-035 — `device_token` y `FormLinkSession`.** Resuelta por José (2026-10-10): se quitó el parámetro. Queda por hacer borrar la tabla `FormLinkSession` en un release posterior (migración que elimina la tabla, solo cuando el contenedor anterior ya no la use).
+- **DT-040 — Comentarios del schema desactualizados.** Corregidos los del formulario (2026-10-10); queda el de `InvoiceLink` (10 min y `phone_last4`).

@@ -5,7 +5,7 @@ import { config } from '../config.js';
 // Shared by inbox.ts's GET /:ticketId/form-link (staff clicking "Formulario") and
 // webhook.ts's auto-send-after-welcome - extracted so both mint the token and reset
 // the same state (form_link_token, form_token_min_iat, form_link_opened_at,
-// link_failed_attempts, revoked/device-lock rows) exactly the same way, instead of
+// link_failed_attempts, revoked-token rows) exactly the same way, instead of
 // the webhook path silently drifting from whatever inbox.ts does as either one gets
 // edited later.
 //
@@ -66,7 +66,9 @@ function privacyPolicyUrl(): string {
 // cambia algún día, no había forma de saber si un consentimiento viejo sigue
 // siendo válido para el texto nuevo. Bump manual cada vez que cambie el
 // contenido de apps/web/public/legal/politica-privacidad.html.
-export const PRIVACY_POLICY_VERSION = 'v1';
+// v2 (octubre 2026): agrega que los productos y cantidades del pedido se
+// procesan con IA. Los consentimientos ya guardados conservan 'v1'.
+export const PRIVACY_POLICY_VERSION = 'v2';
 
 // Ley 1581 de 2012 - aviso de privacidad, en cursiva (sintaxis de WhatsApp:
 // _texto_), pegado al FINAL del mensaje de bienvenida (ver webhook.ts) - no es

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, apps/api/src/routes/orders.ts, apps/api/src/routes/public.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/files.ts, apps/api/src/routes/auth.ts, apps/api/src/routes/users.ts, apps/api/src/routes/employees.ts, apps/api/src/routes/products.ts, apps/api/src/routes/config.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/orderNumbering.ts]
 ---
 
@@ -54,7 +54,7 @@ erDiagram
   Ticket ||--o{ TicketMessage : "chat (RESTRICT)"
   User |o--o{ TicketMessage : "sent_by (SET NULL)"
   Ticket ||--o| RevokedFormToken : "link bloqueado"
-  Ticket ||--o| FormLinkSession : "sin uso"
+  Ticket ||--o| FormLinkSession : "obsoleta, sin uso"
   Organization ||--o{ RevokedFormToken : "org_id"
   Ticket {
     string phone "UK con org_id"
@@ -178,7 +178,7 @@ Columnas: **Propósito** · **Quién escribe** (módulo, ruta) · **Ciclo de vid
 | `Ticket` | La conversación y la identidad del cliente final, **para siempre** (principio 8). Contiene el estado del link del formulario, los contadores anti-abuso y la prueba de consentimiento | Alta: WPP `webhook.ts` (primer mensaje), `tickets.ts › POST /` (upsert), `dev.ts › POST /actions/create-test-ticket`. Link: `lib/formLink.ts`, INB `inbox.ts`. Día: `webhook.ts`, `cierre.ts` (`deferred_to`) | Creado con el primer mensaje → se reactiva con cada mensaje (`fecha`) → **anonimizado** por `inbox.ts › POST /:ticketId/erase-data` (nombre "Cliente eliminado", `phone` = `eliminado-<hex>`, `bsuid` y `raw_payload` en nulo). No se borra | `(org_id, phone)` y `(org_id, bsuid)` únicos; `form_link_token` único (sobrescribirlo mata el link anterior); `consent_given_at` solo la primera vez y **se conserva** al anonimizar | **Sí**: `phone`, `bsuid`, `customer_name`, `raw_payload` (JSON crudo de Meta con nombre y teléfono) |
 | `TicketMessage` | Cada mensaje del chat, entrante o saliente, con estado de entrega | WPP `webhook.ts` (entrantes y recibos de estado); INB `inbox.ts` (salientes); FRM `public.ts` (confirmaciones automáticas); `dev.ts` (datos de prueba) | Insertado → actualizado (`delivered`, `read_by_client`, `failed_reason`) → **borrado físico** solo por la supresión de datos. El trigger `trg_bump_ticket_last_activity` adelanta el ticket | `wpp_message_id` único (dedup de reintentos de Meta); el orden de listados es por `created_at`, no `sent_at`; la multimedia **no se guarda**, solo `media_url` = id de Meta (30 días) | **Sí**: `text`, `media_caption`, `raw_payload` |
 | `RevokedFormToken` | Marca "este link se bloqueó a mano" | INB `inbox.ts › POST /:ticketId/form-link/revoke` (upsert); se borra al emitir uno nuevo (`lib/formLink.ts`) | Creada → borrada al emitir link nuevo, o por la supresión | Una fila por ticket (`ticket_id` único) | No |
-| `FormLinkSession` | Atadura del link a un dispositivo. **Sin uso**: nada la escribe | Solo `inbox.ts` la borra (supresión y link nuevo) | Vacía en la práctica (PREG-035) | `ticket_id` único | No (`device_token` es aleatorio del navegador) |
+| `FormLinkSession` | Atadura del link a un dispositivo. **Obsoleta, sin uso** (las rutas ya no usan `device_token`); se borrará en un release posterior: nada la escribe | Solo `inbox.ts` la borra (supresión y link nuevo) | Vacía en la práctica (PREG-035) | `ticket_id` único | No (`device_token` es aleatorio del navegador) |
 
 ### 2.3 Pedidos e ítems
 
