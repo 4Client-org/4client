@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { calcularBolsas, orderTotal } from '../lib/cierreTotals.js';
 
 export default async function dashboardRoutes(fastify: FastifyInstance) {
   // GET /api/v1/dashboard?fecha=2026-06-15 - solo admin
@@ -96,25 +97,10 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       ['preparando', 'listo', 'camino'].includes(o.status) && o.employee_id
     ).length;
 
-    let totalEfectivo = 0;
-    let totalTransferencia = 0;
-    // Explicit status==='cerrado' guard alongside paid, same reasoning as
-    // cierre.ts's own totals query - makes it impossible for a real-money
-    // total to include an order sitting in some other status.
-    orders.filter(o => o.paid && o.status === 'cerrado').forEach(o => {
-      const tot = o.items.reduce((s, i) => s + Number(i.price), 0);
-      // Split payment (part efectivo, part transferencia) routes each piece
-      // into its own bucket instead of the whole total going to just one -
-      // same reasoning as cierre.ts's identical totals computation.
-      if ((o as any).split_cash != null && (o as any).split_transfer != null) {
-        totalEfectivo += Number((o as any).split_cash);
-        totalTransferencia += Number((o as any).split_transfer);
-      } else if (o.payment_method === 'cash' || o.payment_method === 'cod') {
-        totalEfectivo += tot;
-      } else if (o.payment_method === 'transfer') {
-        totalTransferencia += tot;
-      }
-    });
+    // Misma regla de bolsas que el cierre real y su vista previa (cierre.ts ›
+    // POST / y › GET /preview), en una sola función (lib/cierreTotals.ts): lo que
+    // se guardó en DailyClose y lo que muestra este informe salen del mismo cálculo.
+    const { efectivo: totalEfectivo, transferencia: totalTransferencia } = calcularBolsas(orders);
 
     // A pedido cerrado vía "Cerrar sin cobro" (cierre.ts's forzar_cierre
     // decision) is locked+cerrado but deliberately left unpaid - it never
@@ -134,7 +120,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         .map(o => ({
           id: o.id,
           customer_name: o.customer_name || 'Sin nombre',
-          total: o.items.reduce((s, i) => s + Number(i.price), 0),
+          total: orderTotal(o),
         }));
     const sinCobroEfectivo = sinCobro('efectivo');
     const sinCobroTransferencia = sinCobro('transferencia');

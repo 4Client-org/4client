@@ -11,7 +11,7 @@ import { useProducts } from '../../hooks/useProducts';
 import { EnviarCatalogoMenu } from '../chat/EnviarCatalogoMenu';
 import { useEmployees } from '../../hooks/useEmployees';
 import { useDiaCerrado } from '../../hooks/useCierre';
-import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr } from '../../lib/format';
+import { STATUS_LABEL, STATUS_ORDER, fmtCOP, PAYMENT_LABEL, todayStr, formatChatTimestamp, formatChatDateDivider, colombiaDateStr, fmtBusinessDate, fmtDate } from '../../lib/format';
 import { formatPhoneDisplay, looksFake } from '../../lib/formatPhone';
 import { toast } from '../ui/Toast';
 import DeliveryStatus from '../ui/DeliveryStatus';
@@ -1522,7 +1522,8 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
             {locked && (
               <div style={{ background: '#DCFCE7', border: '1.5px solid var(--vm)', borderRadius: 'var(--rad)', padding: '12px 14px', marginBottom: 14, fontSize: 13 }}>
                 <div style={{ fontWeight: 800, color: 'var(--vd)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <CheckCircle size={15} color="var(--v)" /> Pedido cerrado y cobrado
+                  {/* Un crédito sin pagar no se rotula como cobrado (decisión de José 2026-10-10). */}
+                  <CheckCircle size={15} color="var(--v)" /> {order.paid ? 'Pedido cerrado y cobrado' : order.payment_method === 'credito' ? 'Pedido cerrado a crédito - pendiente de pago' : 'Pedido cerrado sin cobro'}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px 14px' }}>
                   <div><span style={{ color: 'var(--gt)' }}>Cerrado por: </span><strong>{(order as any).paidBy?.name ?? 'Desconocido'}</strong></div>
@@ -1542,6 +1543,18 @@ export default function DetallePedidoModal({ orderId, onClose, openCobro, prefil
                     <Banknote size={13} /> Corregir pago
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Trazabilidad del crédito: día del pedido (Order.fecha, día de negocio) y
+                cuándo se marcó pagado (credit_paid_at). Solo informativo: un crédito
+                pagado después no suma en ningún total (D-19). */}
+            {order.payment_method === 'credito' && order.fecha && (
+              <div style={{ background: 'var(--bg)', border: '1px solid var(--brd)', borderRadius: 'var(--rad)', padding: '8px 14px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: order.paid ? 'var(--vd)' : '#DC2626' }}>
+                Crédito creado el {fmtBusinessDate(order.fecha)}
+                {order.paid
+                  ? (order.credit_paid_at ? `, pagado el ${fmtDate(order.credit_paid_at)}` : ', pagado (fecha no registrada)')
+                  : ' · pendiente de pago'}
               </div>
             )}
 

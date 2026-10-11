@@ -455,6 +455,13 @@ model Order {
   // bucket instead of dumping the whole total into just one.
   split_cash      Decimal?  @db.Decimal(12, 2)
   split_transfer  Decimal?  @db.Decimal(12, 2)
+  // Cuándo se marcó pagado un crédito (PATCH /orders/:id/credito-pagado). Va
+  // aparte de paid_at, que en crédito guarda cuándo se CERRÓ el pedido ("Hora
+  // cierre") y no se toca al saldarlo. Con Order.fecha (día del crédito) permite
+  // mostrar "Crédito creado el <día>, pagado el <día>". Null en todo lo que no es
+  // un crédito pagado. Solo informativo: un crédito saldado no suma en ningún
+  // total (D-19).
+  credit_paid_at  DateTime? @db.Timestamptz
   locked          Boolean   @default(false)
   caja_cerrada    Boolean   @default(false)
   source          String    @default("encargado") @db.VarChar(20)

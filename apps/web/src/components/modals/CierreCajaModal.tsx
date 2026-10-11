@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Banknote, ArrowLeftRight, AlertTriangle, CheckCircle, Download, MessageSquare } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Lock, Banknote, ArrowLeftRight, AlertTriangle, CheckCircle, Download, MessageSquare, CircleSlash } from 'lucide-react';
 import { api } from '../../lib/api';
-import { fmtCOP, STATUS_LABEL } from '../../lib/format';
+import { fmtCOP, STATUS_LABEL, PAYMENT_LABEL } from '../../lib/format';
 import { formatPhoneDisplay } from '../../lib/formatPhone';
 import { downloadCierreCSV } from '../../lib/csv';
 import { toast } from '../ui/Toast';
@@ -10,7 +10,6 @@ import TicketModal from './TicketModal';
 
 interface Props {
   fecha: string;
-  orders: any[];
   tickets: any[];
   onClose: () => void;
 }
@@ -18,7 +17,55 @@ interface Props {
 type Decision = 'manana' | 'forzar_cierre';
 type TicketDecision = 'manana' | 'atendido';
 
-export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Props) {
+// Lo que devuelve GET /cierre/preview (cierre.ts): la MISMA regla de bolsas que usa
+// POST /cierre para guardar DailyClose y GET /dashboard para el informe
+// (apps/api/src/lib/cierreTotals.ts). Este modal ya no suma por su cuenta: antes
+// ignoraba el pago dividido, contaba pedidos eliminados por el cliente y rotulaba
+// créditos sin pagar como "Completado" (PREG-002, DT-004).
+type ClaseCierre = 'cobrado' | 'credito_pendiente' | 'cerrado_sin_cobro' | 'pagado_sin_cerrar' | 'pendiente' | 'excluido';
+interface PreviewOrder {
+  id: string;
+  num: string;
+  ticket_id: string | null;
+  customer_name: string;
+  client_contact_name: string | null;
+  customer_phone: string | null;
+  address: string;
+  status: string;
+  payment_method: string;
+  paid: boolean;
+  items: { product_name: string; quantity_label: string | null; price: number }[];
+  total: number;
+  efectivo: number;
+  transferencia: number;
+  dividido: boolean;
+  clase: ClaseCierre;
+}
+interface CierrePreview {
+  fecha: string;
+  cerrado: boolean;
+  closedAt: string | null;
+  totales: { efectivo: number; transferencia: number; total: number };
+  orders: PreviewOrder[];
+}
+
+const NO_SUMA_LABEL: Partial<Record<ClaseCierre, string>> = {
+  credito_pendiente: 'Crédito sin pagar',
+  cerrado_sin_cobro: 'Cerrado sin cobro',
+  pagado_sin_cerrar: 'Pagado sin cerrar',
+};
+
+// Cómo entró la plata de un pedido cobrado, con los mismos números que van a las bolsas.
+function detallePago(o: PreviewOrder): string {
+  const metodo = PAYMENT_LABEL[o.payment_method] ?? o.payment_method;
+  if (o.dividido) return `Dividido: ${fmtCOP(o.efectivo)} efectivo + ${fmtCOP(o.transferencia)} transferencia`;
+  if (o.efectivo > 0) return `${metodo} · ${fmtCOP(o.efectivo)} a efectivo`;
+  if (o.transferencia > 0) return `${metodo} · ${fmtCOP(o.transferencia)} a transferencia`;
+  if (o.total === 0) return metodo;
+  return `${metodo} · no suma en efectivo ni transferencia`;
+}
+
+export default function CierreCajaModal({ fecha, tickets, onClose }: Props) {
   const qc = useQueryClient();
   // Once the close actually lands server-side, the only thing left to do is
   // download the CSV report of what was just closed - no more editing decisions,
@@ -26,29 +73,23 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
   // which meant the CSV (only otherwise available mid-flow) was easy to miss.
   const [closedNow, setClosedNow] = useState(false);
 
-  // GET /orders (orders.ts) includes an order here for two different reasons: (a) its
-  // real, current `fecha` is today, or (b) it's a "ghost" - already deferred AWAY from
-  // today by an earlier cierre, kept only so the board can show a dimmed trace of where
-  // it used to be (see Swimlane.tsx's identical isGhost logic). Only (b) should be
-  // excluded here. The previous check - any `pasado_manana:` substring, regardless of
-  // date - also matched orders deferred out of some OTHER, earlier day that are still
-  // genuinely pending today (fecha really is today), silently hiding them from this
-  // modal's decision list. cierre.ts's backend check only looks at the real `fecha`
-  // column, so it still demanded a decision for them - a 400 MISSING_DECISIONS the UI
-  // gave no way to fix, since the order was invisible here. Matching the marker's own
-  // date against the day being closed (like Swimlane does) fixes that.
-  const nonPapelera = orders.filter((o) => {
-    if (o.status === 'papelera') return false;
-    // notes can carry MULTIPLE pasado_manana:DATE markers (one per deferral, if an
-    // order got left open two cierres in a row) - matching only the first one (old
-    // behavior) missed a ghost whenever its marker wasn't first in the string. Same
-    // fix as Swimlane.tsx: check every marker, not just one.
-    const deferredDates = [...(o.notes?.matchAll(/pasado_manana:(\d{4}-\d{2}-\d{2})/g) ?? [])].map((m: RegExpMatchArray) => m[1]);
-    const isGhost = deferredDates.includes(fecha);
-    return !isGhost;
+  // Vista previa del servidor. Los "fantasmas" (pedidos ya pasados a mañana por un
+  // cierre anterior, RN-CAJ-17) no vienen: la API filtra por la fecha real del
+  // pedido. Tampoco vienen papelera ni eliminados por el cliente. MainPage la
+  // invalida con los eventos de socket de pedidos; el intervalo es solo respaldo.
+  const previewQ = useQuery({
+    queryKey: ['cierre-preview', fecha],
+    queryFn: () => api.get<{ data: CierrePreview }>(`/cierre/preview?fecha=${fecha}`).then((r) => r.data),
+    refetchInterval: 15000,
   });
-  const completados = nonPapelera.filter((o) => o.paid || o.status === 'cerrado');
-  const pendingOrders = nonPapelera.filter((o) => !o.paid && o.status !== 'cerrado');
+  const preview = previewQ.data;
+  const previewReady = !!preview && !previewQ.isError;
+  const previewOrders = preview?.orders ?? [];
+  const totales = preview?.totales ?? { efectivo: 0, transferencia: 0, total: 0 };
+  const cobrados = previewOrders.filter((o) => o.clase === 'cobrado');
+  const noSuman = previewOrders.filter((o) => !!NO_SUMA_LABEL[o.clase]);
+  // Exactamente los pendientes que POST /cierre exige decidir (misma regla, RN-CAJ-14).
+  const pendingOrders = previewOrders.filter((o) => o.clase === 'pendiente');
 
   // A pending order tied to a chat drives its ticket's fate on its own - cierre.ts
   // already sets ticket.deferred_to when that order's decision is "manana" - so there's
@@ -57,7 +98,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
   // underneath with their normal per-order decision selects.
   const pendingOrdersWithTicket = pendingOrders.filter((o) => o.ticket_id);
   const pendingOrdersNoTicket = pendingOrders.filter((o) => !o.ticket_id);
-  const groupedTicketIds = new Set(pendingOrdersWithTicket.map((o) => o.ticket_id));
+  const groupedTicketIds = new Set(pendingOrdersWithTicket.map((o) => o.ticket_id as string));
   const ticketGroups = Array.from(groupedTicketIds).map((ticketId) => ({
     ticketId,
     ticketInfo: tickets.find((t: any) => t.id === ticketId),
@@ -91,17 +132,18 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
     }
   }
 
-  // No defaults - user must explicitly choose for each pending order. A saved
-  // draft only pre-fills entries that are STILL pending today - an order that
-  // got decided, then somehow reappeared pending under a stale id, doesn't
-  // silently inherit an old answer meant for something else.
+  // No defaults - user must explicitly choose for each pending order. The draft
+  // pre-fills whatever was saved; only entries for orders/chats that are STILL
+  // pending are ever sent (filtered below), so an id that stopped being pending
+  // never carries an old answer into the cierre. (The pending list now arrives
+  // async from GET /cierre/preview, so it can't be filtered at init anymore.)
   const [decisions, setDecisions] = useState<Record<string, Decision | ''>>(() => {
     const draft = loadDraft().decisions ?? {};
-    return Object.fromEntries(pendingOrders.map((o) => [o.id, (draft[o.id] as Decision) ?? '']));
+    return Object.fromEntries(Object.entries(draft).filter(([, v]) => v === 'manana' || v === 'forzar_cierre')) as Record<string, Decision>;
   });
   const [ticketDecisions, setTicketDecisions] = useState<Record<string, TicketDecision | ''>>(() => {
     const draft = loadDraft().ticketDecisions ?? {};
-    return Object.fromEntries(ticketOnlyRows.map((t: any) => [t.id, (draft[t.id] as TicketDecision) ?? '']));
+    return Object.fromEntries(Object.entries(draft).filter(([, v]) => v === 'manana' || v === 'atendido')) as Record<string, TicketDecision>;
   });
   // Chat opened on top to review before deciding (TicketModal, same overlay
   // class/z-index as this modal's own - painting later in the DOM is what
@@ -116,28 +158,33 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
     } catch { /* localStorage unavailable - draft just won't persist, not fatal */ }
   }, [draftKey, decisions, ticketDecisions]);
 
-  const totalEfectivo = completados
-    .filter((o: any) => ['cash', 'cod'].includes(o.payment_method))
-    .reduce((s: number, o: any) => s + o.items.reduce((ss: number, i: any) => ss + Number(i.price), 0), 0);
-  const totalTransferencia = completados
-    .filter((o: any) => o.payment_method === 'transfer')
-    .reduce((s: number, o: any) => s + o.items.reduce((ss: number, i: any) => ss + Number(i.price), 0), 0);
+  // Decisiones que de verdad viajan: solo de lo que sigue pendiente ahora mismo.
+  const pendingIds = new Set(pendingOrders.map((o) => o.id));
+  const ticketOnlyIds = new Set(ticketOnlyRows.map((t: any) => t.id));
+  const decisionsToSend = Object.fromEntries(
+    Object.entries(decisions).filter(([id, v]) => v && pendingIds.has(id)),
+  ) as Record<string, string>;
+  const ticketDecisionsToSend = Object.fromEntries(
+    Object.entries(ticketDecisions).filter(([id, v]) => v && ticketOnlyIds.has(id)),
+  ) as Record<string, string>;
 
   const allDecided =
+    previewReady &&
     pendingOrders.every((o) => decisions[o.id]) &&
     ticketOnlyRows.every((t: any) => ticketDecisions[t.id]);
 
   const cierreMut = useMutation({
     mutationFn: () => api.post('/cierre', {
       fecha,
-      decisions: Object.fromEntries(Object.entries(decisions).filter(([, v]) => v)),
-      ticket_decisions: Object.fromEntries(Object.entries(ticketDecisions).filter(([, v]) => v)),
+      decisions: decisionsToSend,
+      ticket_decisions: ticketDecisionsToSend,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['cierre-status'] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview'] });
       try { localStorage.removeItem(draftKey); } catch { /* not fatal */ }
       toast('Caja cerrada correctamente');
       setClosedNow(true);
@@ -146,6 +193,7 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
       if (e.code === 'MISSING_DECISIONS' && Array.isArray(e.data?.pending) && e.data.pending.length > 0) {
         const nums = e.data.pending.map((p: any) => `#${p.num} (${p.customer_name})`).join(', ');
         toast(`Faltan decisiones: ${nums}`, true);
+        qc.invalidateQueries({ queryKey: ['cierre-preview', fecha] });
         return;
       }
       if (e.code === 'ALREADY_CLOSED') {
@@ -158,8 +206,13 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
     },
   });
 
+  // Mismos pedidos que el informe del día (sin papelera ni eliminados por el
+  // cliente), así el CSV del modal y el de "Informe del día" coinciden. Las
+  // decisiones van completas (no solo las de pendientes): después de cerrar ya no
+  // queda nada pendiente y el CSV igual debe decir "Cerrar sin cobro".
   function downloadCSV() {
-    downloadCierreCSV(fecha, nonPapelera, decisions);
+    const allDecisions = Object.fromEntries(Object.entries(decisions).filter(([, v]) => v)) as Record<string, string>;
+    downloadCierreCSV(fecha, previewOrders, allDecisions);
   }
 
   const pendingSinDecision = pendingOrders.filter((o) => !decisions[o.id]).length;
@@ -214,42 +267,67 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
               <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <Banknote size={15} color="var(--v)" /> Efectivo + Cobro en casa
               </span>
-              <span style={{ fontWeight: 800 }}>{fmtCOP(totalEfectivo)}</span>
+              <span style={{ fontWeight: 800 }}>{previewReady ? fmtCOP(totales.efectivo) : '…'}</span>
             </div>
             <div className="cierre-row">
               <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <ArrowLeftRight size={15} color="var(--az)" /> Transferencia
               </span>
-              <span style={{ fontWeight: 800 }}>{fmtCOP(totalTransferencia)}</span>
+              <span style={{ fontWeight: 800 }}>{previewReady ? fmtCOP(totales.transferencia) : '…'}</span>
             </div>
             <div className="cierre-total">
               <span>Total recaudado</span>
-              <span>{fmtCOP(totalEfectivo + totalTransferencia)}</span>
+              <span>{previewReady ? fmtCOP(totales.total) : '…'}</span>
             </div>
+            {previewQ.isError && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--r)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <AlertTriangle size={13} /> No se pudo cargar el resumen del servidor.
+                <button className="bsec" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => previewQ.refetch()}>Reintentar</button>
+              </div>
+            )}
           </div>
 
-          {completados.length > 0 && (
+          {cobrados.length > 0 && (
             <div className="cierre-sect">
               <div className="cierre-stit" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <CheckCircle size={13} color="var(--v)" />
-                Pedidos completados ({completados.length})
+                Pedidos cobrados ({cobrados.length})
               </div>
-              {completados.map((o) => {
-                const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
-                return (
-                  <div key={o.id} className="warn-ord" style={{ opacity: 0.75 }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>#{o.num} - {o.customer_name}</div>
-                      <div style={{ fontSize: 12, color: 'var(--gt)' }}>
-                        {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(total)}
-                      </div>
+              {cobrados.map((o) => (
+                <div key={o.id} className="warn-ord" style={{ opacity: 0.75 }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>#{o.num} - {o.customer_name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--gt)' }}>
+                      {fmtCOP(o.total)} · {detallePago(o)}
                     </div>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--v)', background: 'var(--vc)', padding: '4px 10px', borderRadius: 20, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <CheckCircle size={12} /> Completado
-                    </span>
                   </div>
-                );
-              })}
+                  <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--v)', background: 'var(--vc)', padding: '4px 10px', borderRadius: 20, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <CheckCircle size={12} /> Cobrado
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {noSuman.length > 0 && (
+            <div className="cierre-sect">
+              <div className="cierre-stit" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <CircleSlash size={13} color="var(--gt)" />
+                Cerrados que no suman al total ({noSuman.length})
+              </div>
+              {noSuman.map((o) => (
+                <div key={o.id} className="warn-ord" style={{ opacity: 0.75 }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>#{o.num} - {o.customer_name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--gt)' }}>
+                      {fmtCOP(o.total)} · {PAYMENT_LABEL[o.payment_method] ?? o.payment_method}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--a)', background: 'var(--ac)', padding: '4px 10px', borderRadius: 20, whiteSpace: 'nowrap' }}>
+                    {NO_SUMA_LABEL[o.clase] ?? o.clase}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
 
@@ -294,14 +372,13 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
                   </div>
                   <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: '2px solid var(--brd)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {tOrders.map((o) => {
-                      const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
                       const hasDecision = !!decisions[o.id];
                       return (
                         <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 700, fontSize: 13 }}>#{o.num}</div>
                             <div style={{ fontSize: 12, color: 'var(--gt)' }}>
-                              {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(total)}
+                              {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(o.total)}
                             </div>
                           </div>
                           <select
@@ -356,14 +433,13 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
 
               {/* Pedidos sin chat asociado (llamada/en persona) - no hay ticket bajo el cual agrupar */}
               {pendingOrdersNoTicket.map((o) => {
-                const total = o.items.reduce((s: number, i: any) => s + Number(i.price), 0);
                 const hasDecision = !!decisions[o.id];
                 return (
                   <div key={o.id} className="warn-ord" style={{ borderLeft: hasDecision ? '3px solid var(--v)' : '3px solid var(--a)' }}>
                     <div>
                       <div style={{ fontWeight: 700 }}>#{o.num} - {o.customer_name}</div>
                       <div style={{ fontSize: 12, color: 'var(--gt)' }}>
-                        {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(total)}
+                        {STATUS_LABEL[o.status] ?? o.status} · {fmtCOP(o.total)}
                       </div>
                     </div>
                     <select
@@ -380,13 +456,17 @@ export default function CierreCajaModal({ fecha, orders, tickets, onClose }: Pro
                 );
               })}
             </div>
-          ) : (
+          ) : previewReady ? (
             <div style={{ background: 'var(--vc)', borderRadius: 'var(--rad)', padding: '12px 16px', marginBottom: 14, fontSize: 13, fontWeight: 700, color: 'var(--vd)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <CheckCircle size={15} /> Todos los pedidos y chats están resueltos.
             </div>
+          ) : (
+            <div style={{ padding: '12px 16px', marginBottom: 14, fontSize: 13, color: 'var(--gt)' }}>
+              Cargando los pedidos del día…
+            </div>
           )}
 
-          {!allDecided && (pendingOrders.length > 0 || ticketOnlyRows.length > 0) && (
+          {previewReady && !allDecided && (pendingOrders.length > 0 || ticketOnlyRows.length > 0) && (
             <div style={{ background: 'var(--ac)', border: '1px solid var(--a)', borderRadius: 'var(--rad)', padding: '10px 14px', marginBottom: 14, fontSize: 13, color: 'var(--a)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
               <AlertTriangle size={14} /> Decide la acción de cada pedido y chat pendiente para poder cerrar o descargar el informe.
             </div>

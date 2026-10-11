@@ -1,7 +1,7 @@
 ---
 estado: vigente
 verificado: 2026-10-10 @ 17dcc31
-fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/config/ConfigTab.tsx, specs/modulos/*.md]
+fuentes: [apps/api/src/middleware/auth.ts, apps/api/src/routes/*.ts, apps/api/test/cierre-totales.test.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/config/ConfigTab.tsx, specs/modulos/*.md]
 ---
 
 # Actores y permisos
@@ -42,7 +42,7 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 | Cobrar un pedido (pide contraseña del usuario) | ✅ | ✅ | ✅ | ✅ | CAJ |
 | Observaciones en pedidos | ✅ | ✅ | ✅ | ✅ | ORD |
 | Tomar lista (IA) | ✅ | ✅ | ✅ | ✅ | IA |
-| Cierre de caja | ✅ | ✅ | ❌ | ✅ | CAJ |
+| Cierre de caja y su vista previa (`POST /cierre`, `GET /cierre/preview`) | ✅ | ❌ | ❌ | ✅ | CAJ (PREG-008, José 2026-10-10) |
 | Editar un pedido ya bloqueado (cerrado) | ✅ | ❌ | ❌ | ✅ | ORD, CAJ |
 | Cambiar el método o el desglose de pago de un pedido ya cobrado (`403 PAYMENT_CHANGE_ADMIN_ONLY` al encargado) | ✅ | ❌ | ❌ | ✅ | CAJ (RN-CAJ-26) |
 | Marcar crédito pagado, cobro retroactivo | ✅ | ❌ | ❌ | ✅ | CAJ |
@@ -70,7 +70,6 @@ El repartidor al que se *asigna* un pedido es un `Employee` sin login: no es un 
 
 | Caso | Interfaz | API | Dónde |
 |---|---|---|---|
-| Encargado y cierre de caja | No tiene el botón (vive en el Informe, que no ve) | Lo permite | CAJ, PREG-008 |
 | Encargado/domiciliario y "Chats WPP" | No ven la pestaña; sí abren el chat desde el ticket | 403 en `GET /inbox` | INB |
 | Renombrar ticket | Botón apagado (`RENAME_TICKET_UI_ENABLED`) | Admin/dev | INB, PREG-091 |
 | Crear admin | El formulario solo ofrece encargado y domiciliario | Acepta `admin` | ACC |

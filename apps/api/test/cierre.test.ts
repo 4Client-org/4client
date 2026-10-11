@@ -55,18 +55,23 @@ describe('cierre routes', () => {
     const org = await createTestOrg(app.prisma);
     const encargado = await createTestUser(app.prisma, org.id, 'encargado', ENCARGADO_PASS);
     const token = await login(app, encargado.email, ENCARGADO_PASS);
-    return { orgId: org.id, encargadoToken: token };
+    // Solo el admin cierra la caja (PREG-008, decisión de José 2026-10-10): el
+    // encargado sigue creando los pedidos, pero POST /cierre va con un admin.
+    // Token firmado directo (sin /auth/login) por el límite de 10 logins/min.
+    const admin = await createTestUser(app.prisma, org.id, 'admin', 'unused-not-logged-in-0!');
+    const adminToken = app.jwt.sign({ userId: admin.id, orgId: org.id, role: 'admin' }, { expiresIn: '15m' });
+    return { orgId: org.id, encargadoToken: token, adminToken };
   }
 
   it('cierre on a date other than today -> 400 NOT_TODAY (neither future nor past can be closed)', async () => {
-    const { encargadoToken } = await freshOrgAndEncargado();
+    const { encargadoToken, adminToken } = await freshOrgAndEncargado();
     const yesterday = new Date(Date.now() - 5 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const tomorrow = new Date(Date.now() - 5 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     const pastAttempt = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha: yesterday, decisions: {} },
     });
     expect(pastAttempt.statusCode).toBe(400);
@@ -75,7 +80,7 @@ describe('cierre routes', () => {
     const futureAttempt = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha: tomorrow, decisions: {} },
     });
     expect(futureAttempt.statusCode).toBe(400);
@@ -83,7 +88,7 @@ describe('cierre routes', () => {
   });
 
   it('moving a pending order to "manana" moves its fecha to tomorrow and PRESERVES original notes with the pasado_manana marker appended (B3 fix)', async () => {
-    const { encargadoToken } = await freshOrgAndEncargado();
+    const { encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
     const originalNotes = 'Entregar por la puerta trasera, tocar el timbre dos veces';
 
@@ -100,7 +105,7 @@ describe('cierre routes', () => {
     const cierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: {
         fecha,
         decisions: { [order.id]: 'manana' },
@@ -127,7 +132,7 @@ describe('cierre routes', () => {
   });
 
   it('a phone can only ever have one ticket per org (@@unique(org_id, phone)) - deferring to "manana" just re-flags the same row, never forks a second one', async () => {
-    const { orgId, encargadoToken } = await freshOrgAndEncargado();
+    const { orgId, encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
     const tomorrow = new Date(fecha);
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -157,7 +162,7 @@ describe('cierre routes', () => {
     const cierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha, decisions: { [order.id]: 'manana' } },
     });
     expect(cierre.statusCode).toBe(200);
@@ -169,7 +174,7 @@ describe('cierre routes', () => {
   });
 
   it('cierre without a decision for a pending order -> 400 MISSING_DECISIONS', async () => {
-    const { encargadoToken } = await freshOrgAndEncargado();
+    const { encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
 
     const create = await app.inject({
@@ -184,7 +189,7 @@ describe('cierre routes', () => {
     const cierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: {
         fecha,
         decisions: {},
@@ -197,7 +202,7 @@ describe('cierre routes', () => {
   });
 
   it('closing an already-closed day again -> 409 ALREADY_CLOSED, and the day stays closed', async () => {
-    const { encargadoToken } = await freshOrgAndEncargado();
+    const { encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
 
     const create = await app.inject({
@@ -212,7 +217,7 @@ describe('cierre routes', () => {
     const firstCierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
     });
     expect(firstCierre.statusCode).toBe(200);
@@ -220,7 +225,7 @@ describe('cierre routes', () => {
     const secondCierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha, decisions: {} },
     });
     expect(secondCierre.statusCode).toBe(409);
@@ -228,7 +233,7 @@ describe('cierre routes', () => {
   });
 
   it('GET /cierre/status reflects whether the day has been closed, and "forzar_cierre" (cerrar sin cobro) closes the order WITHOUT marking it paid', async () => {
-    const { encargadoToken } = await freshOrgAndEncargado();
+    const { encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
 
     const before = await app.inject({
@@ -250,7 +255,7 @@ describe('cierre routes', () => {
     const cierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
     });
     expect(cierre.statusCode).toBe(200);
@@ -272,7 +277,7 @@ describe('cierre routes', () => {
   });
 
   it('once a day is closed, EVERY order on it is frozen - even one that was never individually locked, purely because the day itself closed', async () => {
-    const { orgId, encargadoToken } = await freshOrgAndEncargado();
+    const { orgId, encargadoToken, adminToken } = await freshOrgAndEncargado();
     const fecha = todayColombiaStr();
 
     const create = await app.inject({
@@ -301,7 +306,7 @@ describe('cierre routes', () => {
     const cierre = await app.inject({
       method: 'POST',
       url: '/api/v1/cierre',
-      headers: authHeader(encargadoToken),
+      headers: authHeader(adminToken),
       payload: { fecha, decisions: { [order.id]: 'forzar_cierre' } },
     });
     expect(cierre.statusCode).toBe(200);
@@ -348,7 +353,7 @@ describe('cierre routes', () => {
     // already close to it; 4 more real logins reliably tipped it into 429.
     // Signing directly skips that route entirely while still producing a token
     // the SAME @fastify/jwt secret verifies as genuine.
-    async function orgWithDirectToken(role: 'encargado' | 'admin' = 'encargado') {
+    async function orgWithDirectToken(role: 'encargado' | 'admin' = 'admin') {
       const org = await createTestOrg(app.prisma);
       const user = await createTestUser(app.prisma, org.id, role, 'unused-not-logged-in-1!');
       const token = app.jwt.sign({ userId: user.id, orgId: org.id, role }, { expiresIn: '15m' });
@@ -356,7 +361,7 @@ describe('cierre routes', () => {
     }
 
     it('a single deferred order becomes #001 tomorrow, not keeping its high original num', async () => {
-      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const { orgId, userId: adminId, token: adminToken } = await orgWithDirectToken();
       const fecha = todayColombiaStr();
 
       // Directly seed a high num (013), same as if this were the 13th order of
@@ -373,7 +378,7 @@ describe('cierre routes', () => {
       const order = await app.prisma.order.findFirstOrThrow({ where: { org_id: orgId, num: '013' } });
 
       const cierre = await app.inject({
-        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
         payload: { fecha, decisions: { [order.id]: 'manana' } },
       });
       expect(cierre.statusCode).toBe(200);
@@ -383,7 +388,7 @@ describe('cierre routes', () => {
     });
 
     it('#13 and #24 both deferred the same cierre become #001 and #002 tomorrow, in that order - never keeping 13/24', async () => {
-      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const { orgId, userId: adminId, token: adminToken } = await orgWithDirectToken();
       const fecha = todayColombiaStr();
 
       const order13 = await app.prisma.order.create({
@@ -404,7 +409,7 @@ describe('cierre routes', () => {
       });
 
       const cierre = await app.inject({
-        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
         payload: { fecha, decisions: { [order13.id]: 'manana', [order24.id]: 'manana' } },
       });
       expect(cierre.statusCode).toBe(200);
@@ -419,7 +424,7 @@ describe('cierre routes', () => {
     });
 
     it('deferred orders continue AFTER whatever already exists on tomorrow (e.g. an overnight form order), not always starting at 1', async () => {
-      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const { orgId, userId: adminId, token: adminToken } = await orgWithDirectToken();
       const fecha = todayColombiaStr();
       const tomorrow = new Date(fecha);
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -446,7 +451,7 @@ describe('cierre routes', () => {
       });
 
       const cierre = await app.inject({
-        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
         payload: { fecha, decisions: { [order.id]: 'manana' } },
       });
       expect(cierre.statusCode).toBe(200);
@@ -458,7 +463,7 @@ describe('cierre routes', () => {
     });
 
     it('a brand-new order created on tomorrow AFTER cierre defers into it continues the consecutive count - no gap, no collision', async () => {
-      const { orgId, userId: adminId, token: encargadoToken } = await orgWithDirectToken();
+      const { orgId, userId: adminId, token: adminToken } = await orgWithDirectToken();
       const fecha = todayColombiaStr();
       const tomorrow = new Date(fecha);
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -474,13 +479,13 @@ describe('cierre routes', () => {
       });
 
       const cierre = await app.inject({
-        method: 'POST', url: '/api/v1/cierre', headers: authHeader(encargadoToken),
+        method: 'POST', url: '/api/v1/cierre', headers: authHeader(adminToken),
         payload: { fecha, decisions: { [order13.id]: 'manana' } },
       });
       expect(cierre.statusCode).toBe(200);
 
       const next = await app.inject({
-        method: 'POST', url: '/api/v1/orders', headers: authHeader(encargadoToken),
+        method: 'POST', url: '/api/v1/orders', headers: authHeader(adminToken),
         payload: sampleOrderPayload({ fecha: tomorrowStr }),
       });
       expect(next.statusCode).toBe(201);

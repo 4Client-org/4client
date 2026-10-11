@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { acquireDayLock } from '../lib/orderNumbering.js';
+import { bolsasDePedido, calcularBolsas, claseCierre, orderTotal, pendientesWhere } from '../lib/cierreTotals.js';
 
 export default async function cierreRoutes(fastify: FastifyInstance) {
   // GET /api/v1/cierre/status?fecha=2026-06-15 - any authenticated role (encargado
@@ -20,8 +21,67 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
     return reply.send({ data: { cerrado: !!dailyClose, closedAt: dailyClose?.closed_at ?? null } });
   });
 
-  // POST /api/v1/cierre - admin y encargado
-  fastify.post('/', { preHandler: [authenticate, requireRole('admin', 'encargado')] }, async (req, reply) => {
+  // GET /api/v1/cierre/preview?fecha=2026-06-15 - solo admin (dev pasa), igual que
+  // POST /. Vista previa de SOLO LECTURA de lo que el cierre va a guardar: usa la
+  // misma regla de bolsas (lib/cierreTotals.ts) que POST / y que GET /dashboard,
+  // para que lo que ve quien cierra, lo que queda en DailyClose y lo que muestra el
+  // informe al día siguiente sean exactamente lo mismo. El modal de cierre ya no
+  // suma por su cuenta: pinta lo que devuelve esto.
+  fastify.get('/preview', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
+    const query = z.object({ fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'fecha requerida (AAAA-MM-DD)', code: 'VALIDATION_ERROR' });
+    const fecha = new Date(query.data.fecha);
+
+    const [orders, dailyClose] = await Promise.all([
+      // Mismo universo que GET /dashboard: pedidos con esa fecha REAL (los
+      // "fantasmas" pasados a mañana no, RN-CAJ-17), sin papelera ni eliminados por
+      // el cliente.
+      fastify.prisma.order.findMany({
+        where: { org_id: req.user.orgId, fecha, status: { not: 'papelera' }, client_deleted: false },
+        select: {
+          id: true, num: true, ticket_id: true, customer_name: true, client_contact_name: true,
+          customer_phone: true, address: true, status: true, payment_method: true, paid: true,
+          locked: true, client_deleted: true, split_cash: true, split_transfer: true,
+          items: { select: { product_name: true, quantity_label: true, price: true }, orderBy: { sort_order: 'asc' } },
+        },
+        orderBy: { num: 'asc' },
+      }),
+      fastify.prisma.dailyClose.findUnique({
+        where: { org_id_fecha: { org_id: req.user.orgId, fecha } },
+        select: { closed_at: true },
+      }),
+    ]);
+
+    const totales = calcularBolsas(orders);
+    return reply.send({
+      data: {
+        fecha: query.data.fecha,
+        cerrado: !!dailyClose,
+        closedAt: dailyClose?.closed_at ?? null,
+        totales,
+        orders: orders.map((o) => {
+          const b = bolsasDePedido(o);
+          return {
+            id: o.id, num: o.num, ticket_id: o.ticket_id,
+            customer_name: o.customer_name, client_contact_name: o.client_contact_name,
+            customer_phone: o.customer_phone, address: o.address,
+            status: o.status, payment_method: o.payment_method, paid: o.paid,
+            items: o.items.map((i) => ({ product_name: i.product_name, quantity_label: i.quantity_label, price: Number(i.price) })),
+            total: orderTotal(o),
+            efectivo: b.efectivo,
+            transferencia: b.transferencia,
+            dividido: o.split_cash != null && o.split_transfer != null,
+            clase: claseCierre(o),
+          };
+        }),
+      },
+    });
+  });
+
+  // POST /api/v1/cierre - solo admin (dev pasa por requireRole). Decisión de José
+  // 2026-10-10 (PREG-008): el encargado ya no cierra la caja; antes la API lo
+  // aceptaba aunque la interfaz nunca le mostró el botón.
+  fastify.post('/', { preHandler: [authenticate, requireRole('admin')] }, async (req, reply) => {
     const body = z.object({
       fecha: z.string(),
       // Only 2 real choices for a pending order at cierre time: push it to tomorrow,
@@ -67,7 +127,7 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
     // comment on that flag). It still shows on the live board in red so staff can
     // review/restore it any time, just not as a cierre blocker.
     const pendientes = await fastify.prisma.order.findMany({
-      where: { org_id: req.user.orgId, fecha, paid: false, status: { notIn: ['cerrado', 'papelera'] }, client_deleted: false },
+      where: pendientesWhere(req.user.orgId, fecha),
       include: { items: true },
     });
 
@@ -94,24 +154,8 @@ export default async function cierreRoutes(fastify: FastifyInstance) {
       include: { items: true },
     });
 
-    let totalEfectivo = 0;
-    let totalTransferencia = 0;
-    todosPagados.forEach(o => {
-      const tot = o.items.reduce((s, i) => s + Number(i.price), 0);
-      // Split payment (part efectivo, part transferencia) routes each piece
-      // into its own bucket instead of dumping the whole total into one -
-      // checked first since a split order's payment_method is otherwise just
-      // whatever it was before (cash/transfer/cod), which would double-count
-      // or misattribute the split amount if this branch were skipped.
-      if (o.split_cash != null && o.split_transfer != null) {
-        totalEfectivo += Number(o.split_cash);
-        totalTransferencia += Number(o.split_transfer);
-      } else if (o.payment_method === 'cash' || o.payment_method === 'cod') {
-        totalEfectivo += tot;
-      } else if (o.payment_method === 'transfer') {
-        totalTransferencia += tot;
-      }
-    });
+    // Regla de bolsas compartida con GET /preview y GET /dashboard (RN-CAJ-19).
+    const { efectivo: totalEfectivo, transferencia: totalTransferencia } = calcularBolsas(todosPagados);
 
     const tomorrow = new Date(fecha);
     tomorrow.setDate(tomorrow.getDate() + 1);
