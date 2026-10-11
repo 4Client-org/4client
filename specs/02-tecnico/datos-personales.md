@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ d566e40
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/prisma/schema.prisma, apps/api/src/routes/inbox.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/auth.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/formLink.ts, apps/api/src/server.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/email.ts, apps/api/src/services/storage.ts, apps/web/public/legal/politica-privacidad.html]
 ---
 
@@ -51,7 +51,7 @@ Leyenda de visibilidad: **admin**, **encargado**, **domiciliario**, **dev** como
 |---|---|---|---|---|---|
 | Nombre y correo de usuarios | `User.name`, `User.email` (y `username`, sin uso todavía) | Inicio de sesión, aviso de bloqueo, 2FA del dev | admin (los de su organización), dev | Mientras exista la cuenta; desactivar no borra y el correo queda ocupado (PREG-059) | No hay borrado desde la interfaz |
 | Contraseña | `User` (hash) | Autenticación | Nadie (solo hash) | Mientras exista la cuenta | — |
-| Sesiones | `RefreshToken` (hash SHA-256) | Mantener la sesión 7 días | Nadie | Los vencidos se borran en el siguiente login exitoso del usuario (`seguridad-y-privacidad.md` §1) | Idem |
+| Sesiones | `RefreshToken` (hash SHA-256) | Mantener la sesión 7 días (admin y dev: solo la sesión vigente; sus otros refresh se borran en cada login) | Nadie | Los vencidos se borran en el siguiente login exitoso del usuario (`seguridad-y-privacidad.md` §1) | Idem |
 | Código 2FA | `LoginVerificationCode` | Segundo factor del `dev` | Nadie | Sin purga automática (`seguridad-y-privacidad.md` §11) | — |
 | Nombre y teléfono de empleados (domiciliarios) | `Employee.name`, `Employee.phone` | Asignar entregas | admin, encargado y domiciliario (lectura), dev | Un empleado desactivado queda en la base (PREG-061) | No hay borrado |
 | Registro de auditoría | `AuditLog` (actor, acción, destino, `metadata`) | Trazabilidad de acciones sensibles | Solo dev, por la base | Indefinida | No se borra. No guarda IP. `metadata` de la edición de usuarios guarda el cuerpo recibido, que puede incluir el correo (PREG-060) |

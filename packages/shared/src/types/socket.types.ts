@@ -22,6 +22,7 @@ export interface ServerToClientEvents {
   // Sin payload a propósito - cada listener (useMessageTemplates.ts) solo
   // invalida su query y vuelve a pedir el set completo, igual que product:changed.
   'message-templates:changed': () => void;
+  'session:replaced': () => void;
 }
 
 export interface ClientToServerEvents {

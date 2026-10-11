@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { api, consumeSessionReplaced } from '../lib/api';
 import { useAuthStore } from '../store/auth';
 import PasswordInput from '../components/ui/PasswordInput';
 import { isDevEnvironment } from '../lib/apiBase';
@@ -17,6 +17,11 @@ export default function LoginPage() {
   // "resend" a code (logging in again mints a fresh one).
   const [pending2fa, setPending2fa] = useState<{ userId: string } | null>(null);
   const [code, setCode] = useState('');
+
+  // Sesión única de admin y dev: si otra sesión desplazó a esta, se explica por qué.
+  useEffect(() => {
+    if (consumeSessionReplaced()) setError('Tu sesión se cerró porque se inició en otro dispositivo');
+  }, []);
 
   function applySession(apiUser: any, accessToken: string) {
     setAuth(

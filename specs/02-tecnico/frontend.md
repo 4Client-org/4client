@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/web/src/App.tsx, apps/web/src/main.tsx, apps/web/src/pages, apps/web/src/components, apps/web/src/hooks, apps/web/src/lib, apps/web/src/store/auth.ts, apps/web/vite.config.ts, apps/web/public, packages/shared]
 ---
 
@@ -26,7 +26,7 @@ flowchart TD
 
 | Archivo | Ruta | Quién | Notas |
 |---|---|---|---|
-| `LoginPage.tsx` | cualquier ruta sin sesión | personal | Incluye el paso del código 2FA (solo rol `dev`). |
+| `LoginPage.tsx` | cualquier ruta sin sesión | personal | Incluye el paso del código 2FA (solo rol `dev`) y el aviso "Tu sesión se cerró porque se inició en otro dispositivo" cuando la sesión única de admin/dev lo desplazó (RN-ACC-28). |
 | `MainPage.tsx` | cualquier ruta con sesión | personal | Pestañas por rol, selector de fecha, sala de sockets, cabecera con el logo fijo (DT-002). |
 | `ClientFormPage.tsx` | `/form?t=<token>` | cliente final | Sin sesión; guarda un borrador en `localStorage` y un identificador de dispositivo por link. |
 | `FacturaPage.tsx` | `/factura` | cliente final | Descarga de factura por link de 24 h; sin sesión. |
@@ -65,7 +65,7 @@ Convención: todo modal que deba esperar antes de una recarga automática debe u
 
 | Archivo | Función |
 |---|---|
-| `api.ts`, `apiBase.ts`, `socket.ts` | Cliente HTTP con refresh, elección de la URL de la API y conexión Socket.IO (ver §6) |
+| `api.ts`, `apiBase.ts`, `socket.ts` | Cliente HTTP con refresh (y marca de sesión desplazada, `markSessionReplaced`/`consumeSessionReplaced`), elección de la URL de la API y conexión Socket.IO (ver §6) |
 | `format.ts`, `formatPhone.ts`, `normalize.ts` | Formato de pesos (`fmtCOP`), fechas de Bogotá (`todayStr`), etiquetas de estado y pago; teléfonos (oculta BSUID y marcadores `no-…`); normalización de texto para búsquedas |
 | `tomarLista.ts` | Convierte lo que devuelve la IA en líneas del borrador de un pedido |
 | `catalogImage.ts` | Dibuja la imagen del catálogo en un `<canvas>` (sin fotos por producto) |

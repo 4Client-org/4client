@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, start.sh, apps/api/src/lib/businessDate.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts]
 ---
 
@@ -126,7 +126,7 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 5. SQL a mano (reglas, triggers, extensiones, índices de expresión, `DO $$` de fusión) va en la migración con un comentario del porqué; Prisma no lo ve.
 6. Toda migración de esquema es cambio clase C: CH aprobado antes (principio 10).
 
-## 10. Historia de migraciones (57, por hito)
+## 10. Historia de migraciones (58, por hito)
 
 | Hito | Fechas (2026) | Migraciones | Qué introdujo |
 |---|---|---|---|
@@ -142,8 +142,9 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 | Aislamiento entre negocios | 9–19 sep | `wpp_meta_phone_id_unique`, `ticket_bsuid_org_scoped_unique` | Número de WhatsApp único, BSUID por organización. |
 | Plantillas | 6 oct | `org_message_templates` | Textos editables por organización. |
 | Fechas del crédito | 10 oct | `order_credit_paid_at` | `orders.credit_paid_at` (nullable, aditiva): cuándo se saldó un crédito. Rellena los créditos ya saldados con la hora del asiento "Crédito pagado." del historial. |
+| Sesión única | 11 oct | `user_session_id` | `users.session_id` (`VARCHAR(40)`, nullable, aditiva): id de la sesión vigente de admin y dev; nulo = aún sin sesión única aplicada. |
 
-Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls apps/api/prisma/migrations | grep -c '^2'` (57).
+Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls apps/api/prisma/migrations | grep -c '^2'` (58).
 
 ## 11. Pendientes
 

@@ -28,7 +28,8 @@ Lo que `dev` tiene y `main` no, y viajará en el próximo release:
 - **Pulido profesional de las specs** (R-0015): cada módulo con alcance, dependencias y criterios de aceptación; siete documentos nuevos (modelo de datos, amenazas, datos personales, riesgos, observabilidad y continuidad, pantallas por rol, escenarios de punta a punta). Nuevas PREG-130 a PREG-136 y DT-043 a DT-048.
 - **Pasar el repositorio a privado** (organización `4Client-org`): planeado para la noche del 2026-10-09. Orden: cambiar la fuente de `4client-api-prod` a la GitHub App → confirmar acceso de Cloudflare Pages → hacer el repo privado → verificar deploy de dev → redesplegar prod en un momento tranquilo. Reversa: volver a hacerlo público. El repo `fruver-san-gabriel-web` (política antigua + landing) se queda público.
 
-- **Ajustes de CH-0001** (R-0024): cierre que congela todo, edición de cobrados, totales únicos, solo admin cierra, corte inmediato de acceso, formulario con fecha del link. Implementados y probados con 321 tests; en `dev` para que José los pruebe, **no están en prod**. Migración nueva aditiva (`credit_paid_at`).
+- **Ajustes de CH-0001** (R-0024): cierre que congela todo, edición de cobrados, totales únicos, solo admin cierra, corte inmediato de acceso, formulario con fecha del link. Implementados y probados con 321 tests (328 con la sesión única); en `dev` para que José los pruebe, **no están en prod**. Migración nueva aditiva (`credit_paid_at`).
+- **Sesión única de administrador y dev** (R-0025, CH-0002): un login nuevo cierra las sesiones anteriores; el encargado y el domiciliario conservan varias. Implementada y probada (328 tests); en `dev`, **no está en prod**. Migración nueva aditiva (`users.session_id`).
 - **Ramas:** solo existen `dev` y `main`, en local y en GitHub (limpieza del 2026-10-10, R-0016).
 
 ## Próximas prioridades (propuestas, a confirmar con José)

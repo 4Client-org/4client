@@ -1,12 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/vitest.config.ts, apps/api/test/globalSetup.ts, apps/api/test/helpers.ts, apps/api/test/*.test.ts, apps/api/package.json, apps/web/package.json, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/server.ts, apps/api/prisma/schema.prisma, apps/api/prisma/migrations, Dockerfile, start.sh]
 ---
 
 # Calidad y pruebas
 
-> **Resumen.** Una sola suite (Vitest, 321 tests, API contra Postgres real); la web solo se verifica con tipos y build. CI corre typecheck, tests y build en cada push o PR a `dev`/`main`. El respaldo diario de la base es un workflow aparte. Los huecos conocidos están en §4 y los pendientes al final.
+> **Resumen.** Una sola suite (Vitest, 328 tests, API contra Postgres real); la web solo se verifica con tipos y build. CI corre typecheck, tests y build en cada push o PR a `dev`/`main`. El respaldo diario de la base es un workflow aparte. Los huecos conocidos están en §4 y los pendientes al final.
 
 Cómo se prueba el sistema, qué cubre y qué no la suite, qué corre en CI, cómo se respalda la base y qué requisitos no funcionales se observan en el código. Principio 11: toda regla de dinero, permisos o tenant necesita un test contra **Postgres real**; los servicios externos se simulan.
 
@@ -16,7 +16,7 @@ Cómo se prueba el sistema, qué cubre y qué no la suite, qué corre en CI, có
 - **Real:** PostgreSQL (una base dedicada a tests, con todas las migraciones aplicadas), Prisma, el registro de plugins de Fastify y las rutas. Las peticiones usan `fastify.inject()`, sin red *(código)*.
 - **Simulado:**
   - **Meta, proveedores de IA:** se reemplaza `global.fetch`, con `vi.spyOn(global, 'fetch')` (IA, Tomar lista) o asignándolo a mano y restaurándolo después (`webhook`, `inbox`, `public`).
-  - **Correo:** `vi.mock('../src/services/email.js')` en `auth.test.ts` y `auth-2fa.test.ts`.
+  - **Correo:** `vi.mock('../src/services/email.js')` en `auth.test.ts`, `auth-2fa.test.ts` y `session-unica.test.ts`.
   - **Reloj:** `vi.spyOn(Date, 'now')` para el corte de las 21:00 (`webhook.test.ts`) y `vi.useFakeTimers` + `vi.setSystemTime` para el enfriamiento de 90 s de la IA (`ai-providers.test.ts`).
   - **Sockets:** `vi.spyOn(app.io, 'to')` para comprobar los eventos emitidos (`inbox.test.ts`).
 - **Datos de prueba:** cada test crea su organización y sus usuarios con sufijos aleatorios (`helpers.ts › createTestOrg`, `createTestUser`, bcrypt costo 12), así que no hace falta limpiar la base entre corridas *(código)*.
@@ -46,7 +46,7 @@ Consecuencia: los límites por usuario, la cabecera HSTS, el rechazo por HTTP, `
 
 ## 3. Archivos de test
 
-Conteo de bloques `it(` por archivo, hecho sobre el código: **24 archivos, 321 tests** (con `it.each` expandidos, como los cuenta `vitest list`).
+Conteo de bloques `it(` por archivo, hecho sobre el código: **25 archivos, 328 tests** (con `it.each` expandidos, como los cuenta `vitest list`).
 
 | Archivo | Tests | Qué cubre |
 |---|---|---|
@@ -72,6 +72,7 @@ Conteo de bloques `it(` por archivo, hecho sobre el código: **24 archivos, 321 
 | `orders.test.ts` | 38 | Crear y editar pedidos, aislamiento por organización, historial, cobro (contraseña, bloqueo, dividido, crédito, $0), pedido bloqueado y día cerrado, observaciones, cobro en casa |
 | `products-bulk-price.test.ts` | 4 | `PATCH /products/bulk-price`: otra organización, precio negativo, rol, lista vacía |
 | `public.test.ts` | 57 | Formulario: enviar y fusionar, estados editables, link de 24 h, revocación, reemplazo, "bloquear todos", tope diario, atribución, día cerrado, borrado por el cliente, consentimiento, último pedido |
+| `session-unica.test.ts` | 7 | Sesión única de admin y dev: un segundo login cierra la anterior al instante (admin y dev), el refresh viejo falla sin tumbar a la nueva, renovar conserva el `sid`, encargado y domiciliario conservan varias sesiones, un token sin `sid` vale hasta el siguiente login |
 | `tickets.test.ts` | 2 | Orden de `GET /tickets` por primer mensaje del día |
 | `webhook.test.ts` | 18 | Handshake, recibos de estado, bienvenida y aviso una vez por ticket, redirección, sin teléfono, BSUID, `raw_payload`, multimedia y ubicación sin descarga, corte de las 21:00 |
 
@@ -87,7 +88,7 @@ Conteo de bloques `it(` por archivo, hecho sobre el código: **24 archivos, 321 
 | Productos: crear, editar, borrar | Solo `bulk-price` (y un `GET` dentro de DevTools) |
 | `inbox.ts`: `GET /search`, `GET /:ticketId/messages/older`, `send-video` | — |
 | `dev.ts`: `/seed`, `/env-status`, `/storage-test`, `/health`; `GET /config/org` | — |
-| Transversal | HMAC del webhook, `lib/crypto.ts` (cifrado y formatos), `plugins/socket.ts` (autenticación, salas, desconexión), `lib/sanitize.ts`, límites por ruta y por usuario, cabeceras HTTP |
+| Transversal | HMAC del webhook, `lib/crypto.ts` (cifrado y formatos), `plugins/socket.ts` (autenticación, salas, desconexión; incluido el rechazo por `sid` y el evento `session:replaced`), el aviso de sesión desplazada en la web, `lib/sanitize.ts`, límites por ruta y por usuario, cabeceras HTTP |
 | Web | Toda la aplicación React (sin suite) |
 
 ## 5. CI (`.github/workflows/ci.yml`)

@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import { Server } from 'socket.io';
 import { config } from '../config.js';
+import { hasSingleSession } from '../middleware/auth.js';
 import type { ServerToClientEvents, ClientToServerEvents } from '@4client/shared';
 
 declare module 'fastify' {
@@ -26,7 +27,7 @@ export default fp(async (fastify) => {
     if (!token) return next(new Error('No autorizado'));
 
     try {
-      const payload = fastify.jwt.verify<{ userId: string; orgId: string; role: string; exp: number }>(token);
+      const payload = fastify.jwt.verify<{ userId: string; orgId: string; role: string; sid?: string; exp: number }>(token);
       // Reject form-link tokens (routes/public.ts) - same secret, different payload shape
       // (no userId/role). Without this, a client's form link could open a socket and join
       // their org's room, eavesdropping on every order/ticket event in real time.
@@ -35,9 +36,13 @@ export default fp(async (fastify) => {
       // distinto al del token, no puede abrir socket aunque su JWT siga vigente.
       const current = await fastify.prisma.user.findUnique({
         where: { id: payload.userId },
-        select: { active: true, role: true, org_id: true },
+        select: { active: true, role: true, org_id: true, session_id: true },
       });
       if (!current || !current.active || current.role !== payload.role || current.org_id !== payload.orgId) {
+        return next(new Error('Token inválido'));
+      }
+      // Sesión única de admin y dev (ver middleware/auth.ts).
+      if (hasSingleSession(current.role) && current.session_id && payload.sid !== current.session_id) {
         return next(new Error('Token inválido'));
       }
       socket.data.user = payload;

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
@@ -32,9 +32,9 @@ Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 6 · DSH
 
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
-| POST | `/api/v1/auth/login` | public | 10/min | Correo + contraseña. Entrega access token y cookie `rf`, o pide el código 2FA si el usuario es `dev` y `REQUIRE_2FA` está activo. |
+| POST | `/api/v1/auth/login` | public | 10/min | Correo + contraseña. Entrega access token y cookie `rf`, o pide el código 2FA si el usuario es `dev` y `REQUIRE_2FA` está activo. Si el usuario es `admin` o `dev`, deja vigente solo esta sesión y cierra las anteriores (evento `session:replaced`, RN-ACC-27). |
 | POST | `/api/v1/auth/login/verify-code` | public | 20/min | Segundo paso del 2FA con el código enviado por correo. |
-| POST | `/api/v1/auth/refresh` | public (cookie `rf` + `X-Requested-With`) | 20/min | Rota el refresh token y entrega un access token nuevo. Detecta reutilización (`TOKEN_REUSE_DETECTED`). |
+| POST | `/api/v1/auth/refresh` | public (cookie `rf` + `X-Requested-With`) | 20/min | Rota el refresh token y entrega un access token nuevo (conserva el `sid` de admin/dev). Detecta reutilización (`TOKEN_REUSE_DETECTED`). |
 | POST | `/api/v1/auth/logout` | auth | — | Revoca el refresh token y borra la cookie. |
 | GET | `/api/v1/auth/me` | auth | — | Perfil del usuario en sesión. |
 | GET | `/api/v1/users` | admin | — | Usuarios del negocio (un admin no ve cuentas `dev`). |
@@ -206,9 +206,9 @@ grep -nE "rateLimit|bodyLimit" apps/api/src/routes/*.ts
 ### Conexión y salas (`apps/api/src/plugins/socket.ts`)
 
 - El servidor Socket.IO comparte el puerto HTTP de Fastify. CORS: los orígenes de `FRONTEND_URL`, métodos GET/POST. El cliente solo usa transporte `websocket` (`apps/web/src/lib/socket.ts`).
-- **Autenticación en el handshake:** token en `handshake.auth.token` (o cabecera `Authorization: Bearer`), verificado con `fastify.jwt.verify`. Sin token → "No autorizado". Token inválido o **sin `userId`/`role`** (token de link de formulario) → "Token inválido".
+- **Autenticación en el handshake:** token en `handshake.auth.token` (o cabecera `Authorization: Bearer`), verificado con `fastify.jwt.verify`. Sin token → "No autorizado". Token inválido o **sin `userId`/`role`** (token de link de formulario) → "Token inválido". Un `admin` o `dev` con `session_id` registrado cuyo `sid` no coincide (sesión desplazada, RN-ACC-27) → también "Token inválido".
 - **Vencimiento:** al conectar se programa una desconexión para el instante `exp` del JWT (15 min). El cliente refresca y reconecta en `connect_error`.
-- **Revocación:** cada socket entra solo a `user:<userId>`; `fastify.disconnectUserSockets(userId)` lo corta cuando se desactiva el usuario o se le cambia la contraseña (`routes/users.ts`).
+- **Revocación:** cada socket entra solo a `user:<userId>`; `fastify.disconnectUserSockets(userId)` lo corta cuando se desactiva el usuario o se le cambia la contraseña (`routes/users.ts`) y cuando un admin o dev inicia una sesión nueva (`auth.ts › issueSession`, tras emitirle `session:replaced`).
 
 | Sala | Cómo se entra | Uso |
 |---|---|---|
@@ -232,6 +232,7 @@ Eventos cliente → servidor: `join:org(orgId)` y `join:date(fecha)`. `MainPage`
 | `cierre:done` | `{ fecha }` | `cierre.ts › POST /` | `MainPage` (invalida todas las fechas) |
 | `product:changed` | `{ id }` o `{ bulk: true }` | `products.ts › POST /`, `PATCH /:id`, `DELETE /:id`, `PATCH /bulk-price` | `useProducts` |
 | `message-templates:changed` | sin payload | `config.ts › PUT /message-templates` | `useMessageTemplates` |
+| `session:replaced` | sin payload | `auth.ts › issueSession` (login de un admin o dev), a la sala `user:<id>`; no va a `org:<id>` | `lib/socket.ts` (cierra la sesión y muestra el aviso en el login, RN-ACC-28) |
 
 Flujo típico (mensaje entrante de WhatsApp):
 

@@ -79,6 +79,10 @@ model User {
   role          String    @db.VarChar(20)
   active        Boolean   @default(true)
   last_login    DateTime? @db.Timestamptz
+  // Sesión única (solo admin y dev): id de la sesión vigente; un login nuevo lo
+  // reemplaza y las sesiones anteriores dejan de servir. Nulo = sin sesión única
+  // aplicada todavía (cuentas que no han vuelto a entrar) o rol que no la usa.
+  session_id    String?   @db.VarChar(40)
   created_at    DateTime  @default(now()) @db.Timestamptz
   // Bloqueo temporal por fuerza bruta - independiente del rate-limit HTTP (que
   // por sí solo no alcanza a proteger una cuenta específica contra intentos

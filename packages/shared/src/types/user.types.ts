@@ -15,6 +15,8 @@ export interface AuthPayload {
   userId: string;
   orgId: string;
   role: UserRole;
+  // Id de sesión: solo admin y dev (sesión única, 2026-10-10). Los demás roles no lo llevan.
+  sid?: string;
 }
 
 export interface LoginResponse {

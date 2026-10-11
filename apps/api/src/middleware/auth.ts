@@ -8,6 +8,12 @@ declare module '@fastify/jwt' {
   }
 }
 
+// Sesión única (decisión de José 2026-10-10): solo administrador y dev. El encargado
+// y el domiciliario pueden tener varias sesiones abiertas a la vez.
+export function hasSingleSession(role: string): boolean {
+  return role === 'admin' || role === 'dev';
+}
+
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   try {
     await req.jwtVerify();
@@ -27,10 +33,16 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
     // emite un token nuevo con el rol vigente (o falla si la cuenta está desactivada).
     const current = await req.server.prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { active: true, role: true, org_id: true },
+      select: { active: true, role: true, org_id: true, session_id: true },
     });
     if (!current || !current.active || current.role !== req.user.role || current.org_id !== req.user.orgId) {
       return reply.status(401).send({ error: 'No autorizado', code: 'UNAUTHORIZED' });
+    }
+    // Sesión única de admin y dev: si ya hay una sesión vigente registrada, el token
+    // debe ser de ella. Un token sin `sid` (anterior a esta regla) sigue valiendo solo
+    // mientras la cuenta no haya iniciado sesión de nuevo (session_id nulo).
+    if (hasSingleSession(current.role) && current.session_id && req.user.sid !== current.session_id) {
+      return reply.status(401).send({ error: 'Tu sesión se cerró porque se inició en otro dispositivo', code: 'SESSION_REPLACED' });
     }
   } catch {
     reply.status(401).send({ error: 'No autorizado', code: 'UNAUTHORIZED' });

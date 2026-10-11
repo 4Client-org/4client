@@ -64,6 +64,7 @@ Preparar el sistema para un segundo cliente y endurecer la operación.
 | 40 | **[Hecho en dev, CH-0001]** **El formulario del cliente muestra "NO HAY"** en los productos agotados, igual que el catálogo de WhatsApp. | José 2026-10-10 (PREG-052). | FRM, CAT |
 | 41 | **Bucket de facturas privado:** revisar en Cloudflare R2 que no tenga acceso público y que los PDF solo se abran por la aplicación (link con vencimiento de 24 h y revocación). Si hoy es público, dejarlo privado y servir por la app. | José 2026-10-10 (PREG-095): el bucket no debe permitir lecturas públicas; un acceso directo saltaría el vencimiento y la revocación del link. | FAC, OPS |
 | 42 | **Mantener las versiones documentadas al día:** cuando se actualicen contenedores o el VPS (PostgreSQL, Node, Docker, kernel), actualizar `04-operacion/entornos-y-despliegue.md` en la misma rama. Versiones leídas el 2026-10-10 y ya anotadas. | José 2026-10-10 (PREG-092): la documentación debe seguir a la infraestructura. | OPS |
+| 43 | **[Hecho en dev, CH-0002]** **Sesión única para administrador y dev:** un login nuevo cierra las sesiones anteriores; el encargado y el domiciliario pueden tener varias; sin aviso por correo (queda como idea futura). | José 2026-10-10: si alguien compromete la cuenta del administrador o de `dev`, no puede convivir con el dueño. | ACC |
 
 ## Después
 

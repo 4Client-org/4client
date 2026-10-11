@@ -3,6 +3,19 @@ import { resolveApiBase } from './apiBase';
 
 const BASE = resolveApiBase() + '/api/v1';
 
+// Motivo de un cierre de sesión forzado (sesión única), para que el login lo muestre.
+const REPLACED_KEY = 'session_replaced';
+export function markSessionReplaced() {
+  try { sessionStorage.setItem(REPLACED_KEY, '1'); } catch { /* sin almacenamiento */ }
+}
+export function consumeSessionReplaced(): boolean {
+  try {
+    const v = sessionStorage.getItem(REPLACED_KEY) === '1';
+    sessionStorage.removeItem(REPLACED_KEY);
+    return v;
+  } catch { return false; }
+}
+
 // Prevent concurrent refresh calls - all 401s share one in-flight refresh
 let refreshPromise: Promise<boolean> | null = null;
 
@@ -30,6 +43,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // attempt anyway, which always failed and overwrote the real "Credenciales
   // incorrectas" server message with a generic "UNAUTHORIZED" error.
   if (res.status === 401 && token) {
+    // Sesión única de admin y dev: otra sesión nueva reemplazó a esta. No se intenta
+    // renovar; se cierra y se deja el motivo para mostrarlo en el login.
+    const body401 = await res.clone().json().catch(() => null);
+    if (body401?.code === 'SESSION_REPLACED') {
+      markSessionReplaced();
+      useAuthStore.getState().clearAuth();
+      throw new Error('UNAUTHORIZED');
+    }
     const refreshed = await tryRefresh();
     if (refreshed) return request<T>(path, options);
     useAuthStore.getState().clearAuth();

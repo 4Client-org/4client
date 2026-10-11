@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0025 — Sesión única para administrador y dev (CH-0002)
+- **Fecha / rama:** 2026-10-10, `feature/sesion-unica-admin`
+- **Qué cambió:** un login nuevo de un administrador o de `dev` cierra al instante sus sesiones anteriores (HTTP y tiempo real) y deja vigente solo la nueva; la sesión desplazada ve "Tu sesión se cerró porque se inició en otro dispositivo". El encargado y el domiciliario conservan varias sesiones. Sin aviso por correo. Migración aditiva `users.session_id`.
+- **Por qué:** pedido de José (2026-10-10): una cuenta de administrador comprometida no debe poder convivir con la del dueño.
+- **Specs tocadas:** ver el barrido de este cambio: ACC, seguridad y privacidad, API y eventos, códigos de error, límites, modelo de datos, datos y migraciones, calidad y pruebas, actores y permisos, glosario, pantallas, amenazas, riesgos, más `CH-0002`, D-29, roadmap 43 y PREG-142.
+- **Obsoleto:** que un administrador pudiera tener varias sesiones abiertas a la vez.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0024 — Ajustes de cierre de caja, acceso y formulario (CH-0001)
 - **Fecha / rama:** 2026-10-10, `feature/ajustes-jose-2026-10-10`
 - **Qué cambió:** (1) el cierre congela todo el día (no se restaura, edita ni cobra retroactivo; sí observaciones y pagar créditos); (2) un pedido cobrado con el día abierto se edita y recalcula, y cambiar el método de pago es solo del administrador con desglose por método; (3) cierre, vista previa e informe usan una sola función de totales y el pago dividido cuadra en los tres; (4) crédito con fecha de creación y de pago; (5) solo el administrador cierra la caja; (6) desactivar o cambiar de rol corta el acceso al instante; (7) el domiciliario tiene los permisos del encargado; (8) `REQUIRE_2FA` bien leído; (9) formulario sin `device_token`, con la fecha del día en que se emitió el link, "NO HAY" en agotados y política v2 con párrafo de IA; (10) la API no cobra pedidos en papelera o eliminados.
 - **Por qué:** respuestas de José a las preguntas prioritarias (2026-10-10) y su orden de implementarlo todo en dev.
 - **Specs tocadas:** CAJ, ORD, DSH, ACC, FRM, FAC, INB, IA, PLT; `00-principios.md` (principio 7); funcionales (`ciclo-diario`, `glosario`, `pantallas-por-rol`, `escenarios-extremo-a-extremo`, `vision-y-direccion`, `actores-y-permisos`); técnicos (`api-y-eventos`, `codigos-de-error`, `calidad-y-pruebas`, `datos-y-migraciones`, `integraciones`, `limites-y-tiempos`, `modelo-de-amenazas`, `modelo-de-datos`, `seguridad-y-privacidad`, `datos-personales`, `arquitectura`); plan (`riesgos`, `problemas-conocidos`, `roadmap`, `preguntas-abiertas`, `cambios/`); operación (`diagnostico-de-incidentes`, `entornos-y-despliegue`, `runbooks`). Nuevos: `CH-0001`, DT-049, PREG-140, PREG-141.
 - **Obsoleto:** que restaurar y el cobro retroactivo funcionaran con el día cerrado; que el encargado pudiera cerrar la caja por API; que un usuario desactivado siguiera 15 min con acceso; que `REQUIRE_2FA=false` lo encendiera; que el formulario exigiera `device_token`; PREG-002, 004, 008, 010, 011, 012, 025, 035, 052, 064, 065 como pendientes.
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `a256ddc` · **Prod:** pendiente
 
 ### R-0023 — Versiones reales del VPS y `REQUIRE_2FA`
 - **Fecha / rama:** 2026-10-10, `docs/versiones-vps`

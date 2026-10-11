@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ a7c7981
+verificado: 2026-10-10 @ a256ddc
 fuentes: [apps/api/prisma/schema.prisma, apps/web/src/lib/format.ts, packages/shared/src/types, specs/modulos/*.md]
 ---
 
@@ -128,6 +128,7 @@ Vocabulario congelado: todas las specs usan estos términos con este sentido. Si
 | **Auditoría** | Registro de acciones sensibles de la plataforma (no de pedidos, que usan el historial). | `AuditLog` |
 | **PWA** | La web instalable que se actualiza sola al detectar una versión nueva. | `UpdateBanner.tsx` |
 | **Bloqueo de cuenta** | Tras 5, 10 y 15 intentos fallidos de contraseña la cuenta se bloquea 5 min, 15 min y 1 h. | `locked_until` |
+| **Sesión única** | Regla de `admin` y `dev`: solo la sesión del último inicio de sesión sigue vigente; las anteriores se cierran al instante y ven el aviso "Tu sesión se cerró porque se inició en otro dispositivo". Encargado y domiciliario pueden tener varias. | `User.session_id`, `sid`, `SESSION_REPLACED` |
 | **2FA** | Código de 6 dígitos por correo; solo se pide al rol `dev` cuando `REQUIRE_2FA` está activo. | `LoginVerificationCode` |
 | **Interfaz ≠ API** | Fórmula de las specs para "lo que la pantalla permite difiere de lo que la API acepta"; siempre se anota. | — |
 

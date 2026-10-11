@@ -6,7 +6,7 @@ fuentes: [git log y cuerpos de commit, archivo/RoadMap/PLAN_IMPLEMENTACION_ORIGI
 
 # Decisiones que no se deben deshacer sin preguntar
 
-> **Resumen.** 28 decisiones vivas (`D-01` a `D-28`), cada una con fecha, evidencia (sha), el porqué y la razón para no revertirla. Se consulta **antes de cambiar un comportamiento que parezca un error**. Lectura rápida: dinero y datos (D-02, D-03, D-19), tenant e identidad (D-01, D-05), privacidad (D-04, D-15, D-17, D-18), infraestructura (D-06), links y acceso (D-07, D-08, D-09, D-10, D-16), IA y archivos (D-11, D-12), tiempo y numeración (D-13, D-14).
+> **Resumen.** 29 decisiones vivas (`D-01` a `D-29`), cada una con fecha, evidencia (sha), el porqué y la razón para no revertirla. Se consulta **antes de cambiar un comportamiento que parezca un error**. Lectura rápida: dinero y datos (D-02, D-03, D-19), tenant e identidad (D-01, D-05), privacidad (D-04, D-15, D-17, D-18), infraestructura (D-06), links y acceso (D-07, D-08, D-09, D-10, D-16), IA y archivos (D-11, D-12), tiempo y numeración (D-13, D-14).
 
 Registro de decisiones que un agente (o una persona nueva) podría "arreglar" creyendo que son errores. Cada fila da la evidencia (sha) y el porqué. Si el porqué no aparece en ningún commit, comentario o documento, dice **(sin evidencia) → PREG** en vez de inventarlo. Deshacer cualquiera exige actualizar esta tabla y, si es un principio, `../00-principios.md`.
 
@@ -42,6 +42,7 @@ Fuentes: *(código)* leído en el repo, *(José)* dicho por José, *(inferido)* 
 | D-26 | Se puede marcar pagado un crédito aunque su pedido aún no esté cerrado; se deja como está | 2026-10-10 | (decisión de José en conversación) | No es necesario exigirlo. | José | Ver PREG-007. |
 | D-27 | El informe del día deja "Cerrados/Cobrados" y "Chats con pedidos completados" como están (incluyen créditos sin pagar y cerrados sin cobro) | 2026-10-10 | (decisión de José en conversación) | "No movamos nada": el cliente ya lo entiende así. | José | Ver PREG-074, PREG-075. |
 | D-28 | Un cliente que escribe a las 21:30 y de nuevo a las 00:10 puede recibir dos bienvenidas, y el segundo mensaje de la noche devuelve el chat al día real; se deja así | 2026-10-10 | (decisión de José en conversación) | Es la regla que ya se estableció: lo escrito desde las 21:00 crea el ticket del día siguiente. | José | Ver PREG-026, PREG-027. |
+| D-29 | Administrador y `dev` tienen una sola sesión vigente (un login nuevo cierra las anteriores); encargado y domiciliario pueden tener varias; no se avisa por correo | 2026-10-10 | (decisión de José en conversación; CH-0002) | Si alguien compromete la cuenta de un administrador, no puede convivir con el dueño; en el local el encargado usa varios equipos. | José | Cambiarlo exige revisar CH-0002 y el modelo de amenazas (AM de sesiones). |
 
 ## Notas
 
