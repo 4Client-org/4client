@@ -1,6 +1,6 @@
 # Problemas conocidos
 
-> **Resumen.** Lista de lo que está mal de forma objetiva o puede estarlo: ningún `BUG` confirmado, 42 deudas técnicas (`DT`), y 17 divergencias entre interfaz y API que esperan decisión de José. Cada fila lleva módulo e impacto. Las dudas de intención están en `preguntas-abiertas.md`; la correspondencia con IDs provisionales, en `mapa-de-ids.md`.
+> **Resumen.** Lista de lo que está mal de forma objetiva o puede estarlo: ningún `BUG` confirmado, 43 deudas técnicas (`DT`, una ya resuelta), y 12 divergencias entre interfaz y API que esperan decisión de José. Cada fila lleva módulo e impacto. Las dudas de intención están en `preguntas-abiertas.md`; la correspondencia con IDs provisionales, en `mapa-de-ids.md`.
 
 ## Cómo priorizar
 
@@ -32,8 +32,8 @@ Ninguno todavía. José no ha confirmado ningún defecto: lo que parece mal est�
 |---|---|---|---|
 | DT-001 | Plantillas de mensajes por defecto con datos de un cliente (razón social, cuenta bancaria, mínimo y costo de domicilio) que cualquier negocio nuevo hereda; un test los fija. | WPP, PLT | Alto: un negocio nuevo enviaría la cuenta bancaria de otro; rompe el principio 2. |
 | DT-002 | Otro monoinquilino fijo en el código: política de privacidad (URL y texto de un solo negocio), logo y marca de agua del encabezado, seed y scripts con el `slug` de un cliente, ejemplo de bienvenida. | PLT, FRM, GEN | Alto: marca y datos de un cliente en todo negocio nuevo. |
-| DT-003 | Faltan tests de totales del cierre por bolsa, de `DailyClose` y del cobro en día cerrado. | CAJ | Alto: dinero sin red de seguridad (principio 11). |
-| DT-004 | Regla de totales triplicada (servidor del cierre, informe y modal); ya divergió. | CAJ, DSH | Medio: cifras distintas según la pantalla. |
+| DT-003 | *(En parte cubierta 2026-10-10: `cierre-totales.test.ts` prueba los totales por bolsa, el pago dividido y los totales de `DailyClose`; `cierre-congela-y-cobrados.test.ts` prueba el cobro en día cerrado y la corrección de pago.)* Siguen sin test los conteos y decisiones guardados en `DailyClose`. | CAJ | Medio: queda un resto de dinero sin test (principio 11). |
+| DT-004 | ~~Regla de totales triplicada (servidor del cierre, informe y modal).~~ **Resuelta 2026-10-10:** una sola función, `lib/cierreTotals.ts`, para cierre, vista previa (`GET /cierre/preview`) e informe. | CAJ, DSH | Resuelta. |
 | DT-005 | `caja_cerrada` se escribe y nadie lo lee. | CAJ, GEN | Bajo: columna sin uso. |
 | DT-006 | `DailyClose.decisions` guarda el objeto recibido sin filtrar; cierres viejos con `dejar_activo`/`cancelar` salen 'Sin decidir' en el CSV. | CAJ | Bajo. |
 | DT-007 | `quantity_value` y `quantity_unit` sin uso (la cantidad real es `quantity_label`). | ORD | Bajo: campos muertos. |
@@ -41,7 +41,7 @@ Ninguno todavía. José no ha confirmado ningún defecto: lo que parece mal est�
 | DT-009 | Comentario desactualizado en `orderNumbering.test.ts` (el pospuesto ya se renumera). | ORD | Bajo. |
 | DT-010 | Faltan tests de reglas de tenant y entrada del webhook (enrutamiento, HMAC, deduplicación, descarte 10 min, plantillas). | WPP | Alto: reglas de tenant sin test (principio 11). |
 | DT-011 | Comentarios desactualizados en `webhook.ts` y `server.ts` (límite 300/min, es 2000). | WPP | Bajo. |
-| DT-012 | Código muerto de seguridad de links: `registerFailedLinkAttempt`, `MAX_ATTEMPTS_HARD`, `TICKET_BLOCK_HOURS`, columnas `link_failed_total`/`link_blocked_until`, `FormLinkSession`, `device_token` (decisión en PREG-035). | INB, FRM, FAC, GEN | Medio: comentarios que prometen una defensa inexistente. |
+| DT-012 | Código muerto de seguridad de links: `registerFailedLinkAttempt`, `MAX_ATTEMPTS_HARD`, `TICKET_BLOCK_HOURS`, columnas `link_failed_total`/`link_blocked_until`, `FormLinkSession` (tabla ya sin uso, ver DT-049). El `device_token` de las rutas públicas ya se quitó (PREG-035 resuelta por José, 2026-10-10). | INB, FRM, FAC, GEN | Medio: comentarios que prometen una defensa inexistente. |
 | DT-013 | Rama muerta en la web: `wpp_status === 'failed'` y `wpp_error` nunca llegan. | INB | Bajo. |
 | DT-014 | Quitar duplicados por teléfono es redundante (`Ticket` es único por `(org_id, phone)`). | INB | Bajo. |
 | DT-015 | Faltan tests de bandeja, mensajes, multimedia, límites, reenvío, `GET/POST/PATCH /tickets` y `erase-data`. | INB | Medio. |
@@ -79,10 +79,6 @@ Casos donde la interfaz y la API no aplican la misma regla. Hasta que José deci
 
 | ID | La interfaz | La API | Módulo | Impacto |
 |---|---|---|---|---|
-| PREG-008 | Solo muestra 'Cerrar caja' en Informe del día (el encargado no lo ve) | El encargado puede cerrar caja | CAJ | Medio: el encargado puede cerrar caja por API aunque no vea el botón |
-| PREG-012 | Muestra Guardar, Mover, observaciones, flechas y arrastre al domiciliario | Responde 403 a todos esos | ORD | Medio: botones que fallan con 403 al domiciliario |
-| PREG-010 | Impide cobrar pedidos en papelera o eliminados por el cliente | Los cobra | CAJ | Medio: cobro de un pedido que la pantalla no deja cobrar |
-| PREG-002 | La vista previa del cierre suma distinto (pago dividido, eliminados, créditos) | El cierre real aplica otra regla | CAJ | Alto: la vista previa del cierre puede no coincidir con el cierre real (dinero) |
 | PREG-030 | Desactiva Formulario/Cuenta banco en días pasados o con caja cerrada | Genera links y envía siempre | WPP, INB | Bajo |
 | PREG-080 | Impide facturar pedidos cerrados, en papelera, sin ítems o cobrados | `POST /invoice` los acepta | FAC | Medio: facturas de pedidos que la pantalla no permite |
 | PREG-049 | Deja pulsar 'Tomar lista' en pedidos de solo lectura | Sin regla propia; no aparece 'Guardar' | IA | Bajo |
@@ -93,9 +89,10 @@ Casos donde la interfaz y la API no aplican la misma regla. Hasta que José deci
 | PREG-091 | Oculta renombrar ticket (`RENAME_TICKET_UI_ENABLED = false`) | El admin puede renombrar | PLT, INB | Bajo |
 | PREG-014 | Ninguna pantalla crea pedidos `channel = 'call'` | Acepta el canal | ORD, PLT | Bajo |
 | PREG-023 | Ninguna pantalla muestra `wpp_redirect_message` | Lo devuelve y lo aplica | WPP | Medio: mensaje configurable que ningún admin puede ver |
-| PREG-052 | El formulario no distingue productos agotados | `in_stock` existe pero `/products` no lo envía | FRM, CAT | Medio: el cliente puede pedir un producto agotado |
 | DT-024 | Acepta contraseñas de 6 caracteres | Exige 12 con mayúscula, minúscula y número | ACC | Medio |
 | DT-013 | Muestra un aviso si `wpp_status === 'failed'` | Nunca devuelve ese valor | INB | Bajo |
+
+Resueltas el 2026-10-10 y retiradas de esta tabla (decisión de José): PREG-008 (solo el admin cierra la caja; 403 al encargado y al domiciliario), PREG-012 (el domiciliario tiene los mismos permisos que el encargado), PREG-010 (la API ya no cobra pedidos en papelera o eliminados por el cliente: 409 `ORDER_IN_PAPELERA` / `ORDER_CLIENT_DELETED`), PREG-002 (la vista previa y el cierre usan la misma función) y PREG-052 (el formulario marca "NO HAY" y deja pedirlo).
 
 ## Nuevas (revisión de completitud, 2026-10-09)
 
@@ -109,3 +106,4 @@ Casos donde la interfaz y la API no aplican la misma regla. Hasta que José deci
 | DT-046 | `downloadMedia` valida el host solo en la URL inicial; `fetch` sigue redirecciones sin revalidar | Bajo, por verificar | INB |
 | DT-047 | `AuditLog` sin regla de inmutabilidad y `LoginVerificationCode` nunca se purga; `wpp_meta_app_secret` sin cifrar (columna sin uso) | Bajo | PLT, ACC |
 | DT-048 | Clave de Gemini viaja en la URL; Actions fijadas por tag y sin Dependabot; `apps/api/uploads/` fuera de `.gitignore` (ver DT-033) | Bajo | PLT |
+| DT-049 | La tabla `FormLinkSession` quedó en la base sin uso (el formulario ya no ata el link a un dispositivo); solo `inbox.ts › erase-data` aún borra sus filas. Dejarla caer en un release posterior, con migración que no rompa al contenedor anterior (principio 1). | Bajo | FRM, INB |

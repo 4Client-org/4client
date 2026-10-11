@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/src/routes/products.ts, apps/api/src/lib/categoryOrder.ts, apps/api/src/routes/public.ts, apps/api/src/lib/matchProduct.ts, apps/web/src/components/config/ProductsSection.tsx, apps/web/src/lib/productExcel.ts, apps/web/src/lib/catalogImage.ts, apps/web/src/lib/categoryOrder.ts, apps/web/src/components/chat/EnviarCatalogoMenu.tsx, apps/web/src/hooks/useProducts.ts, apps/api/test/products-bulk-price.test.ts]
 ---
 
@@ -65,7 +65,7 @@ fuentes: [apps/api/src/routes/products.ts, apps/api/src/lib/categoryOrder.ts, ap
 
 - **RN-CAT-13 — Imagen por categoría.** CUANDO el personal elige "Catálogo completo", la web DEBE dibujar y enviar **una imagen PNG por categoría** (en el orden de RN-CAT-02), una tras otra, con el nombre de la categoría como pie de foto; "Catálogo completo" no arma una sola imagen porque salía demasiado alta y la letra ilegible. También puede enviar una sola categoría. La imagen se dibuja en el navegador (no hay fotos de productos, decisión del usuario), mide 800 px de ancho, dos columnas, encabezado con el nombre del negocio y "Precios actualizados al <fecha de hoy del navegador>". Cada producto muestra `$precio/unidad` (unidad por defecto `kg`) o **"NO HAY"** en rojo si `in_stock` es falso, o **"Consultar"** si no tiene precio. Un precio `0` se muestra como `$0/kg`. Si el envío falla a mitad, las categorías ya enviadas no se retiran. *(plataforma, código)* *(sin test)*
 - **RN-CAT-14 — Un solo producto, por texto.** CUANDO el personal elige "Un producto…", busca por nombre (sin tildes ni mayúsculas, máximo 8 resultados) y la web DEBE enviar un mensaje de texto `Nombre: $precio/unidad`, `Nombre: NO HAY` (sin existencia) o `Nombre: Consultar/unidad` (sin precio). Usa la lista que ya tiene cargada el navegador. *(plataforma, código)* *(sin test)*
-- **RN-CAT-15 — El formulario del cliente no recibe precio ni existencia.** Siempre `GET /public/products` entrega solo id, nombre, categoría, unidad y orden de los productos activos. Un producto con `in_stock = false` sigue seleccionable por el cliente y su línea nace en $0 como todas (PREG-052). *(plataforma, código)* *(sin test)*
+- **RN-CAT-15 — El formulario del cliente no recibe precio, sí la existencia.** `GET /public/products` entrega id, nombre, categoría, unidad, orden e `in_stock` de los productos activos, nunca precio. La página marca "NO HAY" en los de `in_stock = false` (`FRM.md` RN-FRM-35), pero siguen seleccionables y su línea nace en $0 como todas. *(plataforma, código)* *(test del `in_stock` en `public.test.ts › "GET /products sends in_stock …"`)*
 
 **Criterios de aceptación.**
 
@@ -133,7 +133,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 
 - **PREG-068 — Un precio de referencia desactualizado llega al cliente.** El catálogo envía `price_per_unit` tal cual y dice "Precios actualizados al <hoy>" aunque nadie lo haya revisado hoy. ¿Debe la fecha mostrar la última edición real, o basta con la disciplina del personal?
 - **PREG-069 — No hay forma de reactivar un producto desactivado** ni de verlo (la lista solo trae activos). Crear otro con el mismo nombre es posible (no hay unicidad por nombre). ¿Se necesita reactivar, o duplicar es lo esperado?
-- **PREG-052 — `in_stock` no llega al formulario del cliente.** Un producto agotado sigue seleccionable por el cliente. ¿Debe marcarse "agotado" o esconderse en el formulario? Hoy el aviso de "NO HAY" solo llega por el catálogo de WhatsApp.
+- ~~PREG-052~~ — Resuelta por José (2026-10-10): el formulario marca "NO HAY" y permite pedirlo (RN-CAT-15). Falta cerrarla en `preguntas-abiertas.md`.
 - **PREG-070 — Precio negativo por la API.** `POST` y `PATCH /products/:id` aceptan `price_per_unit` negativo (el lote y la interfaz no). Y `name` repetido no se valida.
 - **PREG-071 — Carga de Excel con separadores colombianos.** El Precio se lee con `parseFloat`: `"12.500"` (texto con punto de miles) se interpreta como `12.5` y `"1,5"` como `1`; solo una celda numérica real es exacta. ¿Se acepta?
 - **PREG-072 — Nombre del Excel con fecha en UTC.** `Catalogo_precios_<fecha>` usa `toISOString()`: entre las 19:00 y las 23:59 de Bogotá la fecha del nombre es la del día siguiente.

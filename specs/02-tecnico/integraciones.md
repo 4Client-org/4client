@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/services/whatsapp/meta-cloud.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/inbox.ts, apps/api/src/lib/media.ts, apps/api/src/lib/crypto.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/ai/gemini.ts, apps/api/src/services/ai/groq.ts, apps/api/src/services/ai/openrouter.ts, apps/api/src/services/ai/cerebras.ts, apps/api/src/services/ai/modelDiscovery.ts, apps/api/src/services/ai/openaiCompatible.ts, apps/api/src/services/ai/types.ts, apps/api/src/lib/matchProduct.ts, apps/api/src/services/storage.ts, apps/api/src/routes/files.ts, apps/api/src/routes/dev.ts, apps/api/src/services/email.ts, apps/api/src/routes/auth.ts, apps/api/src/server.ts, apps/api/src/config.ts, .github/workflows/backup-prod-db.yml, apps/api/test/ai-providers.test.ts, apps/api/test/inbox.test.ts, apps/api/test/webhook.test.ts]
 ---
 
@@ -172,7 +172,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **PREG-032** — El webhook descarta todo mensaje con más de 10 min de antigüedad. Después de una caída de la API de más de 10 min, los reintentos de Meta se pierden sin dejar rastro en la base (y el `warn` que sí queda incluye el teléfono, contra el criterio de "sin datos personales en logs"). ¿Es aceptable o se guarda el mensaje marcado como tardío?
 - **PREG-033** — La verificación HMAC usa solo el `META_APP_SECRET` global; `Organization.wpp_meta_app_secret` no se usa. ¿Todas las organizaciones van a compartir siempre la misma App de Meta, o la columna debe empezar a usarse?
 - **PREG-050** — El enfriamiento de 90 s también se activa con errores sin status HTTP (JSON roto, esquema zod), no solo con caídas del proveedor, al contrario de lo que dice el comentario de `index.ts`. ¿Es intencional?
-- **PREG-051** — "Tomar lista" envía texto literal de clientes a proveedores de IA de nivel gratuito (que pueden usar los datos para entrenar y procesan fuera de Colombia). La política de privacidad publicada no menciona a estos encargados. ¿Se aceptó este tratamiento bajo la Ley 1581?
+- **PREG-051** — "Tomar lista" envía texto literal de clientes a proveedores de IA de nivel gratuito (que pueden usar los datos para entrenar y procesan fuera de Colombia). *(Respondida por José, 2026-10-10: la política `v2` agrega un párrafo sobre el tratamiento con IA de productos y cantidades; solo se envía el texto seleccionado y el catálogo, nunca teléfono ni nombre. La política sigue sin nombrar a los proveedores ni su ubicación.)*
 - **PREG-095** — ¿El bucket de R2 (o `R2_PUBLIC_URL`) permite lectura pública? Si sí, `invoices/` es descargable sin el control de 24 h ni la revocación, y el borrado de datos no lo cubre.
 - **PREG-096** — Sentry usa `environment = NODE_ENV`, que es `production` en todos los despliegues. ¿Se debe usar `APP_ENVIRONMENT_NAME`?
 - **PREG-034** — No hay soporte de plantillas de Meta: fuera de la ventana de 24 h el negocio no puede escribirle al cliente desde el sistema. ¿Es una limitación aceptada o un pendiente?

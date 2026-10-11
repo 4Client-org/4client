@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/prisma/schema.prisma, apps/web/src/lib/format.ts, packages/shared/src/types, specs/modulos/*.md]
 ---
 
@@ -16,7 +16,7 @@ Vocabulario congelado: todas las specs usan estos términos con este sentido. Si
 | **Organización / negocio** | Un cliente de 4Client (un fruver). Cada uno ve solo sus datos (principio 2). | `Organization`, `org_id` |
 | **Admin** | Dueño del negocio. Ve y controla todo lo suyo. | `role = 'admin'` |
 | **Encargado** | Quien atiende el mostrador y maneja pedidos y cobros. | `role = 'encargado'` |
-| **Domiciliario (usuario)** | Repartidor con login: solo lectura y chat. | `role = 'domiciliario'` |
+| **Domiciliario (usuario)** | Repartidor con login; por ahora con los mismos permisos que el encargado (decisión de José, 2026-10-10). | `role = 'domiciliario'` |
 | **Domiciliario (empleado)** | Repartidor **sin** login al que se asigna un pedido. Es un registro aparte del usuario. | `Employee` |
 | **Dev** | El operador de la plataforma (José). Pasa todos los permisos y actúa entre organizaciones. | `role = 'dev'` |
 | **Cliente final** | La persona que escribe por WhatsApp y hace el pedido. No tiene cuenta. | — (es el `Ticket`) |

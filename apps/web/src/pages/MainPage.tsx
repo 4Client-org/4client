@@ -38,7 +38,7 @@ export default function MainPage() {
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const accessToken = useAuthStore((s) => s.accessToken);
   const isAdmin = user?.role === 'admin' || user?.role === 'dev';
-  const canManage = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
+  const canManage = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'domiciliario' || user?.role === 'dev';
   const qc = useQueryClient();
 
   const [fecha, setFecha] = useState(todayStr());
@@ -114,19 +114,23 @@ export default function MainPage() {
       qc.invalidateQueries({ queryKey: ['orders', fecha] });
       qc.invalidateQueries({ queryKey: ['tickets', fecha] }); // re-link order to ticket row
       qc.invalidateQueries({ queryKey: ['dashboard', fecha] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview', fecha] }); // modal de cierre abierto
     });
     socket.on('order:updated', () => {
       qc.invalidateQueries({ queryKey: ['orders', fecha] });
       qc.invalidateQueries({ queryKey: ['tickets', fecha] });
       qc.invalidateQueries({ queryKey: ['dashboard', fecha] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview', fecha] }); // modal de cierre abierto
     });
     socket.on('order:moved', () => {
       qc.invalidateQueries({ queryKey: ['orders', fecha] });
       qc.invalidateQueries({ queryKey: ['dashboard', fecha] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview', fecha] }); // modal de cierre abierto
     });
     socket.on('order:paid', () => {
       qc.invalidateQueries({ queryKey: ['orders', fecha] });
       qc.invalidateQueries({ queryKey: ['dashboard', fecha] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview', fecha] }); // modal de cierre abierto
     });
     const onTicketMessage = (data: { ticketId: string; message?: { direction?: string } }) => {
       qc.invalidateQueries({ queryKey: ['tickets', fecha] });
@@ -151,6 +155,7 @@ export default function MainPage() {
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['cierre-status'] });
+      qc.invalidateQueries({ queryKey: ['cierre-preview'] });
     };
 
     socket.on('ticket:message', onTicketMessage);
@@ -286,7 +291,7 @@ export default function MainPage() {
               <div>
                 <div className="un">{user?.name}</div>
                 <div className="ur2">
-                  {user?.role === 'dev' ? 'Dev' : isAdmin ? 'Administrador' : canManage ? 'Encargado' : 'Domiciliario'}
+                  {user?.role === 'dev' ? 'Dev' : isAdmin ? 'Administrador' : user?.role === 'domiciliario' ? 'Domiciliario' : 'Encargado'}
                 </div>
               </div>
             </div>
@@ -397,8 +402,10 @@ export default function MainPage() {
           onClose={() => { setOpenOrderId(null); setOpenOrderPrefillItems(undefined); }}
         />
       )}
-      {showCierre && (
-        <CierreCajaModal fecha={fecha} orders={orders} tickets={tickets} onClose={() => setShowCierre(false)} />
+      {/* Solo admin/dev cierran la caja (POST /cierre es requireRole('admin'),
+          PREG-008); el botón vive en "Informe del día", que solo ven ellos. */}
+      {showCierre && isAdmin && (
+        <CierreCajaModal fecha={fecha} tickets={tickets} onClose={() => setShowCierre(false)} />
       )}
       <Toast />
     </div>

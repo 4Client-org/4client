@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, specs/modulos/IA.md, specs/modulos/ORD.md, specs/modulos/CAJ.md, specs/modulos/DSH.md, specs/modulos/FAC.md, specs/modulos/ACC.md, specs/01-funcional/ciclo-diario.md, specs/01-funcional/pantallas-por-rol.md, apps/api/test/*.test.ts, apps/web/src/components/modals/*.tsx, apps/web/src/pages/*.tsx]
 ---
 
@@ -68,8 +68,8 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 
 ### ES-09 — Tomar lista: la IA propone, el personal decide
 - **Módulos / reglas:** IA, INB, ORD · RN-IA-01, 02, 05, 06, 08, 11, 12, 13, 14; RN-ORD-05, 34.
-- **Dado** un chat con tres mensajes de texto del cliente ("2 kg de tomate, cilantro…") y un catálogo con Tomate pero sin cilantro, **cuando** el encargado toca "Tomar lista", selecciona los mensajes y toca "Montar lista", **entonces** (1) no se guarda nada; (2) como hay un producto no identificado, aparece "Estos productos no pude identificarlos: cilantro. Recuerda revisar todo."; (3) al elegir "Crear nuevo pedido" y "Continuar" se abre "Nuevo pedido" **prellenado** con Tomate (nombre del catálogo) y cilantro (marcado para revisar), **ambos en $0**; (4) el encargado escribe los precios y crea el pedido. Si selecciona un mensaje saliente o con multimedia, la API responde 400 `INVALID_MESSAGES` y no llama a la IA. Un domiciliario no ve el botón y la API le da 403. En un día pasado o con caja cerrada el botón está deshabilitado.
-- **Tests:** `inbox-parse-messages.test.ts › "happy path: matched item is resolved to the catalog NAME but never priced from it, unmatched item is flagged for review, never touches the DB"`; `› "role gate: admin and encargado allowed, domiciliario forbidden"`; `› "rejects if any selected message is media"`; `› "rejects if any selected message is outbound (staff reply)"`. Las ventanas y el prellenado: *(sin test)*.
+- **Dado** un chat con tres mensajes de texto del cliente ("2 kg de tomate, cilantro…") y un catálogo con Tomate pero sin cilantro, **cuando** el encargado toca "Tomar lista", selecciona los mensajes y toca "Montar lista", **entonces** (1) no se guarda nada; (2) como hay un producto no identificado, aparece "Estos productos no pude identificarlos: cilantro. Recuerda revisar todo."; (3) al elegir "Crear nuevo pedido" y "Continuar" se abre "Nuevo pedido" **prellenado** con Tomate (nombre del catálogo) y cilantro (marcado para revisar), **ambos en $0**; (4) el encargado escribe los precios y crea el pedido. Si selecciona un mensaje saliente o con multimedia, la API responde 400 `INVALID_MESSAGES` y no llama a la IA. El domiciliario tiene el mismo botón y la misma respuesta que el encargado. En un día pasado o con caja cerrada el botón está deshabilitado.
+- **Tests:** `inbox-parse-messages.test.ts › "happy path: matched item is resolved to the catalog NAME but never priced from it, unmatched item is flagged for review, never touches the DB"`; `› "role gate: admin, encargado and domiciliario allowed (domiciliario = encargado, 2026-10-10)"`; `› "rejects if any selected message is media"`; `› "rejects if any selected message is outbound (staff reply)"`. Las ventanas y el prellenado: *(sin test)*.
 
 ---
 
@@ -83,7 +83,7 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 ### ES-11 — Pago dividido entre efectivo y transferencia
 - **Módulos / reglas:** CAJ · RN-CAJ-06, 19.
 - **Dado** el pedido de $38.000, **cuando** en "Confirmar pago" se marca "¿Pago dividido…?" con $20.000 efectivo y $15.000 transferencia, **entonces** la pantalla dice "Deben sumar exactamente $38.000 - van $35.000" y el botón queda deshabilitado; con $18.000 de transferencia dice "Suman el total" y el cobro se acepta sin vuelta. En el cierre, $20.000 suman a la bolsa de efectivo y $18.000 a la de transferencia.
-- **Tests:** `orders.test.ts › "accepts a split that sums exactly to the total - stores split_cash/split_transfer, no vuelto"`; `› "rejects a split that does not sum to the total"`; `› "rejects amount_received above the total when split is used (no vuelta allowed on a split)"`. El reparto en el cierre: *(sin test)*.
+- **Tests:** `orders.test.ts › "accepts a split that sums exactly to the total - stores split_cash/split_transfer, no vuelto"`; `› "rejects a split that does not sum to the total"`; `› "rejects amount_received above the total when split is used (no vuelta allowed on a split)"`. El reparto en el cierre: `cierre-totales.test.ts › "pago dividido $30.000 efectivo + $20.000 transferencia: vista previa, DailyClose e informe dicen lo mismo"`.
 
 ### ES-12 — Cobro en casa: completo y con vuelta
 - **Módulos / reglas:** CAJ, ORD, FRM · RN-CAJ-04, 05; RN-ORD-14.
@@ -92,8 +92,8 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 
 ### ES-13 — Crédito: cerrado, saldado después y fuera de los totales (D-19)
 - **Módulos / reglas:** CAJ, DSH · RN-CAJ-07, 09, 19; RN-DSH-06, 07, 11; D-19.
-- **Dado** un pedido de $38.000 con método "Crédito", **cuando** el encargado lo cobra (con contraseña), **entonces** queda `cerrado` y bloqueado pero **no pagado**; el informe no lo marca en rojo como "cerrado sin cobro" y aparece en Crédito > No pagados. **Cuando** el encargado intenta marcarlo pagado, no ve el botón y la API responde 403. **Cuando** el admin pulsa "Marcar crédito pagado" y confirma, `paid` pasa a verdadero sin pedir contraseña y sin cambiar quién ni cuándo lo cerró; el pedido pasa a Crédito > Pagados. **En ningún momento** suma a "Recaudado efectivo", "Recaudado transferencia" ni al total del cierre (comportamiento intencional por ahora, decisión de José del 2026-10-09).
-- **Tests:** `orders.test.ts › "POST /orders/:id/cobro on a crédito order closes it (cerrado+locked) through the SAME password+amount flow as everyone else, but leaves paid:false"`; `› "PATCH /orders/:id/credito-pagado does NOT overwrite paid_by/paid_at - …"`; `› "PATCH /orders/:id/credito-pagado rejects encargado - admin/dev only per business rule"`; `dashboard.test.ts › "an unpaid crédito order never shows up in either sinCobro list - …"`. Que el crédito saldado no entre en los totales y la pestaña Crédito: *(sin test; DT-003, DT-030)*.
+- **Dado** un pedido de $38.000 con método "Crédito", **cuando** el encargado lo cobra (con contraseña), **entonces** queda `cerrado` y bloqueado pero **no pagado**; el informe no lo marca en rojo como "cerrado sin cobro" y aparece en Crédito > No pagados. **Cuando** el encargado intenta marcarlo pagado, no ve el botón y la API responde 403. **Cuando** el admin pulsa "Marcar crédito pagado" y confirma (también se puede con el día ya cerrado), `paid` pasa a verdadero y se guarda `credit_paid_at`, sin pedir contraseña y sin cambiar quién ni cuándo lo cerró; el pedido pasa a Crédito > Pagados, y tanto ahí como en el detalle se lee "Crédito creado el <día>, pagado el <día>". **En ningún momento** suma a "Recaudado efectivo", "Recaudado transferencia" ni al total del cierre (comportamiento intencional por ahora, decisión de José del 2026-10-09).
+- **Tests:** `orders.test.ts › "POST /orders/:id/cobro on a crédito order closes it (cerrado+locked) through the SAME password+amount flow as everyone else, but leaves paid:false"`; `› "PATCH /orders/:id/credito-pagado does NOT overwrite paid_by/paid_at - …"`; `› "PATCH /orders/:id/credito-pagado rejects encargado - admin/dev only per business rule"`; `dashboard.test.ts › "an unpaid crédito order never shows up in either sinCobro list - …"`. `cierre-totales.test.ts › "crédito: guarda cuándo se pagó (credit_paid_at) sin tocar paid_at, se puede pagar con el día cerrado y no suma en ningún total (D-19)"`; `cierre-congela-y-cobrados.test.ts › "excepciones: con el día cerrado se puede marcar un crédito como pagado y agregar observaciones"`. La pestaña Crédito en pantalla: *(sin test)*.
 
 ---
 
@@ -106,8 +106,8 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 
 ### ES-15 — Después del cierre el día queda congelado y el formulario cae en mañana
 - **Módulos / reglas:** CAJ, ORD, FRM · RN-CAJ-21, 25; RN-ORD-13, 29, 32; RN-FRM-18.
-- **Dado** la caja de hoy cerrada (ES-14), **cuando** el admin intenta editar un pedido de hoy, **entonces** 409 `DAY_CLOSED` (el admin no lo evita); el tablero muestra "Día cerrado - vista de solo lectura" y ninguna tarjeta se mueve; el detalle dice "Este día ya fue cerrado - vista de solo lectura" y las observaciones siguen disponibles. **Cuando** un cliente con link vivo envía un pedido nuevo, **entonces** el pedido nace con la fecha de **mañana** y el ticket se mueve con él (aparece en el tablero de mañana, no en el de hoy).
-- **Tests:** `orders.test.ts › "admin CANNOT edit a locked order once the whole day has been cerrado (caja cerrada) - DAY_CLOSED wins even for admin"`; `cierre.test.ts › "once a day is closed, EVERY order on it is frozen - even one that was never individually locked, purely because the day itself closed"`; `public.test.ts › "POST /submit rolls the new order forward to TOMORROW if today already has a DailyClose - never lands on an already-closed day"`; `orders.test.ts › "encargado (non-admin) CAN add an observation on a locked order -> 201, …"`. Los avisos de pantalla: *(sin test)*.
+- **Dado** la caja de hoy cerrada (ES-14), **cuando** el admin intenta editar un pedido de hoy, **entonces** 409 `DAY_CLOSED` (el admin no lo evita; tampoco se crea, mueve, restaura, elimina ni cobra, ni se hace un cobro retroactivo en ese día); el tablero muestra "Día cerrado - vista de solo lectura" y ninguna tarjeta se mueve; el detalle dice "Este día ya fue cerrado - vista de solo lectura" y las observaciones siguen disponibles, y un crédito todavía se puede marcar pagado. **Cuando** un cliente con link vivo envía un pedido nuevo, **entonces** el pedido nace con la fecha de **mañana** y el ticket se mueve con él (aparece en el tablero de mañana, no en el de hoy).
+- **Tests:** `orders.test.ts › "admin CANNOT edit a locked order once the whole day has been cerrado (caja cerrada) - DAY_CLOSED wins even for admin"`; `cierre.test.ts › "once a day is closed, EVERY order on it is frozen - even one that was never individually locked, purely because the day itself closed"`; `cierre-congela-y-cobrados.test.ts › "restaurar desde papelera con el día cerrado -> 409 DAY_CLOSED y el pedido sigue en papelera"`; `› "cobrar un pedido de un día cerrado -> 409 DAY_CLOSED, no queda pagado"`; `› "mover desde papelera (drag) o mandar a papelera con el día cerrado -> 409 DAY_CLOSED"`; `public.test.ts › "POST /submit rolls the new order forward to TOMORROW if today already has a DailyClose - never lands on an already-closed day"`; `orders.test.ts › "encargado (non-admin) CAN add an observation on a locked order -> 201, …"`. Los avisos de pantalla: *(sin test)*.
 
 ### ES-16 — Botones del chat deshabilitados con el día cerrado o pasado
 - **Módulos / reglas:** WPP, INB, IA, CAT, ORD · RN-WPP-28; RN-INB-27; RN-ORD-33; RN-IA-14.
@@ -147,10 +147,11 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 - **Dado** un encargado con sesión, **cuando** mira el encabezado (y el menú hamburguesa en celular), **entonces** solo tiene "Tickets & Pedidos"; `GET /inbox` responde 403. Aun así, desde el ticket del tablero puede leer el chat, responder y reenviar un mensaje a cualquier chat de su organización (la lista de destinos sí le responde 200), y nunca ve chats de otra organización (PREG-040).
 - **Tests:** `inbox.test.ts › "an encargado (not just admin) gets the real chat list, unlike GET /inbox which is admin-only"`; `› "never returns another organization's chats"`. La ausencia de la pestaña: *(sin test)*.
 
-### ES-22 — El domiciliario es de solo lectura (con chat)
-- **Módulos / reglas:** ACC, ORD, INB · RN-ORD-26, 32; RN-INB-27; PREG-012.
-- **Dado** un domiciliario, **cuando** entra, **entonces** solo tiene "Tickets & Pedidos"; puede abrir el chat, responder y usar Cuenta banco, Formulario, Bloquear Link y catálogo, pero no ve "Tomar lista", "Papelera" ni el historial. Si intenta crear un pedido, la API responde 403 `FORBIDDEN`. Hoy la interfaz le **muestra** Guardar, Mover pedido, observaciones, flechas, arrastre y "Confirmar pago", y cada uno termina en 403 con un aviso de error (PREG-012).
-- **Tests:** `orders.test.ts › "forbids creating an order as domiciliario -> 403"`; `inbox-parse-messages.test.ts › "role gate: admin and encargado allowed, domiciliario forbidden"`. Lo demás: *(sin test)*.
+### ES-22 — El domiciliario tiene los permisos del encargado
+
+- **Módulos / reglas:** ACC, ORD, CAJ, INB · RN-ACC-17, RN-ORD-26, 32; RN-CAJ-31; RN-INB-27.
+- **Dado** un domiciliario, **cuando** entra, **entonces** solo tiene "Tickets & Pedidos" (igual que el encargado); puede abrir el chat, responder, usar Cuenta banco, Formulario, Bloquear Link, catálogo y "Tomar lista", crear y editar pedidos, moverlos, mandarlos a papelera, dejar observaciones y cobrar (decisión de José, 2026-10-10: por ahora el domiciliario puede lo mismo que el encargado). Lo que es solo del admin le responde 403 igual que al encargado: cerrar la caja y su vista previa (`POST /cierre`, `GET /cierre/preview`), corregir el pago de un pedido cobrado y marcar un crédito pagado.
+- **Tests:** `orders.test.ts › "allows creating an order as domiciliario (same permissions as encargado) -> 201"`; `› "domiciliario still cannot do admin-only actions (create product) -> 403"`; `cierre-totales.test.ts › "solo el admin (y dev) cierra la caja y ve la vista previa; encargado y domiciliario reciben 403; …"`; `cierre-congela-y-cobrados.test.ts › "cambiar el método de un pedido cobrado: encargado -> 403 PAYMENT_CHANGE_ADMIN_ONLY, domiciliario -> 403; …"`; `inbox-parse-messages.test.ts › "role gate: admin, encargado and domiciliario allowed (…)"`. Lo que muestra la pantalla: *(sin test)*.
 
 ### ES-23 — `dev` borra los datos de un cliente (Ley 1581)
 - **Módulos / reglas:** INB, ORD, FAC · RN-INB-22; D-17; principio 6.
@@ -201,6 +202,7 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 | CAJ | RN-CAJ-09, 19 | ES-11, 13 |
 | CAJ | RN-CAJ-12 a 18, 20, 22 | ES-14 |
 | CAJ | RN-CAJ-21, 25 | ES-15 |
+| CAJ | RN-CAJ-09, 31, 32 | ES-13, ES-22 |
 | DSH | RN-DSH-06, 07, 11 | ES-13 |
 | DSH | RN-DSH-15 | ES-08 |
 | FAC | RN-FAC-03, 06, 09, 10, 12 | ES-17 |
@@ -216,10 +218,9 @@ fuentes: [specs/modulos/WPP.md, specs/modulos/INB.md, specs/modulos/FRM.md, spec
 |---|---|---|
 | ES-16 | Sin test | Prueba de interfaz: botones deshabilitados con `isPastDay` y con plantillas sin cargar (DT-008 ya anota la ausencia de pruebas de los modales) |
 | ES-19 | Sin test | Listar y editar una cuenta `dev` como admin: ausente en la lista y 404 |
-| ES-22 | Parcial | Domiciliario recibe 403 en guardar, mover, observar y cobrar (PREG-012 hoy lo describe sin prueba) |
-| ES-13 | Parcial | Crédito saldado fuera de los totales del cierre y presente en la pestaña Crédito (DT-003, DT-030) |
-| ES-14 | Parcial | Fantasma en `GET /orders`, decisión `atendido`, totales y foto del cierre, evento `cierre:done` |
-| ES-11 | Parcial | Reparto de las dos partes del pago dividido en las bolsas del cierre |
+| ES-22 | Parcial | Que la pantalla del domiciliario muestre los mismos botones que la del encargado (solo hay prueba de API) |
+| ES-13 | Parcial | La pestaña Crédito y el texto "creado el… pagado el…" en pantalla (los datos sí tienen test) |
+| ES-14 | Parcial | Fantasma en `GET /orders`, decisión `atendido`, evento `cierre:done` (los totales y la foto del cierre sí tienen test, `cierre-totales.test.ts`) |
 | ES-10 | Parcial | 400 `MISSING_FIELDS` por cada campo faltante |
 | ES-18 | Parcial | Evento `message-templates:changed` y refresco de la caché de la web |
 | ES-20 | Parcial | Escalones de bloqueo de 15 minutos y 1 hora |
@@ -232,4 +233,4 @@ Los demás escenarios (ES-05 a 08, 12, 15, 17, 23) tienen al menos un test de AP
 
 ## Pendientes
 
-Citados arriba, con su texto en `03-plan/`: PREG-012, PREG-024, PREG-025, PREG-026, PREG-029, PREG-030, PREG-037, PREG-040, PREG-041, DT-003, DT-008, DT-030.
+Citados arriba, con su texto en `03-plan/`: PREG-024, PREG-025, PREG-026, PREG-029, PREG-030, PREG-037, PREG-040, PREG-041, DT-003, DT-008, DT-030.

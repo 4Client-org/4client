@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/routes/webhook.ts, apps/api/src/routes/public.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/inbox.ts, apps/api/src/server.ts, apps/api/src/config.ts, apps/api/src/lib/formLink.ts]
 ---
 
@@ -65,7 +65,7 @@ Orden de comprobación (cada paso descarta una causa):
 | Lo que ve el cliente | Causa | Qué hacer |
 |---|---|---|
 | "Link inválido o expirado" (401 `INVALID_TOKEN`; el mensaje no revela el motivo) | Pasaron 24 h desde que se generó; se emitió un link nuevo que reemplazó a este; el personal lo bloqueó; o hubo "Bloquear todos" después | Enviar un link nuevo desde el chat (botón "Enviar formulario"). Es el comportamiento diseñado, no un fallo (`../02-tecnico/seguridad-y-privacidad.md` §7) |
-| 403 `TICKET_BLOCKED` | Chat bloqueado por intentos | Hoy el contador no se alimenta (PREG-035); si ocurre, es un dato anómalo: avisar a José |
+| 403 `TICKET_BLOCKED` | Chat bloqueado por intentos | Hoy el contador no se alimenta (DT-012); si ocurre, es un dato anómalo: avisar a José |
 | 429 `FORM_LIMIT_REACHED` | Ya hizo 3 pedidos por formulario ese día | Pedirle que escriba por el chat; el personal crea el pedido a mano |
 | `CONSENT_REQUIRED` | No marcó la aceptación de la política | Que la acepte; si el texto del formulario no la muestra, es un defecto de la web |
 | La página no abre / en blanco | Web (Cloudflare Pages) o API caída, o `FRONTEND_URL` mal puesto en el entorno (los links se construyen con él) | Sección 0; comparar el dominio del link con el de `FRONTEND_URL` |
@@ -88,7 +88,8 @@ Orden de comprobación (cada paso descarta una causa):
 | 400 `NOT_TODAY` | El cierre solo acepta la fecha de hoy (Bogotá) | No se puede cerrar un día pasado desde la app (PREG-005) |
 | 409 `ALREADY_CLOSED` | Ya hay cierre de ese día | Si fue por error: `runbooks.md` §h (solo el mismo día) |
 | 400 `MISSING_DECISIONS` | Quedan pedidos sin cobrar ni decisión | El personal debe resolver cada pedido pendiente (cobrar, cerrar sin cobro o pasar a mañana) |
-| "No me deja editar/cobrar un pedido" | Día cerrado (principio 7) o pedido `cerrado` y bloqueado (solo admin/dev lo editan) | Confirmar con `SELECT * FROM daily_closes WHERE fecha = '<fecha>'`; excepciones en `../modulos/CAJ.md` |
+| 403 `FORBIDDEN` al cerrar la caja o abrir la vista previa | Solo el admin (y `dev`) cierra la caja; el encargado y el domiciliario reciben 403 (`GET /cierre/preview` y `POST /cierre`) | Que cierre el admin (RN-CAJ-31) |
+| 409 `DAY_CLOSED` / "No me deja editar o cobrar un pedido" | Día cerrado: ese día no se crea, edita, mueve, restaura, elimina, cobra ni cobra retroactivamente (ni el admin); solo observaciones y marcar un crédito pagado. Si el día está abierto, el pedido está `cerrado` y bloqueado (solo admin/dev lo editan; el pago lo corrige solo el admin) | Confirmar con `SELECT * FROM daily_closes WHERE fecha = '<fecha>'`; excepciones en `../modulos/CAJ.md` |
 | "Los totales no cuadran" | Un crédito pagado después, un `sin_asignar` o un método heredado no entran a ninguna bolsa | Es conocido y deliberado por ahora (D-19, PREG-001); no se "arregla" sin José |
 
 ## 5. Si nada de esto aplica

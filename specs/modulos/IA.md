@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/ai/types.ts, apps/api/src/services/ai/gemini.ts, apps/api/src/services/ai/groq.ts, apps/api/src/services/ai/openrouter.ts, apps/api/src/services/ai/modelDiscovery.ts, apps/api/src/services/ai/openaiCompatible.ts, apps/api/src/services/ai/cerebras.ts, apps/api/src/lib/matchProduct.ts, apps/api/src/lib/normalize.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/.env.example, apps/web/src/lib/tomarLista.ts, apps/web/src/hooks/useTomarLista.ts, apps/web/src/components/chat/TomarListaActionBar.tsx, apps/web/src/components/chat/TomarListaResultModal.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/orders/ProductSearch.tsx, apps/web/src/pages/MainPage.tsx, apps/api/test/ai-providers.test.ts, apps/api/test/inbox-parse-messages.test.ts, apps/api/test/matchProduct.test.ts]
 ---
 
@@ -22,7 +22,7 @@ fuentes: [apps/api/src/routes/inbox.ts, apps/api/src/services/ai/index.ts, apps/
 
 **Permisos.** Fila "Tomar lista (IA)" de `01-funcional/actores-y-permisos.md`. Lo que esa tabla no dice:
 - El botón "Tomar lista" está en el encabezado del chat de tres ventanas: el chat del ticket (`TicketModal`), "Nuevo pedido" desde un ticket (`NuevoPedidoModal`) y el detalle del pedido (`DetallePedidoModal`). No existe en "Chats WPP".
-- El domiciliario no ve el botón y la API le responde 403.
+- El domiciliario tiene el mismo botón y la misma respuesta que el encargado (decisión de José 2026-10-10).
 
 **Estados / ciclo de vida.** No hay máquina de estados: es un cálculo puro, sin datos propios. El único rastro que queda en la base es la marca `ai_unmatched` de los ítems que el personal termine guardando.
 
@@ -48,9 +48,9 @@ flowchart TD
 
 *Entrada*
 
-- **RN-IA-01 — Quién puede.** Solo admin y encargado (y `dev`, que pasa todas las verificaciones) pueden pedir una extracción; el domiciliario recibe 403. La interfaz muestra el botón solo a esos tres roles. *(plataforma, código)*
+- **RN-IA-01 — Quién puede.** Pueden pedir una extracción admin, encargado y domiciliario (el domiciliario pasa donde pasa el encargado, `requireRole`) y `dev`. La interfaz muestra el botón a esos cuatro roles. *(plataforma, código)*
 - **RN-IA-02 — Solo mensajes de texto del cliente, del mismo ticket.** CUANDO llega una petición, el sistema DEBE exigir de 1 a 50 ids de mensaje (si no, 400 `VALIDATION_ERROR`); un ticket de otra organización da 404 `NOT_FOUND`. Todos los ids deben ser mensajes de **ese** ticket, y ninguno puede ser saliente (respuesta del personal) ni multimedia: si alguno falla, 400 `INVALID_MESSAGES` y no se llama a la IA. Si los mensajes elegidos no tienen texto, también 400 `INVALID_MESSAGES`. La interfaz solo pone casilla en los mensajes entrantes sin multimedia, pero la API no confía en eso. *Por qué:* un cliente desactualizado o una petición manipulada no deben extraer de un subconjunto silencioso ni de mensajes de otro chat. *(plataforma, código)*
-- **RN-IA-03 — Qué se le manda a la IA.** Siempre se envían solo dos cosas: el texto de los mensajes elegidos, ordenados por hora de llegada y unidos con salto de línea, y los nombres de **todos** los productos activos del negocio (agotados incluidos) como pista. No se envían teléfono, nombre del cliente ni precios. El catálogo es una pista, no una restricción: el cruce real lo hace el sistema después (RN-IA-07). Los proveedores son externos y de nivel gratuito: ver PREG-051. *(plataforma, código)*
+- **RN-IA-03 — Qué se le manda a la IA.** Siempre se envían solo dos cosas: el texto de los mensajes elegidos, ordenados por hora de llegada y unidos con salto de línea, y los nombres de **todos** los productos activos del negocio (agotados incluidos) como pista. No se envían teléfono, nombre del cliente ni precios. El catálogo es una pista, no una restricción: el cruce real lo hace el sistema después (RN-IA-07). Los proveedores son externos y de nivel gratuito: ver PREG-051. Desde la política `v2` (2026-10-10) la política publicada informa que los productos y cantidades del pedido se procesan con IA (sin procesar nombre ni teléfono). El texto libre de un cliente podría traer por su cuenta un dato personal; el sistema no lo filtra. *(plataforma, código)*
 - **RN-IA-04 — Límite de uso.** Siempre, como máximo 15 extracciones por minuto por usuario (la clave de límite es el usuario autenticado, `server.ts › keyGenerator`). *Por qué:* cada extracción puede encadenar hasta 8 llamadas de generación a proveedores externos sin ningún tope de gasto por organización (hallazgo de auditoría de seguridad). *(plataforma, código)*
 
 *Resultado*
@@ -82,7 +82,7 @@ Nada de este módulo es configurable por negocio: no hay reglas *(cliente)*. Las
 
 **Criterios de aceptación.**
 
-1. *Dado* un domiciliario, *cuando* pide una extracción, *entonces* recibe 403; admin y encargado sí pueden. (RN-IA-01; `inbox-parse-messages.test.ts › "role gate: admin and encargado allowed, domiciliario forbidden"`)
+1. *Dado* un domiciliario, *cuando* pide una extracción, *entonces* recibe 200, igual que admin y encargado. (RN-IA-01; `inbox-parse-messages.test.ts › "role gate: admin, encargado and domiciliario allowed (domiciliario = encargado, 2026-10-10)"`)
 2. *Dado* un mensaje con multimedia entre los seleccionados, *cuando* se pide la extracción, *entonces* responde 400 `INVALID_MESSAGES` y no se llama a la IA. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects if any selected message is media"`)
 3. *Dado* un mensaje saliente del personal entre los seleccionados, *cuando* se pide la extracción, *entonces* responde 400 `INVALID_MESSAGES`. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects if any selected message is outbound (staff reply)"`)
 4. *Dado* un id de mensaje de otro ticket u otra organización, *cuando* se pide la extracción, *entonces* se rechaza y no se mezcla con el chat actual. (RN-IA-02; `inbox-parse-messages.test.ts › "rejects a message id belonging to another org/ticket"`)
@@ -119,7 +119,7 @@ Nada de este módulo es configurable por negocio: no hay reglas *(cliente)*. Las
 
 | Regla | Se hace cumplir en | Test |
 |---|---|---|
-| RN-IA-01 | `inbox.ts › POST /:ticketId/parse-messages` (`requireRole`); web `canTomarLista` en los tres modales | `apps/api/test/inbox-parse-messages.test.ts › "role gate: admin and encargado allowed, domiciliario forbidden"` |
+| RN-IA-01 | `inbox.ts › POST /:ticketId/parse-messages` (`requireRole`); web `canTomarLista` en los tres modales | `apps/api/test/inbox-parse-messages.test.ts › "role gate: admin, encargado and domiciliario allowed (domiciliario = encargado, 2026-10-10)"` |
 | RN-IA-02 | `inbox.ts › POST /:ticketId/parse-messages`; web `useTomarLista.ts › isEligible` | `inbox-parse-messages.test.ts › "rejects if any selected message is media"`; `› "rejects if any selected message is outbound (staff reply)"`; `› "rejects a message id belonging to another org/ticket"` (límite de 50, ticket ajeno y texto vacío, *sin test*) |
 | RN-IA-03 | `inbox.ts › POST /:ticketId/parse-messages`; `types.ts › buildExtractionPrompt` | *(sin test)* |
 | RN-IA-04 | `inbox.ts › POST /:ticketId/parse-messages` (`config.rateLimit`); `server.ts › keyGenerator` | *(sin test)* |
@@ -187,7 +187,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **PREG-047 — Resultado perdido desde el cierre de caja.** `CierreCajaModal` abre `TicketModal` sin `onCreateFromTicket` ni `onOpenOrder`; el botón "Tomar lista" sigue activo (el día es hoy y aún no se cierra). Tras extraer, la ventana se cierra, aparece "Lista montada exitosamente" o se elige destino, y los ítems se pierden. ¿Se oculta el botón ahí o se conectan los manejadores?
 - **PREG-048 — Costo y uso.** No hay medición de uso, tokens ni costo, ni tope por organización (RN-IA-20). `.env.example` remite a un "informe de costos" que no está en el repositorio. Si la clave de Gemini (que exige método de pago) sale del nivel gratis, el único freno es el límite de 15/min por usuario. ¿Se necesita un contador o tope antes de crecer a más negocios?
 - **PREG-049 — Tomar lista en pedidos de solo lectura.** En `DetallePedidoModal` el botón solo mira el día; en un pedido en papelera, eliminado por el cliente o bloqueado (para el encargado) los ítems se fusionan en pantalla pero no aparece "Guardar". ¿Se desactiva el botón como el resto de controles?
-- Relacionados ya registrados en `02-tecnico/integraciones.md`: **PREG-050** (JSON roto o fuera de esquema activa el enfriamiento) y **PREG-051** (texto de clientes a proveedores gratuitos frente a la Ley 1581).
+- Relacionados ya registrados en `02-tecnico/integraciones.md`: **PREG-050** (JSON roto o fuera de esquema activa el enfriamiento) y **PREG-051** (texto de clientes a proveedores gratuitos frente a la Ley 1581; la política ya menciona el uso de IA desde la `v2`, queda lo de proveedores gratuitos fuera de Colombia).
 - **DT-017 — `.env.example` desactualizado.** Dice que Groq y OpenRouter están "desactivados (comentados)" y que Gemini es el único activo; en el código los tres están activos. También cita el "informe de costos" inexistente.
 - **DT-018 — Huecos de tests.** Sin tests de la fusión web (`mergeExtractedItems`, `mergeResultToast`), de los flujos de los modales, del límite de 50 ids, del ticket de otra organización, de mensajes sin texto, del corte de 200 caracteres del cruce ni del enfriamiento por error sin status.
 - **DT-019 — Restos de proveedores desactivados.** `openaiCompatible.ts` solo lo usa `cerebras.ts`, que no está en la cadena; el comentario de `types.ts` aún dice que lo comparten "groq.ts, cerebras.ts".

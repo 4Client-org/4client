@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/lib/businessDate.ts, apps/api/src/services/ai/*]
 ---
 
@@ -14,7 +14,7 @@ Tabla de consulta rápida para responder "¿cuánto dura / cuántos permite…?"
 
 | Qué | Valor | Módulo |
 |---|---|---|
-| Token de acceso (JWT) | 15 min | ACC |
+| Token de acceso (JWT) | 15 min; además se contrasta con la base en cada petición, así que desactivar al usuario o cambiarle el rol lo corta al instante (401) | ACC |
 | Refresh token | 7 días, rota en cada uso | ACC |
 | Cierre de sesión por inactividad (web) | 1 hora | ACC |
 | Link de formulario | 24 h planas desde que se generó | FRM, INB |

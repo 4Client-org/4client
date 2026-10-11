@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [start.sh, apps/api/prisma/schema.prisma, apps/api/src/lib/businessDate.ts, apps/api/src/config.ts]
 ---
 
@@ -14,7 +14,7 @@ Reglas que no se rompen sin una decisión explícita de José, registrada en `05
 4. **El historial de pedidos es inmutable.** `order_history` es solo-añadir, forzado por reglas de PostgreSQL (`DO INSTEAD NOTHING`). Un UPDATE o DELETE sobre esa tabla no falla: se ignora en silencio. Un pedido con historial no se puede borrar de la base.
 5. **Las fechas de negocio son de Bogotá (UTC-5, sin horario de verano).** Hay **dos conceptos de día distintos** y no se mezclan: `Ticket.fecha` (con corte a las 21:00 para el primer mensaje del día, `lib/businessDate.ts`) y `Order.fecha` / día de cierre (sin corte).
 6. **Ley 1581 (datos personales).** El cliente consiente en cada pedido (con versión de la política), el aviso de privacidad va una sola vez por ticket, la multimedia del chat **nunca se guarda** (solo el id de Meta, 30 días), y el borrado de datos de un cliente lo ejecuta solo el rol `dev`.
-7. **Cerrar la caja congela el día.** Después del cierre no se crean, editan, mueven ni cobran pedidos de ese día (solo se pueden agregar observaciones). Ver `modulos/CAJ.md` para las excepciones conocidas.
+7. **Cerrar la caja congela el día.** Después del cierre no se crean, editan, mueven, restauran, eliminan ni cobran pedidos de ese día, ni siquiera el admin (409 `DAY_CLOSED`); solo se pueden agregar observaciones y marcar un crédito como pagado. Ver `modulos/CAJ.md` para las excepciones conocidas.
 8. **Un ticket por teléfono, para siempre.** Único por `(org_id, phone)` y `(org_id, bsuid)`. Un cliente que vuelve semanas después continúa el mismo ticket.
 9. **Cero secretos en el repo,** aunque sea privado. Solo se documentan nombres de variables de entorno. Los datos de clientes finales en ejemplos son siempre ficticios.
 10. **Spec antes que código en cambios grandes** (clase C: feature, esquema, API, dinero o privacidad). Se escribe y aprueba `03-plan/cambios/CH-nnnn-*.md` antes de programar. Los hotfix urgentes escriben el CH después.

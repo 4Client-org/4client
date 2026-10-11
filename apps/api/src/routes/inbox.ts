@@ -960,6 +960,8 @@ export default async function inboxRoutes(fastify: FastifyInstance) {
 
       await tx.ticketMessage.deleteMany({ where: { ticket_id: ticketId } });
       await tx.revokedFormToken.deleteMany({ where: { ticket_id: ticketId } });
+      // Tabla obsoleta (nunca se escribe, ver schema.prisma); se conserva la limpieza
+      // inofensiva mientras la tabla exista.
       await tx.formLinkSession.deleteMany({ where: { ticket_id: ticketId } });
       // Sin relación FK propia hacia Ticket (ver comentario del modelo) - se
       // revocan igual, para que ninguna factura vieja de este cliente siga

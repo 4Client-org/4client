@@ -46,13 +46,21 @@ Es un cambio como cualquier otro: **asiento nuevo** que cita el original (`revie
 
 ## Asientos (más reciente primero)
 
+### R-0024 — Ajustes de cierre de caja, acceso y formulario (CH-0001)
+- **Fecha / rama:** 2026-10-10, `feature/ajustes-jose-2026-10-10`
+- **Qué cambió:** (1) el cierre congela todo el día (no se restaura, edita ni cobra retroactivo; sí observaciones y pagar créditos); (2) un pedido cobrado con el día abierto se edita y recalcula, y cambiar el método de pago es solo del administrador con desglose por método; (3) cierre, vista previa e informe usan una sola función de totales y el pago dividido cuadra en los tres; (4) crédito con fecha de creación y de pago; (5) solo el administrador cierra la caja; (6) desactivar o cambiar de rol corta el acceso al instante; (7) el domiciliario tiene los permisos del encargado; (8) `REQUIRE_2FA` bien leído; (9) formulario sin `device_token`, con la fecha del día en que se emitió el link, "NO HAY" en agotados y política v2 con párrafo de IA; (10) la API no cobra pedidos en papelera o eliminados.
+- **Por qué:** respuestas de José a las preguntas prioritarias (2026-10-10) y su orden de implementarlo todo en dev.
+- **Specs tocadas:** CAJ, ORD, DSH, ACC, FRM, FAC, INB, IA, PLT; `00-principios.md` (principio 7); funcionales (`ciclo-diario`, `glosario`, `pantallas-por-rol`, `escenarios-extremo-a-extremo`, `vision-y-direccion`, `actores-y-permisos`); técnicos (`api-y-eventos`, `codigos-de-error`, `calidad-y-pruebas`, `datos-y-migraciones`, `integraciones`, `limites-y-tiempos`, `modelo-de-amenazas`, `modelo-de-datos`, `seguridad-y-privacidad`, `datos-personales`, `arquitectura`); plan (`riesgos`, `problemas-conocidos`, `roadmap`, `preguntas-abiertas`, `cambios/`); operación (`diagnostico-de-incidentes`, `entornos-y-despliegue`, `runbooks`). Nuevos: `CH-0001`, DT-049, PREG-140, PREG-141.
+- **Obsoleto:** que restaurar y el cobro retroactivo funcionaran con el día cerrado; que el encargado pudiera cerrar la caja por API; que un usuario desactivado siguiera 15 min con acceso; que `REQUIRE_2FA=false` lo encendiera; que el formulario exigiera `device_token`; PREG-002, 004, 008, 010, 011, 012, 025, 035, 052, 064, 065 como pendientes.
+- **Commit:** (al integrar) · **Prod:** pendiente
+
 ### R-0023 — Versiones reales del VPS y `REQUIRE_2FA`
 - **Fecha / rama:** 2026-10-10, `docs/versiones-vps`
 - **Qué cambió:** se anotan Postgres 16.15, Node 20.20.2 y Docker 29.8.0 (lectura en el VPS) y `REQUIRE_2FA=true` en dev y prod; PREG-092 y PREG-102 respondidas con el dato; el ítem 35 del roadmap ya no tiene riesgo para el login de `dev`.
 - **Por qué:** pedido de José de mantener las versiones documentadas; lectura solo-lectura hecha por la sesión del VPS.
 - **Specs tocadas:** `02-tecnico/arquitectura.md`, `calidad-y-pruebas.md`, `04-operacion/entornos-y-despliegue.md`, `03-plan/roadmap.md`, `preguntas-abiertas.md`.
 - **Obsoleto:** "versión de producción por confirmar" y "valor de `REQUIRE_2FA` desconocido".
-- **Commit:** (al integrar) · **Prod:** pendiente
+- **Commit:** `d3d4f4e` · **Prod:** pendiente
 
 ### R-0022 — Caja cerrada: nada se actualiza, solo observaciones
 - **Fecha / rama:** 2026-10-10, `docs/respuestas-jose-6`

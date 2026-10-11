@@ -1,12 +1,12 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/web/src/App.tsx, apps/web/src/pages/MainPage.tsx, apps/web/src/pages/LoginPage.tsx, apps/web/src/pages/ClientFormPage.tsx, apps/web/src/pages/FacturaPage.tsx, apps/web/src/components/config/ConfigTab.tsx, apps/web/src/components/modals/TicketModal.tsx, apps/web/src/components/modals/DetallePedidoModal.tsx, apps/web/src/components/modals/NuevoPedidoModal.tsx, apps/web/src/components/modals/CierreCajaModal.tsx, apps/web/src/components/orders/Swimlane.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/dashboard/ResumenTab.tsx, apps/web/src/components/chat/*.tsx, apps/web/src/styles/global.css, specs/01-funcional/actores-y-permisos.md, specs/modulos/*.md]
 ---
 
 # Pantallas y navegación por rol
 
-> **Resumen.** Catálogo de lo que cada persona ve y puede tocar en la web de 4Client: el mapa de navegación (inicio de sesión, cuatro pestañas, ventanas), qué pestañas, secciones de configuración y botones de las ventanas de chat y pedido ve cada rol y cuándo se deshabilitan, una ficha por pantalla (para qué sirve, qué muestra, acciones, módulo dueño de las reglas, estados y comportamiento en celular) y los pasos de las pantallas del cliente final (formulario y factura). Cierra con las diferencias entre lo que ofrece la interfaz y lo que permite la API, con su PREG o DT. No define reglas nuevas: resume las de los módulos y gana siempre el módulo dueño; para permisos de API gana `actores-y-permisos.md`. Lo más importante: la **API es la autoridad**; la interfaz oculta pestañas por rol, pero varios botones se muestran a quien la API luego rechaza (PREG-012).
+> **Resumen.** Catálogo de lo que cada persona ve y puede tocar en la web de 4Client: el mapa de navegación (inicio de sesión, cuatro pestañas, ventanas), qué pestañas, secciones de configuración y botones de las ventanas de chat y pedido ve cada rol y cuándo se deshabilitan, una ficha por pantalla (para qué sirve, qué muestra, acciones, módulo dueño de las reglas, estados y comportamiento en celular) y los pasos de las pantallas del cliente final (formulario y factura). Cierra con las diferencias entre lo que ofrece la interfaz y lo que permite la API, con su PREG o DT. No define reglas nuevas: resume las de los módulos y gana siempre el módulo dueño; para permisos de API gana `actores-y-permisos.md`. Lo más importante: la **API es la autoridad**; la interfaz oculta pestañas por rol, pero quedan pocas diferencias con la API, listadas al final.
 
 Términos en `glosario.md`. Convención: "admin" incluye a `dev` salvo que se diga lo contrario (herencia de `dev`, `actores-y-permisos.md`).
 
@@ -85,7 +85,7 @@ Al abrir Configuración, `dev` cae en DevTools (subpestaña "Base de datos"); lo
 | Bloquear Link | admin, encargado, domiciliario, dev | `isPastDay`, bloqueo en curso | Revoca el link del cliente y sus facturas, previa confirmación (RN-INB-19) |
 | Eliminar datos | **solo dev** | Solo mientras se ejecuta; **no** depende de `isPastDay` | Anonimiza al cliente, previa confirmación (RN-INB-22, D-17) |
 | Enviar catálogo | admin, encargado, domiciliario, dev | `isPastDay`, envío en curso | Catálogo completo, una categoría o un producto (RN-CAT-13) |
-| Tomar lista | admin, encargado, dev (**no** domiciliario) | `isPastDay` | Entra al modo de selección de mensajes (RN-IA-01, RN-IA-14) |
+| Tomar lista | admin, encargado, domiciliario, dev | `isPastDay` | Entra al modo de selección de mensajes (RN-IA-01, RN-IA-14) |
 
 `isPastDay` es verdadero si el día es anterior a hoy **o** su caja ya cerró. El día que se compara es la fecha del tablero desde donde se abrió la ventana (`TicketModal`, `NuevoPedidoModal`) o la fecha del pedido (`DetallePedidoModal`). Es solo de interfaz: la API no lo exige (PREG-030, RN-ORD-33). Si la caja se cierra mientras alguien está en modo Tomar lista, la interfaz sale del modo sola (RN-IA-14). En celular la fila se vuelve un menú hamburguesa (sección 4.1).
 
@@ -94,17 +94,18 @@ Al abrir Configuración, `dev` cae en DevTools (subpestaña "Base de datos"); lo
 | Acción | admin / dev | encargado | domiciliario | Condición |
 |---|:-:|:-:|:-:|---|
 | Ver el detalle y el cuadro "Pedido cerrado y cobrado" | Sí | Sí | Sí | Cualquier pedido |
-| Editar campos y productos, Guardar | Sí | Sí | **Se muestra; la API da 403** | No `readOnly` (sección 3.7); Guardar deshabilitado sin cambios o con precio negativo |
-| Editar un pedido bloqueado | Sí | No (mensaje "Solo el administrador…") | No | Solo si el día no cerró (RN-ORD-13, RN-CAJ-11) |
-| Mover pedido (botones de estado) | Sí | Sí | **Se muestra; 403** | No `readOnly` y no bloqueado |
-| Papelera / Restaurar | Sí | Sí | No se muestra | Papelera exige motivo (RN-ORD-18) |
-| Agregar observación | Sí | Sí | **Se muestra; 403** | Siempre, también con día cerrado (RN-ORD-22) |
-| Historial de cambios y campo "Vuelto" | Sí | Sí | No se muestra | Solo `canManage` (RN-ORD-26) |
-| Marcar crédito pagado | Sí | No se muestra | No | Pedido `credito` sin pagar (RN-CAJ-09) |
-| Marcar como cobrado (retroactivo) | Sí | No se muestra | No | Cerrado, bloqueado, sin pagar, no crédito (RN-CAJ-10) |
+| Editar campos y productos, Guardar | Sí | Sí | Sí | No `readOnly` (sección 3.7); Guardar deshabilitado sin cambios o con precio negativo |
+| Editar un pedido bloqueado o ya cobrado | Sí | No (mensaje "Solo el administrador…") | No (igual que el encargado) | Solo si el día no cerró (RN-ORD-13, RN-CAJ-11) |
+| Corregir pago de un pedido cobrado ("Corregir pago") | Sí | No se muestra | No se muestra | Pedido cobrado que no es crédito, con el día abierto (RN-CAJ-26 a 28) |
+| Mover pedido (botones de estado) | Sí | Sí | Sí | No `readOnly` y no bloqueado |
+| Papelera / Restaurar | Sí | Sí | Sí | Papelera exige motivo (RN-ORD-18) |
+| Agregar observación | Sí | Sí | Sí | Siempre, también con día cerrado (RN-ORD-22) |
+| Historial de cambios y campo "Vuelto" | Sí | Sí en la interfaz (`canManage`); la API devuelve el historial solo a admin y dev (por confirmar qué se ve) | Igual que el encargado | RN-ORD-26 |
+| Marcar crédito pagado | Sí | No se muestra | No se muestra | Pedido `credito` sin pagar; también con el día cerrado (RN-CAJ-09, RN-CAJ-32) |
+| Marcar como cobrado (retroactivo) | Sí | No se muestra | No se muestra | Cerrado, bloqueado, sin pagar, no crédito, día abierto (RN-CAJ-10) |
 | Copiar y PDF | Sí | Sí | Sí | Con productos; deshabilitados con precio negativo |
 | Enviar factura | Sí | Sí | Sí | Con productos y ticket; deshabilitado en `camino`, `entregado` o `cerrado` (RN-FAC-03) |
-| Confirmar pago (cobro) | Sí | Sí | **Se muestra; 403** | Ver 3.2: se abre desde el tablero |
+| Confirmar pago (cobro) | Sí | Sí | Sí | Ver 3.2: se abre desde el tablero; no se cobra un pedido en papelera ni eliminado por el cliente (RN-CAJ-29) |
 
 ## 3. Pantallas, una por una
 
@@ -146,7 +147,7 @@ Al abrir Configuración, `dev` cae en DevTools (subpestaña "Base de datos"); lo
 
 ### 3.6 Detalle de pedido (`DetallePedidoModal`)
 - **Para qué:** ver y editar un pedido; es el único lugar de edición, observaciones, papelera, factura y correcciones. Dueño: `ORD`; cobro y correcciones: `CAJ`; factura: `FAC`.
-- **Muestra:** con ticket, chat a la izquierda (660 px) y pedido a la derecha (ancho máximo 1420 px); sin ticket, solo el pedido (700 px). Avisos: "Pedido cerrado y cobrado" (quién, hora, total, recibido, vuelto), "Este cliente tiene un pedido a crédito no pagado", "El cliente eliminó este pedido desde el formulario" (con ventana de decisión Mantener eliminado o Restaurar), "Enviado a papelera" (por, hora, motivo), "Este día ya fue cerrado - vista de solo lectura" y "Solo el administrador puede modificar este pedido cerrado".
+- **Muestra:** con ticket, chat a la izquierda (660 px) y pedido a la derecha (ancho máximo 1420 px); sin ticket, solo el pedido (700 px). Avisos: "Pedido cerrado y cobrado" (quién, hora, total, recibido, vuelto; con el botón "Corregir pago" solo para el admin), "Pedido cerrado a crédito - pendiente de pago" o "Pedido cerrado sin cobro" cuando no hubo pago, con "Crédito creado el X, pagado el Y" en un crédito (RN-CAJ-32), "Este cliente tiene un pedido a crédito no pagado", "El cliente eliminó este pedido desde el formulario" (con ventana de decisión Mantener eliminado o Restaurar), "Enviado a papelera" (por, hora, motivo), "Este día ya fue cerrado - vista de solo lectura" y "Solo el administrador puede modificar este pedido cerrado".
 - **Solo lectura (`readOnly`):** pedido bloqueado y usuario sin rol admin/dev, día cerrado, papelera o eliminado por el cliente. Se deshabilitan campos y desaparecen Guardar, Mover y Papelera; las observaciones siguen (RN-ORD-32). "Mover pedido" y "Papelera" también se ocultan en cualquier pedido bloqueado, admin incluido, porque la API lo rechaza.
 - **Acciones:** ver 2.3. El diálogo de papelera exige un motivo no vacío. La campana roja avisa que el cliente cambió el pedido por el formulario y no se quita al guardar (RN-ORD-15).
 - **Teléfono:** editable solo si el pedido no tiene ticket o el ticket no tiene número real (RN-ORD-12).
@@ -160,7 +161,8 @@ Al abrir Configuración, `dev` cae en DevTools (subpestaña "Base de datos"); lo
 
 ### 3.8 Cierre de caja (`CierreCajaModal`)
 - **Para qué:** cerrar el día decidiendo qué pasa con cada pendiente. Dueño: `CAJ`.
-- **Muestra:** "Resumen de ventas" (efectivo y cobro en casa, transferencia, total), "Pedidos completados", y "Pedidos y chats pendientes - decide qué hacer", con un selector por pedido (Pasar a mañana o Cerrar sin cobro) y por chat sin pedido o con no leídos (Pasar a mañana o Marcar como atendido). "Ver la conversación" abre el ticket. Un atajo pasa todos los pedidos a mañana.
+- **Quién:** solo admin y dev; el encargado y el domiciliario no ven el botón y la API les responde 403 (RN-CAJ-31). Los números salen de la vista previa del servidor, `GET /cierre/preview` (RN-CAJ-30).
+- **Muestra:** "Resumen de ventas" (efectivo y cobro en casa, transferencia, total), "Pedidos completados", "Cerrados que no suman al total" (créditos sin pagar y cerrados sin cobro), y "Pedidos y chats pendientes - decide qué hacer", con un selector por pedido (Pasar a mañana o Cerrar sin cobro) y por chat sin pedido o con no leídos (Pasar a mañana o Marcar como atendido). "Ver la conversación" abre el ticket. Un atajo pasa todos los pedidos a mañana.
 - **Acciones:** Cancelar, CSV y "Cerrar caja". El CSV y el cierre quedan deshabilitados hasta decidir todo (la API no exige las decisiones de chats; la interfaz sí, RN-CAJ-18). Las decisiones elegidas se guardan como borrador local si se cierra la ventana.
 - **Resultado:** pantalla "Caja cerrada correctamente. Ya no se puede modificar." con "Descargar CSV del cierre". El cierre **no pide contraseña**.
 - **Error:** 400 `MISSING_DECISIONS` se muestra como "Faltan decisiones: <números>".
@@ -226,8 +228,6 @@ Gana la API (`actores-y-permisos.md`). Diferencias verificadas, con su pendiente
 
 | Caso | La interfaz | La API | Pendiente |
 |---|---|---|---|
-| Domiciliario en pedidos | Muestra Guardar, Mover, observaciones, ◀ ▶, arrastre y Confirmar pago | 403 | PREG-012 (`modulos/ORD.md`) |
-| Encargado y cierre de caja | Sin botón (vive en el Informe, que no ve) | Lo permite | PREG-008 |
 | Encargado y Chats WPP | Sin pestaña; sí abre el chat desde el ticket, lee 500 mensajes, reenvía a cualquier chat y bloquea links | 403 solo en `GET /inbox` | PREG-040 |
 | Días pasados o caja cerrada | Deshabilita Formulario, Cuenta banco, Bloquear Link, catálogo y Tomar lista | Acepta enviar siempre | PREG-030 |
 | Renombrar ticket | Botón apagado | Admin y dev pueden | PREG-091 |
@@ -235,7 +235,6 @@ Gana la API (`actores-y-permisos.md`). Diferencias verificadas, con su pendiente
 | Desactivarse a sí mismo | El botón aparece en la fila propia | 400 `SELF_DEACTIVATE` | PREG-062 |
 | Nombre de usuario | Se captura y se muestra | No sirve para entrar; el login es por correo | PREG-063 |
 | Enviar factura | Oculto o deshabilitado en `camino`, `cerrado`, sin ticket o sin productos | `POST /invoice` acepta todo | PREG-080 |
-| Cobrar papelera o eliminado por el cliente | No se puede abrir el cobro | La API cobra | PREG-010 |
 | Tomar lista en pedido de solo lectura | Botón activo, sin Guardar | Solo extrae, no escribe | PREG-049 |
 | Tomar lista desde el cierre de caja | Botón activo; los ítems se pierden | — | PREG-047 |
 | WhatsApp de la organización | Solo `dev` en DevTools; el admin edita solo la bienvenida y plantillas | `/config/wpp` abierto a admin | PREG-127 |
@@ -245,4 +244,4 @@ Gana la API (`actores-y-permisos.md`). Diferencias verificadas, con su pendiente
 
 ## 6. Pendientes
 
-Todos viven en `03-plan/`: PREG-008, PREG-010, PREG-012, PREG-016, PREG-030, PREG-040, PREG-047, PREG-049, PREG-062, PREG-063, PREG-080, PREG-091, PREG-127, DT-002.
+Todos viven en `03-plan/`: PREG-016, PREG-030, PREG-040, PREG-047, PREG-049, PREG-062, PREG-063, PREG-080, PREG-091, PREG-127, DT-002.

@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [Dockerfile, start.sh, .dockerignore, .github/workflows/ci.yml, .github/workflows/backup-prod-db.yml, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/lib/formLink.ts, apps/web/src/lib/apiBase.ts, apps/web/public/_headers, apps/web/vite.config.ts]
 ---
 
@@ -178,7 +178,7 @@ Pasos detallados y verificación: `runbooks.md` › c.
 | ID | Pregunta |
 |---|---|
 | PREG-101 | ¿El health check de Coolify usa `GET /health`? Esa ruta no toca la base: un contenedor sin conexión a Postgres pasaría el chequeo (aunque `migrate deploy` ya habría fallado antes). |
-| PREG-102 | ¿En qué entorno está `REQUIRE_2FA=true`? El commit `28832e1` habla de prod; `LoginPage.tsx` dice "currently dev-only". |
+| PREG-102 | ¿En qué entorno está `REQUIRE_2FA=true`? *(Leído en el VPS el 2026-10-10: `true` en dev y en prod; se lee con `lib/envBool.ts`, así que `false`/`0`/vacío lo apagan. Falta confirmar con José que es lo deseado.)* El commit `28832e1` habla de prod; `LoginPage.tsx` dice "currently dev-only". |
 | PREG-103 | ¿Qué variables opcionales (Meta, R2, IA, Resend, Sentry) tiene cada app? ¿dev y prod usan buckets R2 de archivos distintos? |
 | PREG-104 | Con la GitHub App como fuente, ¿el auto-deploy de dev sigue llegando por el webhook manual o por el webhook de la App? ¿Se elimina el webhook manual de prod tras el cambio? |
 | PREG-105 | ¿Cloudflare Pages construye vistas previas para ramas distintas de `dev`? Hablarían con la API de prod. |

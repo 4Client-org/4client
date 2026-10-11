@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/prisma/schema.prisma, apps/api/src/routes/inbox.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/dev.ts, apps/api/src/routes/auth.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/formLink.ts, apps/api/src/server.ts, apps/api/src/services/ai/index.ts, apps/api/src/services/email.ts, apps/api/src/services/storage.ts, apps/web/public/legal/politica-privacidad.html]
 ---
 
@@ -76,16 +76,16 @@ Leyenda de visibilidad: **admin**, **encargado**, **domiciliario**, **dev** como
 | Tercero | Qué datos recibe | Para qué | Qué dice la política publicada | Observación |
 |---|---|---|---|---|
 | **Meta (WhatsApp Cloud API)** | Todos los mensajes que el cliente envía y los que el negocio le responde, teléfono/BSUID, nombre de perfil, multimedia (30 días) | Es el canal de comunicación | Menciona "proveedores tecnológicos estrictamente necesarios para operar nuestro canal de WhatsApp" sin nombrarlos | Meta es además responsable de sus propios datos por las condiciones de WhatsApp; retiene la multimedia 30 días |
-| **Gemini, Groq, OpenRouter** (IA de "Tomar lista") | El **texto literal** de los mensajes del cliente que el personal selecciona (1 a 50, solo entrantes y sin multimedia) y los nombres del catálogo. No se envía el teléfono ni el nombre *(código: `inbox.ts › parse-messages`)* | Convertir mensajes en un borrador de pedido | **No los menciona.** Dice que los datos solo los procesan "proveedores tecnológicos estrictamente necesarios" | Cadena de niveles gratuitos que pueden usar los datos para entrenar y procesan fuera de Colombia; el texto libre del cliente puede traer cualquier dato personal (PREG-051, D-11) |
+| **Gemini, Groq, OpenRouter** (IA de "Tomar lista") | El **texto literal** de los mensajes del cliente que el personal selecciona (1 a 50, solo entrantes y sin multimedia) y los nombres del catálogo. No se envía el teléfono ni el nombre *(código: `inbox.ts › parse-messages`)* | Convertir mensajes en un borrador de pedido | Desde la política `v2` (2026-10-10) dice que los productos y cantidades del pedido se procesan con IA y que no se procesa información personal (nombre, teléfono); sigue sin nombrar proveedores ni ubicación. Además dice que los datos solo los procesan "proveedores tecnológicos estrictamente necesarios" | Cadena de niveles gratuitos que pueden usar los datos para entrenar y procesan fuera de Colombia; el texto libre del cliente puede traer cualquier dato personal (PREG-051, D-11) |
 | **Cloudflare** (Pages, R2, DNS) | Pages sirve la web (sin datos de clientes); R2 guarda las facturas PDF y los respaldos de la base; DNS resuelve los dominios | Alojamiento y archivos | No lo nombra | Es el destino de **todos** los datos de la base vía respaldo (PREG-099) |
 | **Resend** | Correo del usuario que inicia sesión como `dev` (código 2FA) y del dueño de una cuenta bloqueada (aviso), con el nombre de la organización | Correo transaccional | No aplica a clientes finales | Solo datos del personal |
 | **Sentry** | Excepciones no controladas de la API (traza, mensaje, contexto de la petición según el SDK) | Detectar fallos | No lo nombra | No hay `beforeSend` ni limpieza de datos; un mensaje de error podría incluir un fragmento de datos de un cliente. No verificado qué contexto envía el SDK por defecto |
 | **Proveedor del VPS** (ver `04-operacion/entornos-y-despliegue.md`) | Aloja la base, los logs y los contenedores: tiene acceso físico a todo | Cómputo | No lo nombra | Los discos del servidor no tienen cifrado documentado *(no especificado)* |
 | **GitHub** | El repositorio (código y 6 PDF de facturas antiguos, DT-033); Actions con el respaldo diario, que usa las credenciales de la base como secretos | Código y CI | No lo nombra | Repo pasando a privado (`00-estado-actual.md`) |
 
-**Diferencias factuales con la política publicada** *(código: HTML de la política, versión de septiembre de 2026, `v1`)*:
+**Diferencias factuales con la política publicada** *(código: HTML de la política, versión de octubre de 2026, `v2`)*:
 
-1. Afirma que no se comparten datos "con terceros" y que solo los procesan proveedores "necesarios"; no nombra a ninguno, ni a los proveedores de IA ni su ubicación fuera de Colombia.
+1. Afirma que no se comparten datos "con terceros" y que solo los procesan proveedores "necesarios"; no nombra a ninguno, ni a los proveedores de IA ni su ubicación fuera de Colombia. Desde la `v2` sí informa del uso de IA sobre productos y cantidades.
 2. Lista como datos recogidos nombre, teléfono, dirección, historial de compras, facturas y texto de chats. No menciona los **cuerpos crudos** de los mensajes ni el **identificador de WhatsApp (BSUID)**.
 3. Dice que el titular puede pedir eliminar su información "siempre y cuando no exista un proceso de facturación en curso o una obligación legal que lo impida"; el sistema conserva en la práctica pedidos anonimizados, historial, PDF y respaldos, sin que la política lo explique.
 4. Los canales de contacto de la política son los del negocio; el sistema no tiene un canal propio de solicitudes (§5).
@@ -133,7 +133,7 @@ No se repiten aquí; están en `seguridad-y-privacidad.md`: sesión de 15 min co
 | G1 | Sin purga automática ni plazo de retención aplicable | PREG-097 |
 | G2 | La supresión deja datos en `order_history`, observaciones, `Order.notes` y PDF de R2 | PREG-037 |
 | G3 | La supresión solo alcanza tickets de la organización del dev que la ejecuta | PREG-042 |
-| G4 | Texto de clientes sale a IA gratuita fuera de Colombia, sin mención en la política | PREG-051, D-11 |
+| G4 | Texto de clientes sale a IA gratuita fuera de Colombia. La política `v2` (2026-10-10) ya informa el uso de IA sobre productos y cantidades; sigue sin nombrar proveedores ni su ubicación, y el texto libre podría traer un dato personal | PREG-051, D-11 |
 | G5 | El aviso de privacidad depende de configuración y los pedidos manuales no registran consentimiento | PREG-022 |
 | G6 | El dev lee datos de cualquier negocio sin tope; solo queda el rastro `dev.db_read` sin contenido | PREG-085 |
 | G7 | Los PDF de factura no tienen retención y puede que el bucket sea de lectura pública | PREG-084, PREG-095 |

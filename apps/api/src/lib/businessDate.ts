@@ -11,6 +11,16 @@
 // toca acá.
 export const NIGHT_CUTOFF_HOUR = 21; // 9:00 p.m.
 
+// Día calendario de Bogotá (UTC-5) de un instante, SIN corte de las 9 p.m.
+// Es el día de Order.fecha (pedidos y cierre), a diferencia de
+// businessDateForInstant, que es el de Ticket.fecha. El formulario público lo
+// usa con la fecha de emisión del link (Ticket.form_token_min_iat): el pedido
+// toma el día en que se ENVIÓ el link, no el del momento en que el cliente
+// lo envía.
+export function calendarDateForInstant(instant: Date): Date {
+  return new Date(new Date(instant.getTime() - 5 * 60 * 60 * 1000).toISOString().split('T')[0]);
+}
+
 // Devuelve la fecha (solo día, sin hora) que le corresponde a un instante dado,
 // aplicando el corte de las 9 p.m. Mismo formato que el resto del código usa
 // para Ticket.fecha: un Date construido desde un string "YYYY-MM-DD".

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestServer, createTestOrg, createTestUser } from './helpers.js';
 import { generateFormLinkUrl } from '../src/lib/formLink.js';
@@ -616,6 +616,139 @@ describe('public form routes', () => {
     const updatedTicket = await app.prisma.ticket.findUniqueOrThrow({ where: { id: dayCloseTicket.id } });
     expect(updatedTicket.fecha.toISOString().split('T')[0]).toBe(tomorrow.toISOString().split('T')[0]);
     expect(updatedTicket.deferred_to).toBeNull();
+  });
+
+  // Fecha del pedido nuevo = día calendario de Bogotá (sin corte de 21:00) en que se
+  // EMITIÓ el link (form_token_min_iat), no cuándo el cliente lo envía. Solo se
+  // simula el reloj (Date) para no depender de la hora real de ejecución.
+  describe('POST /submit - the new order takes the Bogota calendar day the link was SENT', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    // Instantes en UTC (Bogotá = UTC-5): 2026-06-10T03:00Z = 22:00 del 9 de junio.
+    async function linkSentAt(phone: string, sentAtUtc: string) {
+      const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone, customer_name: 'Cliente Fecha Link' } });
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date(sentAtUtc) });
+      const t = await issueFormToken(app, ticket.id, orgId);
+      return { ticket, t };
+    }
+    async function submitAt(t: string, nowUtc: string) {
+      vi.setSystemTime(new Date(nowUtc));
+      return app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { consent: true, token: t, address: 'Calle Fecha 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+    }
+    const dayOf = (d: Date) => d.toISOString().split('T')[0];
+
+    it('link sent at 22:00 and form sent after midnight: the order keeps the day of the link', async () => {
+      const { ticket, t } = await linkSentAt('573001118801', '2026-06-10T03:00:00Z'); // 9-jun 22:00
+      const res = await submitAt(t, '2026-06-10T06:00:00Z'); // 10-jun 01:00
+      expect(res.statusCode).toBe(201);
+      const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+      expect(dayOf(order.fecha)).toBe('2026-06-09');
+      // Ticket.fecha es otro concepto y no se toca aquí (sin cierre no hay movimiento).
+      const t2 = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(t2.fecha.getTime()).toBe(ticket.fecha.getTime());
+      // form-info sigue mostrando ese pedido como editable pasada la medianoche.
+      const info = await app.inject({ method: 'GET', url: `/api/v1/public/form-info?t=${t}` });
+      expect(info.json().data.orders.map((o: any) => o.id)).toContain(order.id);
+    });
+
+    it('link sent at 03:00 gets that same calendar day (no 21:00 cutoff), even if sent at 22:00 the same day', async () => {
+      const { t } = await linkSentAt('573001118802', '2026-06-10T08:00:00Z'); // 10-jun 03:00
+      const res = await submitAt(t, '2026-06-11T02:00:00Z'); // 10-jun 21:00
+      expect(res.statusCode).toBe(201);
+      const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+      expect(dayOf(order.fecha)).toBe('2026-06-10');
+    });
+
+    it('link and form sent the same day (no change from before): the order is that day', async () => {
+      const { t } = await linkSentAt('573001118803', '2026-06-12T15:00:00Z'); // 12-jun 10:00
+      const res = await submitAt(t, '2026-06-12T17:00:00Z');
+      expect(res.statusCode).toBe(201);
+      const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+      expect(dayOf(order.fecha)).toBe('2026-06-12');
+    });
+
+    it('a resent link counts from the NEW link: the old token dies and the new one carries the new day', async () => {
+      const { ticket, t: oldToken } = await linkSentAt('573001118804', '2026-06-13T15:00:00Z'); // 13-jun
+      vi.setSystemTime(new Date('2026-06-14T15:00:00Z')); // 14-jun, se reenvía
+      const newToken = await issueFormToken(app, ticket.id, orgId);
+      const dead = await submitAt(oldToken, '2026-06-14T16:00:00Z');
+      expect(dead.statusCode).toBe(401);
+      const res = await submitAt(newToken, '2026-06-14T16:00:00Z');
+      expect(res.statusCode).toBe(201);
+      const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+      expect(dayOf(order.fecha)).toBe('2026-06-14');
+    });
+
+    it('if the link day already has a DailyClose the order (and ticket) move to the next day', async () => {
+      const { ticket, t } = await linkSentAt('573001118805', '2026-06-15T03:00:00Z'); // 14-jun 22:00
+      await app.prisma.dailyClose.create({ data: { org_id: orgId, fecha: new Date('2026-06-14'), closed_by: adminId } });
+      const res = await submitAt(t, '2026-06-15T06:00:00Z'); // 15-jun 01:00
+      expect(res.statusCode).toBe(201);
+      const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+      expect(dayOf(order.fecha)).toBe('2026-06-15');
+      const t2 = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+      expect(dayOf(t2.fecha)).toBe('2026-06-15');
+    });
+
+    it('the 3-orders-per-day cap counts the link day: a 4th form order on the same link day is refused', async () => {
+      const { t } = await linkSentAt('573001118806', '2026-06-16T03:00:00Z'); // 15-jun 22:00
+      for (let i = 0; i < 3; i++) {
+        const ok = await submitAt(t, i === 0 ? '2026-06-16T04:00:00Z' : '2026-06-16T06:00:00Z'); // antes y después de la medianoche
+        expect(ok.statusCode).toBe(201);
+      }
+      const fourth = await submitAt(t, '2026-06-16T07:00:00Z');
+      expect(fourth.statusCode).toBe(429);
+      expect(fourth.json().code).toBe('FORM_LIMIT_REACHED');
+    });
+
+    it('an old client still sending device_token is accepted and it is ignored; omitting it also works', async () => {
+      const { t } = await linkSentAt('573001118807', '2026-06-17T15:00:00Z');
+      vi.setSystemTime(new Date('2026-06-17T16:00:00Z'));
+      const withDevice = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${t}&device_token=viejo` });
+      const without = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${t}` });
+      expect(withDevice.statusCode).toBe(200);
+      expect(without.statusCode).toBe(200);
+      const res = await app.inject({
+        method: 'POST', url: '/api/v1/public/submit',
+        payload: { consent: true, token: t, device_token: 'viejo', address: 'Calle Vieja 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+      });
+      expect(res.statusCode).toBe(201);
+    });
+  });
+
+  it('GET /products sends in_stock so the form can mark sold-out products (and they stay listed/orderable)', async () => {
+    await app.prisma.product.create({ data: { org_id: orgId, name: 'Fresa Agotada', category: 'Frutas', price_per_unit: 5000, in_stock: false } });
+    const own = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001118809', customer_name: 'Cliente Agotado' } });
+    const ownToken = await issueFormToken(app, own.id, orgId);
+    const res = await app.inject({ method: 'GET', url: `/api/v1/public/products?t=${ownToken}` });
+    expect(res.statusCode).toBe(200);
+    const list = res.json().data as Array<{ name: string; in_stock: boolean }>;
+    expect(list.find(p => p.name === 'Fresa Agotada')?.in_stock).toBe(false);
+    expect(list.find(p => p.name === 'Mango')?.in_stock).toBe(true);
+    const sub = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token: ownToken, address: 'Calle Agotado 1', items: [{ product_name: 'Fresa Agotada', quantity_label: '1 kg' }] },
+    });
+    expect(sub.statusCode).toBe(201); // solo se marca, no se bloquea
+  });
+
+  it('a new consent is stamped with the current privacy policy version (v2)', async () => {
+    const { PRIVACY_POLICY_VERSION } = await import('../src/lib/formLink.js');
+    expect(PRIVACY_POLICY_VERSION).toBe('v2');
+    const ticket = await app.prisma.ticket.create({ data: { org_id: orgId, phone: '573001118808', customer_name: 'Cliente Version' } });
+    const t = await issueFormToken(app, ticket.id, orgId);
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/public/submit',
+      payload: { consent: true, token: t, address: 'Calle Version 1', items: [{ product_name: 'Mango', quantity_label: '1 kg' }] },
+    });
+    expect(res.statusCode).toBe(201);
+    const order = await app.prisma.order.findUniqueOrThrow({ where: { id: res.json().data.orderId } });
+    expect(order.privacy_policy_version).toBe('v2');
+    const tk = await app.prisma.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(tk.privacy_policy_version).toBe('v2');
   });
 
   describe('POST /public/order/:orderId/delete - client cancels their own order', () => {

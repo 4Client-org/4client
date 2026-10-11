@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/seed-chats.ts, apps/api/src/seed-wpp.ts, apps/api/src/update-org-wpp.ts, apps/api/src/reencrypt-wpp-tokens.ts, apps/web/src/lib/apiBase.ts, apps/web/src/components/ui/UpdateBanner.tsx, apps/api/src/routes/dev.ts, apps/api/src/routes/billing.ts, apps/api/src/lib/audit.ts, apps/api/src/lib/messageTemplates.ts, apps/api/src/lib/formLink.ts, apps/api/prisma/schema.prisma, apps/web/src/components/config/DevSection.tsx, apps/web/src/components/config/DevOrgsPanel.tsx, apps/web/src/components/config/DevDbPanel.tsx, apps/web/src/components/config/DevWppPanel.tsx, apps/web/src/components/config/DevBillingPanel.tsx, apps/web/src/components/config/DevSistemaPanel.tsx, apps/web/src/components/config/DevLinksPanel.tsx, apps/web/src/components/config/OrgSelector.tsx, apps/web/src/components/config/BillingSection.tsx, apps/web/src/lib/platformChargePdf.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/api/test/dev-centro-mando.test.ts, apps/api/test/billing.test.ts, apps/api/test/config.test.ts]
 ---
 
@@ -177,7 +177,7 @@ IDs globales; resumen en `03-plan/preguntas-abiertas.md` y `03-plan/problemas-co
 - **PREG-091 — Renombrar ticket oculto por una constante.** `RENAME_TICKET_UI_ENABLED = false` en `InboxPanel.tsx` esconde la edición de nombre y teléfono del chat, aunque la API la permite al admin (fila "Renombrar ticket" de la matriz). ¿Se reactiva o se retira?
 - **DT-001 y DT-002 — Monoinquilino fijado en el código** (todo negocio nuevo lo hereda; principio 2 de `00-principios.md`). Las plantillas por defecto son DT-001 (ver WPP); el resto es DT-002:
   - Las **plantillas de mensajes por defecto** (`lib/messageTemplates.ts › DEFAULT_MESSAGE_TEMPLATES`) traen datos de un cliente concreto: el nombre de su razón social, una cuenta bancaria y el monto mínimo y costo del domicilio. Un negocio nuevo que no edite sus plantillas enviaría esos datos a sus clientes. Es el caso más grave: puede mandar la cuenta de otro negocio.
-  - La **política de privacidad** es una sola URL fija (`/legal/politica-privacidad`, versión `v1`) y un texto que nombra a un solo negocio (ver FRM).
+  - La **política de privacidad** es una sola URL fija (`/legal/politica-privacidad`, versión `v2` desde 2026-10-10) y un texto que nombra a un solo negocio (ver FRM).
   - El **logo del encabezado** de `MainPage` es siempre la imagen del cliente actual (y la marca de agua de fondo en `global.css`), sea cual sea la organización (ver `02-tecnico/arquitectura.md`).
   - El **seed** y los scripts `seed-chats.ts` y `update-org-wpp.ts` apuntan a un `slug` fijo de ese cliente; el seed crea usuarios con correos fijos de ese dominio.
   - El panel de WhatsApp muestra un ejemplo de bienvenida con el nombre de ese cliente.

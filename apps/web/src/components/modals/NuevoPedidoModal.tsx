@@ -58,7 +58,7 @@ export default function NuevoPedidoModal({ fecha, onClose, ticketId, preNombre, 
   const qc = useQueryClient();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
-  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'dev';
+  const canTomarLista = user?.role === 'admin' || user?.role === 'encargado' || user?.role === 'domiciliario' || user?.role === 'dev';
   const { data: products = [] } = useProducts();
   const { data: employees = [] } = useEmployees();
   const createOrder = useCreateOrder();

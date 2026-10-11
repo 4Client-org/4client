@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseEnvBool } from './lib/envBool.js';
 
 const envSchema = z.object({
   DATABASE_URL:              z.string().min(1),
@@ -40,7 +41,7 @@ const envSchema = z.object({
   // login verification-code step to dev only for now (per the original ask),
   // toggled directly in that one environment's own env vars rather than
   // inferred from an environment NAME string that could be renamed/duplicated.
-  REQUIRE_2FA:               z.coerce.boolean().default(false),
+  REQUIRE_2FA:               z.preprocess(parseEnvBool, z.boolean()),
   // "Tomar lista" (routes/inbox.ts's /parse-messages): free-tier AI providers
   // chained as fallback (services/ai/index.ts tries them in order, skipping any
   // whose key isn't set) - a deliberate prototype-phase choice, not a claim that

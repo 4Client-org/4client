@@ -1,20 +1,20 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/src/server.ts, apps/api/src/routes/*.ts, apps/api/src/middleware/auth.ts, apps/api/src/plugins/socket.ts, packages/shared/src/types/socket.types.ts, apps/web/src/lib/socket.ts, apps/web/src/pages/MainPage.tsx, apps/web/src/components/inbox/InboxPanel.tsx, apps/web/src/components/modals, apps/web/src/hooks/useProducts.ts, apps/web/src/hooks/useMessageTemplates.ts]
 ---
 
 # API y eventos
 
-> **Resumen.** La API es REST bajo `/api/v1` (86 endpoints, 5 niveles de acceso) más Socket.IO para avisar a las pantallas abiertas. Los eventos son solo avisos: la web invalida su caché y vuelve a pedir los datos por HTTP.
+> **Resumen.** La API es REST bajo `/api/v1` (87 endpoints, 5 niveles de acceso) más Socket.IO para avisar a las pantallas abiertas. Los eventos son solo avisos: la web invalida su caché y vuelve a pedir los datos por HTTP.
 
 Catálogo completo de endpoints HTTP y eventos Socket.IO. Los parámetros y cuerpos de cada ruta están en su código (`apps/api/src/routes/<archivo>.ts`); aquí va quién puede llamarla, a qué módulo pertenece y para qué existe. Los códigos de error que devuelven están en `codigos-de-error.md`.
 
 ## 1. Endpoints HTTP
 
-**Total: 86 endpoints.** Son 84 registros `fastify.get|post|put|patch|delete(...)` en los 15 archivos de `apps/api/src/routes/` más 2 rutas en línea en `apps/api/src/server.ts` (`/health` y `/api/v1/wpp/status`). No se cuenta `OPTIONS *` de `public.ts`, que solo responde 204 al preflight CORS.
+**Total: 87 endpoints.** Son 85 registros `fastify.get|post|put|patch|delete(...)` en los 15 archivos de `apps/api/src/routes/` más 2 rutas en línea en `apps/api/src/server.ts` (`/health` y `/api/v1/wpp/status`). No se cuenta `OPTIONS *` de `public.ts`, que solo responde 204 al preflight CORS.
 
-Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 5 · DSH 1 · CAT 5 · FAC 3 · PLT 17.
+Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 6 · DSH 1 · CAT 5 · FAC 3 · PLT 17.
 
 **Notación de roles** (`middleware/auth.ts`; `dev` pasa toda verificación de rol):
 
@@ -22,7 +22,7 @@ Reparto por módulo: ACC 13 · WPP 7 · INB 20 · FRM 6 · ORD 9 · CAJ 5 · DSH
 |---|---|---|
 | `public` | Sin sesión de personal (puede exigir token de link, firma de Meta o cookie) | sin `authenticate` |
 | `auth` | Cualquier rol con sesión: admin, encargado, domiciliario, dev | `authenticate` |
-| `gestión` | admin + encargado + dev | `requireRole('admin', 'encargado')` |
+| `gestión` | admin + encargado + domiciliario + dev (el domiciliario pasa donde pasa el encargado, `middleware/auth.ts › requireRole`; decisión de José 2026-10-10) | `requireRole('admin', 'encargado')` |
 | `admin` | admin + dev | `requireRole('admin')` o `requireRole('admin', 'dev')` |
 | `dev` | solo dev | `requireRole('dev')` |
 
@@ -87,16 +87,16 @@ Los tamaños de multimedia son del archivo decodificado; el `bodyLimit` de cada 
 
 ### FRM — Formulario público del cliente
 
-Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden con `Access-Control-Allow-Origin: *`.
+Todas `public`, con token de link (`t`) obligatorio (el `device_token` que mandaban las páginas anteriores se ignora). Responden con `Access-Control-Allow-Origin: *`.
 
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
 | GET | `/api/v1/public/link-status` | public | — | Dice si el link sirve antes de mostrar nada (bloqueado, vencido, agotado). |
-| GET | `/api/v1/public/form-info` | public | — | Datos del cliente y sus pedidos activos de hoy. |
-| GET | `/api/v1/public/products` | public | — | Catálogo sin precios. |
-| GET | `/api/v1/public/last-order` | public | — | Último pedido cerrado, para "repetir". |
-| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido o lo fusiona con el activo editable; exige consentimiento. |
-| POST | `/api/v1/public/order/:orderId/delete` | public | 15/min por IP | El cliente elimina su pedido: queda `client_deleted`, sin cambiar `status`. |
+| GET | `/api/v1/public/form-info` | public | — | Datos del cliente y sus pedidos activos del día del link (el día calendario de Bogotá en que se envió). |
+| GET | `/api/v1/public/products` | public | — | Catálogo sin precios, con `in_stock` (el formulario marca "NO HAY" en los agotados). |
+| GET | `/api/v1/public/last-order` | public | — | Último pedido anterior al día del link o cerrado de ese día, para "repetir". |
+| POST | `/api/v1/public/submit` | public | 15/min por IP | Crea un pedido (con `fecha` = día calendario de Bogotá en que se envió el link, pasando al siguiente si ese día ya cerró) o lo fusiona con el activo editable; exige consentimiento. La fusión con un pedido de un día cerrado responde `409 DAY_CLOSED`; un pedido nuevo en día cerrado pasa a mañana. |
+| POST | `/api/v1/public/order/:orderId/delete` | public | 15/min por IP | El cliente elimina su pedido: queda `client_deleted`, sin cambiar `status` (`409 DAY_CLOSED` si su día ya cerró caja). |
 
 ### ORD — Pedidos
 
@@ -105,22 +105,25 @@ Todas `public`, con token de link (`t`) y `device_token` obligatorios. Responden
 | GET | `/api/v1/orders` | auth | — | Pedidos de un día, incluidos los pospuestos desde ese día. |
 | POST | `/api/v1/orders` | gestión | — | Crea un pedido (rechaza un día cerrado). |
 | GET | `/api/v1/orders/:id` | auth | — | Pedido con ítems, historial y observaciones. |
-| PATCH | `/api/v1/orders/:id` | gestión | — | Edita datos e ítems (reemplaza todas las líneas); un pedido bloqueado solo lo edita admin. |
+| PATCH | `/api/v1/orders/:id` | gestión | — | Edita datos e ítems (reemplaza todas las líneas); un pedido bloqueado solo lo edita admin. En un pedido ya cobrado acepta `payment_breakdown: { cash, transfer }` (solo admin), obligatorio si cambian el método o el total (RN-CAJ-26 a RN-CAJ-28). |
 | POST | `/api/v1/orders/:id/observations` | gestión | — | Agrega una observación (también con día cerrado). |
 | PATCH | `/api/v1/orders/:id/observations/:obsId` | gestión | — | Edita una observación propia (`403 NOT_AUTHOR` si no). |
 | DELETE | `/api/v1/orders/:id/observations/:obsId` | gestión | — | Borra una observación propia. |
 | PATCH | `/api/v1/orders/:id/status` | gestión | — | Mueve el estado en el tablero o lo manda a papelera con motivo. |
-| PATCH | `/api/v1/orders/:id/restore` | gestión | — | Restaura desde papelera o desde "eliminado por el cliente". |
+| PATCH | `/api/v1/orders/:id/restore` | gestión | — | Restaura desde papelera o desde "eliminado por el cliente" (`409 DAY_CLOSED` con el día cerrado). |
+
+Todas las rutas de esta tabla y de la de CAJ que modifican un pedido responden `409 DAY_CLOSED` si su día tiene caja cerrada, salvo las observaciones y `credito-pagado` (RN-CAJ-21, `lib/dayClose.ts`).
 
 ### CAJ — Cobro, crédito y cierre
 
 | Método | Ruta | Rol | Límite | Para qué |
 |---|---|---|---|---|
-| POST | `/api/v1/orders/:id/cobro` | gestión | — | Cobra con la contraseña del usuario; cierra y bloquea el pedido (`409 ORDER_LOCKED` si ya estaba). |
-| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito. |
-| PATCH | `/api/v1/orders/:id/cobro-retroactivo` | admin | — | Marca pagado un pedido cerrado sin cobro por error. |
+| POST | `/api/v1/orders/:id/cobro` | gestión | — | Cobra con la contraseña del usuario; cierra y bloquea el pedido (`409 ORDER_LOCKED` si ya estaba; `409 ORDER_IN_PAPELERA` / `ORDER_CLIENT_DELETED` si está eliminado). |
+| PATCH | `/api/v1/orders/:id/credito-pagado` | admin | — | Marca pagado un crédito y guarda cuándo (`credit_paid_at`); no toca `paid_at`/`paid_by`. También con el día cerrado. |
+| PATCH | `/api/v1/orders/:id/cobro-retroactivo` | admin | — | Marca pagado un pedido cerrado sin cobro por error (solo con el día abierto, es decir, reabierto por `dev`). |
 | GET | `/api/v1/cierre/status` | auth | — | Si un día está cerrado. |
-| POST | `/api/v1/cierre` | gestión | — | Cierre de caja: exige decisión por pedido pendiente, guarda `DailyClose` y congela el día. |
+| GET | `/api/v1/cierre/preview` | admin | — | Vista previa de solo lectura del cierre: totales por bolsa y cada pedido del día con su clase, con la misma regla que `POST /cierre` y `GET /dashboard` (`lib/cierreTotals.ts`). La usa el modal de cierre. |
+| POST | `/api/v1/cierre` | admin | — | Cierre de caja: exige decisión por pedido pendiente, guarda `DailyClose` y congela el día. Solo admin/dev (PREG-008, 2026-10-10). |
 
 ### DSH — Informe
 
@@ -187,7 +190,7 @@ La clave "usuario" es el `userId` del JWT verificado (`server.ts › keyGenerato
 ### Cómo regenerar esta tabla
 
 ```sh
-# 84 rutas de archivos (método, ruta relativa al prefijo, preHandler en línea)
+# 85 rutas de archivos (método, ruta relativa al prefijo, preHandler en línea)
 grep -nE "fastify\.(get|post|put|patch|delete)\(" apps/api/src/routes/*.ts | sed -E 's/async.*//'
 grep -nE "fastify\.(get|post|put|patch|delete)\(" apps/api/src/routes/*.ts | wc -l
 # prefijos por archivo y rutas en línea

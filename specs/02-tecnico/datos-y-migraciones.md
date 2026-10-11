@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ a7c7981
 fuentes: [apps/api/prisma/schema.prisma, apps/api/prisma/migrations, start.sh, apps/api/src/lib/businessDate.ts, apps/api/src/lib/orderNumbering.ts, apps/api/src/routes/webhook.ts, apps/api/src/routes/orders.ts, apps/api/src/routes/cierre.ts, apps/api/src/routes/public.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/dev.ts]
 ---
 
@@ -53,7 +53,7 @@ Tablas auxiliares: `LoginVerificationCode` (2FA), `RevokedFormToken` (link bloqu
 | `Ticket (org_id, bsuid)` | El mismo cliente identificado por BSUID no se duplica. Era global hasta `20260919000000_ticket_bsuid_org_scoped_unique`: un cliente que escribía a dos negocios rompía la ingesta del segundo. Varios `NULL` no chocan. |
 | `Order (org_id, num, fecha)` | El número de pedido se repite cada día, nunca dentro del mismo día del mismo negocio. |
 | `User (email)` global, además de `(org_id, email)` | Un correo inicia sesión en una sola organización. El login busca por correo sin filtrar por organización. El compuesto se mantiene porque los seeds lo usan para `upsert`. `username` también es único global (preparado, aún no se usa para entrar). |
-| `DailyClose (org_id, fecha)` | Un cierre por día. **La existencia de esta fila es lo que hace que un día esté cerrado** (`orders.ts › findDayClose`). |
+| `DailyClose (org_id, fecha)` | Un cierre por día. **La existencia de esta fila es lo que hace que un día esté cerrado** (`lib/dayClose.ts › findDayClose`). |
 | `Organization.wpp_meta_phone_id` | Un número de WhatsApp enruta a una sola organización. El webhook enruta solo por este valor; sin la restricción, un admin podía apuntar su organización al número de otra y recibir sus mensajes. |
 | `TicketMessage.wpp_message_id` | Deduplicación de reintentos de Meta (junto con la transacción del webhook). |
 | `Ticket.form_link_token`, `InvoiceLink.filename` | Un token o archivo vivo solo pertenece a una fila; sobrescribir el token mata el link anterior. |
@@ -109,13 +109,13 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 
 | Elemento | Estado |
 |---|---|
-| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). Hoy ningún código inserta filas; solo el borrado de datos las elimina. Las rutas públicas siguen **exigiendo** `device_token` pero no lo comparan con nada. → PREG-035 |
+| `FormLinkSession` | Se creó para atar el link a un dispositivo (`device_token`). **Obsoleta**: ningún código inserta filas (solo el borrado de datos hace un `deleteMany` inofensivo) y, desde 2026-10-10, las rutas públicas ya no piden `device_token`. Se conserva para que las migraciones sean solo aditivas; **deuda:** borrar la tabla en un release posterior, cuando ningún contenedor viejo pueda referenciarla (PREG-035) |
 | `Organization.wpp_meta_app_secret` | Solo lo escriben `seed-wpp.ts` y `reencrypt-wpp-tokens.ts`. El webhook verifica la firma con la variable global `META_APP_SECRET`, no con esta columna. |
 | `OrderItem.quantity_value`, `quantity_unit` | Sin uso (§2). |
 | `Ticket.wpp_thread_id` | Sin uso; solo aparece en el visor de base de `dev`. |
 | `RevokedFormToken` | Sigue en uso (botón "bloquear link"), aunque nació para los links JWT. Desde `form_link_short_token`, generar un link nuevo ya invalida el anterior por sobrescritura; la fila de revocación se borra al emitir uno nuevo (`lib/formLink.ts`). |
 | `Order.status = 'entregado'` | Valor heredado: pedidos viejos lo conservan, pero ya no se puede asignar. |
-| Comentarios del schema sobre links | Los de `Ticket.form_token_min_iat`, `form_link_opened_at` e `InvoiceLink` hablan de ventanas de 10 min / 4 h sin abrir y de verificar los últimos 4 dígitos del teléfono; el código del formulario aplica un vencimiento fijo de 24 h desde la emisión (`public.ts › loadTicketByFormToken`). Ver `modulos/FRM.md` y `modulos/FAC.md`. → DT-040 |
+| Comentarios del schema sobre links | Corregidos el 2026-10-10 los de `Ticket.form_token_min_iat`, `form_link_opened_at`, `link_failed_attempts/total` y `FormLinkSession`. Pendiente el de `InvoiceLink`, que habla de ventana de 10 min y verificación de los últimos 4 dígitos (ver `modulos/FAC.md`). → DT-040 |
 
 ## 9. Política de migraciones
 
@@ -126,7 +126,7 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 5. SQL a mano (reglas, triggers, extensiones, índices de expresión, `DO $$` de fusión) va en la migración con un comentario del porqué; Prisma no lo ve.
 6. Toda migración de esquema es cambio clase C: CH aprobado antes (principio 10).
 
-## 10. Historia de migraciones (56, por hito)
+## 10. Historia de migraciones (57, por hito)
 
 | Hito | Fechas (2026) | Migraciones | Qué introdujo |
 |---|---|---|---|
@@ -141,11 +141,12 @@ Ambas columnas son `@db.Date` y el código las construye con `new Date('YYYY-MM-
 | Ley 1581 | 3–29 sep | `ticket_consent`, `privacy_notice_sent_at`, `order_consent_confirmed`, `privacy_policy_version` | Consentimiento por ticket y por pedido, aviso único, versión de la política. |
 | Aislamiento entre negocios | 9–19 sep | `wpp_meta_phone_id_unique`, `ticket_bsuid_org_scoped_unique` | Número de WhatsApp único, BSUID por organización. |
 | Plantillas | 6 oct | `org_message_templates` | Textos editables por organización. |
+| Fechas del crédito | 10 oct | `order_credit_paid_at` | `orders.credit_paid_at` (nullable, aditiva): cuándo se saldó un crédito. Rellena los créditos ya saldados con la hora del asiento "Crédito pagado." del historial. |
 
-Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls apps/api/prisma/migrations | grep -c '^2'`.
+Cada carpeta lleva el prefijo de fecha y hora `AAAAMMDDhhmmss_`. Contar: `ls apps/api/prisma/migrations | grep -c '^2'` (57).
 
 ## 11. Pendientes
 
 - **PREG-005 — `caja_cerrada` tras reabrir un cierre.** `POST /dev/actions/reopen-cierre` borra el `DailyClose` pero no limpia `Order.caja_cerrada` ni `locked`. Hoy nada lee `caja_cerrada`. ¿Se deja así, se limpia al reabrir o se elimina la columna?
-- **PREG-035 — `device_token` y `FormLinkSession`.** Las rutas públicas exigen `device_token`, pero no se usa y `FormLinkSession` nunca se escribe. ¿Se retiró la atadura a un dispositivo a propósito? Si es así, ¿se quita el parámetro y la tabla?
-- **DT-040 — Comentarios del schema desactualizados** sobre ventanas de link (10 min / 4 h) y `phone_last4`, que contradicen el vencimiento fijo de 24 h del código. ¿Se corrigen los comentarios?
+- **PREG-035 — `device_token` y `FormLinkSession`.** Resuelta por José (2026-10-10): se quitó el parámetro. Queda por hacer borrar la tabla `FormLinkSession` en un release posterior (DT-049) (migración que elimina la tabla, solo cuando el contenedor anterior ya no la use).
+- **DT-040 — Comentarios del schema desactualizados.** Corregidos los del formulario (2026-10-10); queda el de `InvoiceLink` (10 min y `phone_last4`).

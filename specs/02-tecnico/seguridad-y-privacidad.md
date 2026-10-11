@@ -1,6 +1,6 @@
 ---
 estado: vigente
-verificado: 2026-10-10 @ 1edb809
+verificado: 2026-10-10 @ d566e40
 fuentes: [apps/api/src/routes/auth.ts, apps/api/src/middleware/auth.ts, apps/api/src/lib/password.ts, apps/api/src/lib/crypto.ts, apps/api/src/config.ts, apps/api/src/server.ts, apps/api/src/plugins/socket.ts, apps/api/src/routes/webhook.ts, apps/api/src/lib/formLink.ts, apps/api/src/lib/linkSecurity.ts, apps/api/src/routes/public.ts, apps/api/src/routes/files.ts, apps/api/src/routes/inbox.ts, apps/api/src/routes/users.ts, apps/api/src/routes/tickets.ts, apps/api/src/routes/dev.ts, apps/api/src/lib/sanitize.ts, apps/api/src/lib/media.ts, apps/api/src/lib/audit.ts, apps/web/src/lib/csv.ts, apps/web/src/store/auth.ts, apps/web/public/_headers, apps/api/test/auth.test.ts, apps/api/test/auth-2fa.test.ts, apps/api/test/public.test.ts, apps/api/test/files.test.ts, apps/api/test/inbox.test.ts]
 ---
 
@@ -56,7 +56,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 - **Detección de reutilización:** presentar un token ya revocado revoca **todos** los refresh tokens activos del usuario y responde 401 `TOKEN_REUSE_DETECTED` *(código; test `auth.test.ts › "detects refresh-token reuse: replaying a rotated-away cookie returns 401 TOKEN_REUSE_DETECTED and revokes the whole family"`)*.
 - **CSRF:** `/refresh` es la única ruta que se autentica por cookie; exige `X-Requested-With: XMLHttpRequest` (403 `CSRF_CHECK_FAILED` si falta). Un sitio ajeno no puede poner esa cabecera sin una preflight CORS que la lista de orígenes rechaza *(código; test `auth.test.ts › "rejects refresh with no X-Requested-With header -> 403 CSRF_CHECK_FAILED, even with a valid cookie"`)*. El resto de rutas usa `Authorization: Bearer`, que no es vulnerable a CSRF.
 - **Refresh con usuario u organización inactivos:** revoca ese token y responde 401. El refresh relee el rol desde la base *(código)*.
-- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). **Cambiar el rol no revoca nada.** Como `authenticate` no consulta la base, un access token ya emitido sigue valiendo hasta 15 min después de una desactivación o un cambio de rol *(código)*. Ver PREG-065.
+- **Revocación activa:** el reset de contraseña por un admin y la desactivación de un usuario revocan todos sus refresh tokens y desconectan sus sockets (`users.ts`). Cambiar el rol desconecta los sockets del usuario pero no revoca sus refresh tokens. **`authenticate` consulta la base en cada petición** (`active`, `role`, `org_id` por clave primaria): un usuario desactivado, inexistente, o cuyo rol ya no es el del token recibe 401 al instante, sin esperar los 15 min. Tras un cambio de rol, la web renueva con `/auth/refresh` y sigue con el rol nuevo; con una cuenta desactivada el refresh falla *(código; `access-immediate.test.ts`; PREG-065 resuelta)*.
 - Los refresh tokens revocados o vencidos de un usuario se borran en su siguiente login exitoso; no hay otra limpieza *(código)*.
 - `POST /auth/logout` exige un access token válido y revoca el refresh token de la cookie *(código)*.
 
@@ -91,7 +91,7 @@ Cómo se autentica, se autoriza, se aísla cada organización y se protegen los 
 | Tope de emisión | 5 códigos por cuenta en 15 min, luego 429 `CODES_RATE_LIMITED` |
 | Código incorrecto | También suma al contador de bloqueo de la cuenta |
 
-- `REQUIRE_2FA` se lee con `z.coerce.boolean()`: cualquier texto no vacío, **incluido `"false"`**, lo enciende *(código)*. Ver PREG-064.
+- `REQUIRE_2FA` se lee con `lib/envBool.ts › parseEnvBool`: `true`/`1`/`yes`/`on` encienden; `false`/`0`/`no`/`off`, vacío o ausente apagan (sin distinguir mayúsculas); un valor desconocido enciende (falla cerrado) *(código; `envBool.test.ts`; PREG-064 resuelta)*.
 - `/login/verify-code` no mira `locked_until`: una cuenta bloqueada puede seguir gastando los intentos que le quedan al código vigente (como máximo 5) *(código)*. Ver PREG-066.
 
 **Política de contraseñas** (`lib/password.ts › passwordSchema`): mínimo 12 caracteres, con al menos una mayúscula, una minúscula y un número. Se aplica al crear usuarios, al resetear contraseñas y al crear una organización desde DevTools; **el login no la aplica**, para que sigan entrando cuentas anteriores a la política. Hash bcrypt de costo 12. No existe cambio de contraseña por el propio usuario: solo el reset que hace un admin o un dev *(código)*.
@@ -146,8 +146,8 @@ Verificación HMAC-SHA256 con el `META_APP_SECRET` global y comparación de tiem
 - Ya no se pide confirmar los últimos 4 dígitos del teléfono: el link es la única barrera. Las rutas que todavía reciben `phone_last4` lo ignoran *(código; test `public.test.ts › "phone_last4 is no longer checked at all …"`)*.
 - **Topes contra el abuso de un link filtrado:** como máximo 3 pedidos nuevos por ticket y día desde el formulario (`MAX_FORM_ORDERS_PER_TICKET`), y 30 mensajes automáticos por ticket en 24 h (`MAX_AUTOMATED_FORM_MSGS_PER_DAY`). Pasado ese tope, la confirmación se guarda con `failed_reason` y no se envía *(código)*.
 - **Endurecimiento muerto** *(código)*:
-  - `device_token` es obligatorio en las peticiones del formulario, pero **nunca se compara** con nada. `FormLinkSession` nunca se escribe (solo se borra) *(test `public.test.ts › "the link is not locked to whichever device opened/submitted it first …"`)*.
-  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Ver PREG-035.
+  - ~~`device_token`~~: quitado el 2026-10-10. Las rutas públicas ya no lo exigen ni lo guardan (una página vieja que lo mande se ignora) y la página no lo envía. El link no está atado a un dispositivo *(tests `public.test.ts › "the link is not locked to whichever device opened/submitted it first …"`, `"an old client still sending device_token is accepted and it is ignored; omitting it also works"`)*. La tabla `FormLinkSession` sigue en el esquema, sin uso (solo `erase-data` hace un `deleteMany` inofensivo); se borrará en un release posterior.
+  - `lib/linkSecurity.ts › registerFailedLinkAttempt` **no tiene llamadores**: la escalera de bloqueo (10 intentos = links muertos, 30 = chat bloqueado 24 h) nunca se dispara, aunque `loadTicketByFormToken` y `loadLiveInvoiceLink` siguen comprobando esos contadores. Código dormido a propósito (DT-012).
 - Las rutas `GET` públicas no tienen límite propio (300/min por IP); con 160 bits de entropía en el token, adivinarlo no es viable *(inferido)*.
 
 ## 8. Validación y saneamiento de entradas
@@ -179,15 +179,15 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 - **`trustProxy`** confía solo en el salto 0 (Traefik), para que un cliente no pueda elegir su IP con `X-Forwarded-For` y saltarse los límites *(código)*.
 - **Cabeceras de la API:** `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` en toda respuesta, más los valores por defecto de `@fastify/helmet` (nosniff, anti-frame, CSP para respuestas JSON/PDF). CORS solo para los orígenes de `FRONTEND_URL` (lista separada por comas) con credenciales; las rutas `/api/v1/public/*` responden además `Access-Control-Allow-Origin: *` *(código)*.
 - **Cabeceras de la web** (`apps/web/public/_headers`, Cloudflare Pages): `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, CSP (`script-src 'self'`, estilos propios más Google Fonts, `frame-ancestors 'none'`, `object-src 'none'`; `connect-src` permite cualquier `https:` y `wss:`) y `Permissions-Policy` que niega cámara, micrófono, geolocalización, pagos y USB *(código)*.
-- **Socket.io** (`plugins/socket.ts`): el JWT se verifica al conectar y se rechazan tokens sin `userId`/`role`. El socket se **desconecta solo al vencer el token** (temporizador hasta `exp`) y también cuando se resetea la contraseña o se desactiva al usuario (sala `user:<id>`). `join:org` solo une a la organización del token; `join:date` crea la sala `org:<orgDelToken>:date:<fecha>` *(código, sin test)*.
+- **Socket.io** (`plugins/socket.ts`): el JWT se verifica al conectar y se rechazan tokens sin `userId`/`role`. El handshake además contrasta `active`, `role` y `org_id` contra la base (rechaza a un desactivado o con rol cambiado). El socket se **desconecta solo al vencer el token** (temporizador hasta `exp`) y también cuando se resetea la contraseña, se desactiva al usuario o se le cambia el rol (sala `user:<id>`). `join:org` solo une a la organización del token; `join:date` crea la sala `org:<orgDelToken>:date:<fecha>` *(código, sin test)*.
 
 ## 11. Ley 1581 de 2012 (datos personales)
 
 | Requisito | Cómo se cumple | Fuente |
 |---|---|---|
 | Aviso de privacidad | Se pega al mensaje de bienvenida **una sola vez por ticket**; `privacy_notice_sent_at` se sella solo si el envío a Meta tuvo éxito. Enlaza a `/legal/politica-privacidad` en la propia web | `webhook.ts`, `formLink.ts › buildPrivacyNoticeMessage` *(test `webhook.test.ts › "a SECOND message from the same ticket … does NOT repeat the privacy notice …"`)* |
-| Consentimiento | Casilla obligatoria en **cada** envío del formulario (también al editar): sin `consent: true` → 400 `CONSENT_REQUIRED`. Se sella `Order.consent_confirmed_at` y `privacy_policy_version` (hoy `v1`); `Ticket.consent_given_at` solo la primera vez | `public.ts › POST /submit` *(tests en `public.test.ts`, bloque "consentimiento de tratamiento de datos")* |
-| Versión de la política | `PRIVACY_POLICY_VERSION` se sube a mano cuando cambia el texto de `apps/web/public/legal/politica-privacidad.html` | `formLink.ts` |
+| Consentimiento | Casilla obligatoria en **cada** envío del formulario (también al editar): sin `consent: true` → 400 `CONSENT_REQUIRED`. Se sella `Order.consent_confirmed_at` y `privacy_policy_version` (hoy `v2`; los consentimientos anteriores conservan `v1`); `Ticket.consent_given_at` solo la primera vez | `public.ts › POST /submit` *(tests en `public.test.ts`, bloque "consentimiento de tratamiento de datos")* |
+| Versión de la política | `PRIVACY_POLICY_VERSION` se sube a mano cuando cambia el texto de `apps/web/public/legal/politica-privacidad.html` (`v2` desde 2026-10-10: agrega el uso de IA sobre productos y cantidades) | `formLink.ts` |
 | Multimedia del chat | Nunca se guarda; solo el id de Meta (30 días) | `integraciones.md` §1.3 |
 | Supresión | Solo rol `dev`, con `POST /inbox/:ticketId/erase-data` (ver abajo) | `inbox.ts` *(test `inbox.test.ts › "anonimiza TODOS los pedidos del ticket …"`)* |
 
@@ -231,14 +231,12 @@ Escritura *best-effort*: si falla, deja un `console.error` y la acción sigue. S
 - **Pérdida de multimedia a los 30 días** (decisión de negocio, `lib/media.ts`).
 - **2FA solo para `dev`:** las cuentas admin, que pueden resetear contraseñas y ver todo el negocio, entran solo con contraseña (decisión explícita, comentada en `auth.ts`).
 
-**Hallazgos de esta lectura** (ver Pendientes): un access token sigue valiendo hasta 15 min tras desactivar o cambiar el rol; cualquier rol puede renombrar un ticket por `POST /tickets`; `REQUIRE_2FA="false"` lo enciende; el endurecimiento de links está muerto (`device_token`, escalera de bloqueos); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
+**Hallazgos de esta lectura** (ver Pendientes): (resueltos: el access token tras desactivar o cambiar el rol, y `REQUIRE_2FA="false"`); cualquier rol puede renombrar un ticket por `POST /tickets`; el endurecimiento de links está muerto (escalera de bloqueos; el `device_token` ya se quitó); la supresión no alcanza otras organizaciones ni `Order.notes`; no hay retención automática; la auditoría tiene huecos; el CSP de la web permite conexiones a cualquier `https:`/`wss:`.
 
 ## Pendientes
 
-- **PREG-064** — `REQUIRE_2FA` usa `z.coerce.boolean()`, así que `REQUIRE_2FA=false` (texto) **lo activa**. ¿Corregir el parseo o documentar que la variable debe quedar vacía?
 - **PREG-067** — `POST /tickets` (cualquier rol) sobrescribe el `customer_name` de un ticket existente, lo que esquiva el `PATCH` que es solo de admin. ¿Es intencional?
-- **PREG-065** — Desactivar a un usuario o bajarle el rol no invalida su access token (hasta 15 min). ¿Se acepta o `authenticate` debe consultar `active`/`role`?
-- **PREG-035** — `device_token`, `FormLinkSession` y `registerFailedLinkAttempt` son código muerto (se exigen o se comprueban, pero nada los activa). ¿Se borran o se reactivan?
+- **PREG-035** — Resuelta en parte (2026-10-10): `device_token` se quitó. Quedan `FormLinkSession` (tabla sin uso, a borrar en un release posterior) y `registerFailedLinkAttempt` (sin llamadores, DT-012).
 - **PREG-042** — `erase-data` filtra por la organización del dev, no por la del ticket. ¿Cómo se atiende una solicitud de supresión de un cliente de otra organización?
 - **PREG-037** — `erase-data` no limpia `Order.notes` (y no puede tocar `order_history`). ¿Se acepta, o hay que redactar las notas?
 - **PREG-097** — No hay purga automática de datos personales (mensajes, `raw_payload`, pedidos, `audit_logs`). ¿Cuál es el plazo de retención según la política?
